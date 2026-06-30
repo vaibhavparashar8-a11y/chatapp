@@ -1,0 +1,394 @@
+import 'dart:async';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+import '../constants.dart';
+import '../models/message.dart';
+import '../repositories/i_chat_repository.dart';
+
+/// Owns all chat business logic. Knows nothing about Flutter widgets or Firebase.
+///
+/// Features implemented here (not in UI):
+///   • Optimistic UI      — text messages appear instantly; confirmed via clientId
+///   • Pagination         — stream limited to last 50; [loadMoreMessages] fetches older
+///   • Debounced markRead — batches read-receipt writes into 500 ms windows
+///   • Retry              — failed sends preserved in [_pendingEntries] for re-attempt
+class ChatController extends ChangeNotifier {
+  final IChatRepository _repo;
+  final void Function(String message)? onUploadError;
+
+  ChatController(this._repo, {this.onUploadError});
+
+  // ── Private state ────────────────────────────────────────────────────────
+
+  List<Message> _streamMessages = [];     // real-time latest N
+  List<Message> _olderMessages = [];      // paginated history
+  final List<_PendingEntry> _pendingEntries = []; // optimistic + failed
+
+  DateTime? _clearedAt;
+  Set<String> _hiddenIds = {};
+  DateTime? _otherReadAt;
+  bool _otherTyping = false;
+  bool _otherOnline = false;
+  DateTime? _otherLastSeen;
+  double? _uploadProgress;
+
+  bool _hasMoreMessages = true;
+  bool _loadingMore = false;
+
+  bool _didLeave = false;
+  bool _isTyping = false;
+  Timer? _typingTimer;
+  Timer? _markReadTimer;
+
+  StreamSubscription<List<Message>>? _messagesSub;
+  StreamSubscription<DateTime?>? _readAtSub;
+  StreamSubscription<bool>? _typingSub;
+  StreamSubscription<bool>? _presenceSub;
+  StreamSubscription<DateTime?>? _lastSeenSub;
+
+  // UI-only state that belongs here because it drives notifyListeners()
+  Message? _replyingTo;
+  bool _showAttachMenu = false;
+
+  // ── Public getters ───────────────────────────────────────────────────────
+
+  /// Combined, filtered message list: paginated older + stream recent + pending.
+  List<Message> get messages {
+    bool visible(Message m) =>
+        !_hiddenIds.contains(m.id) &&
+        (_clearedAt == null || m.timestamp.isAfter(_clearedAt!));
+    return [
+      ..._olderMessages.where(visible),
+      ..._streamMessages.where(visible),
+      ..._pendingEntries.map((e) => e.message),
+    ];
+  }
+
+  DateTime? get otherReadAt => _otherReadAt;
+  bool get otherTyping => _otherTyping;
+  bool get otherOnline => _otherOnline;
+  DateTime? get otherLastSeen => _otherLastSeen;
+  double? get uploadProgress => _uploadProgress;
+  bool get sending => _uploadProgress != null;
+  bool get hasMoreMessages => _hasMoreMessages;
+  bool get loadingMore => _loadingMore;
+  Message? get replyingTo => _replyingTo;
+  bool get showAttachMenu => _showAttachMenu;
+
+  Set<String> get pendingIds =>
+      _pendingEntries.where((e) => !e.failed).map((e) => e.message.id).toSet();
+
+  Set<String> get failedIds =>
+      _pendingEntries.where((e) => e.failed).map((e) => e.message.id).toSet();
+
+  // ── Lifecycle ────────────────────────────────────────────────────────────
+
+  Future<void> init() async {
+    _clearedAt = await _repo.getClearedAt();
+    _hiddenIds = await _repo.getHiddenIds();
+
+    _subscribeMessages();
+
+    _readAtSub = _repo.otherReadAtStream().listen((ts) {
+      if (ts != _otherReadAt) {
+        _otherReadAt = ts;
+        notifyListeners();
+      }
+    });
+
+    _typingSub = _repo.otherTypingStream().listen((typing) {
+      if (typing != _otherTyping) {
+        _otherTyping = typing;
+        notifyListeners();
+      }
+    });
+
+    _presenceSub = _repo.otherPresenceStream().listen((online) {
+      if (online != _otherOnline) {
+        _otherOnline = online;
+        notifyListeners();
+      }
+    });
+
+    _lastSeenSub = _repo.otherLastSeenStream().listen((ts) {
+      if (ts != _otherLastSeen) {
+        _otherLastSeen = ts;
+        notifyListeners();
+      }
+    });
+
+    await _repo.enterChat();
+    _scheduleMarkRead(); // mark existing messages read as soon as chat opens
+  }
+
+  void _subscribeMessages() {
+    _messagesSub?.cancel();
+    _messagesSub = _repo.messagesStream().listen((msgs) {
+      _streamMessages = msgs;
+
+      final confirmedClientIds = msgs
+          .where((m) => m.clientId != null)
+          .map((m) => m.clientId!)
+          .toSet();
+      _pendingEntries.removeWhere((e) => confirmedClientIds.contains(e.clientId));
+
+      // Mark as read whenever the other person has any visible messages.
+      // The debouncer ensures at most one Firestore write per 500 ms window.
+      final otherId = mySenderId == 'A' ? 'B' : 'A';
+      if (msgs.any((m) => m.sender == otherId)) _scheduleMarkRead();
+      notifyListeners();
+    });
+  }
+
+  Future<void> enter() async {
+    _didLeave = false;
+    await _repo.enterChat();
+    _scheduleMarkRead(); // always mark read on resume, not just when new msgs arrive
+  }
+
+  Future<void> leave() async {
+    if (_didLeave) return;
+    _didLeave = true;
+    _typingTimer?.cancel();
+    _markReadTimer?.cancel();
+    await _repo.setTyping(false);
+    await _repo.leaveChat();
+  }
+
+  // ── Pagination ───────────────────────────────────────────────────────────
+
+  Future<void> loadMoreMessages() async {
+    if (_loadingMore || !_hasMoreMessages) return;
+
+    final allCurrent = [..._olderMessages, ..._streamMessages];
+    if (allCurrent.isEmpty) return;
+
+    _loadingMore = true;
+    notifyListeners();
+
+    try {
+      final older = await _repo.fetchOlderMessages(allCurrent.first.timestamp);
+      if (older.isEmpty) {
+        _hasMoreMessages = false;
+      } else {
+        if (older.length < 30) _hasMoreMessages = false;
+        final existingIds = {
+          ..._olderMessages.map((m) => m.id),
+          ..._streamMessages.map((m) => m.id),
+        };
+        final newOnes = older.where((m) => !existingIds.contains(m.id)).toList();
+        _olderMessages = [...newOnes, ..._olderMessages];
+      }
+    } catch (_) {
+      // Silent — user can trigger again by scrolling
+    } finally {
+      _loadingMore = false;
+      notifyListeners();
+    }
+  }
+
+  // ── Typing ───────────────────────────────────────────────────────────────
+
+  void onTypingChanged(String value) {
+    _typingTimer?.cancel();
+    final nowTyping = value.isNotEmpty;
+    if (nowTyping != _isTyping) {
+      _isTyping = nowTyping;
+      _repo.setTyping(nowTyping);
+    }
+    if (nowTyping) {
+      _typingTimer = Timer(const Duration(seconds: 2), () {
+        _isTyping = false;
+        _repo.setTyping(false);
+      });
+    }
+  }
+
+  // ── Send (optimistic) ────────────────────────────────────────────────────
+
+  Future<void> sendText(String text) async {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+
+    _typingTimer?.cancel();
+    _isTyping = false;
+    _repo.setTyping(false);
+
+    final reply = _replyingTo;
+    final previewText = reply == null ? null : _previewFor(reply);
+    setReplyingTo(null);
+
+    final clientId = 'pending_${DateTime.now().microsecondsSinceEpoch}';
+    final entry = _PendingEntry(
+      clientId: clientId,
+      message: Message(
+        id: clientId,
+        sender: mySenderId,
+        text: trimmed,
+        type: MessageType.text,
+        timestamp: DateTime.now(),
+        replyToId: reply?.id,
+        replyToText: previewText,
+        replyToSender: reply?.sender,
+        clientId: clientId,
+      ),
+      replyToId: reply?.id,
+      replyToText: previewText,
+      replyToSender: reply?.sender,
+    );
+    _pendingEntries.add(entry);
+    notifyListeners(); // message appears before Firestore write begins
+
+    try {
+      await _repo.sendText(
+        trimmed,
+        replyToId: reply?.id,
+        replyToText: previewText,
+        replyToSender: reply?.sender,
+        clientId: clientId,
+      );
+      // Stream listener removes the entry once clientId is confirmed
+    } catch (e) {
+      entry.failed = true;
+      notifyListeners();
+      onUploadError?.call(e.toString().split(']').last.trim());
+    }
+  }
+
+  Future<void> sendMedia(File file, MessageType type, {String? fileName}) async {
+    _uploadProgress = 0;
+    notifyListeners();
+    try {
+      await _repo.sendMedia(
+        file,
+        type,
+        fileName: fileName,
+        onProgress: (p) {
+          _uploadProgress = p;
+          notifyListeners();
+        },
+      );
+    } catch (e) {
+      onUploadError?.call(e.toString().split(']').last.trim());
+    } finally {
+      _uploadProgress = null;
+      notifyListeners();
+    }
+  }
+
+  /// Re-send a failed text message identified by its [clientId].
+  Future<void> retryMessage(String clientId) async {
+    final entry = _pendingEntries
+        .where((e) => e.message.id == clientId)
+        .firstOrNull;
+    if (entry == null || !entry.failed) return;
+    entry.failed = false;
+    notifyListeners();
+
+    try {
+      await _repo.sendText(
+        entry.message.text,
+        replyToId: entry.replyToId,
+        replyToText: entry.replyToText,
+        replyToSender: entry.replyToSender,
+        clientId: entry.clientId,
+      );
+    } catch (e) {
+      entry.failed = true;
+      notifyListeners();
+      onUploadError?.call(e.toString().split(']').last.trim());
+    }
+  }
+
+  // ── View mutations ───────────────────────────────────────────────────────
+
+  Future<void> editMessage(String messageId, String newText) async {
+    final trimmed = newText.trim();
+    if (trimmed.isEmpty) return;
+    await _repo.editMessage(messageId, trimmed);
+  }
+
+  Future<void> deleteMessage(String messageId) async {
+    await _repo.deleteMessage(messageId);
+  }
+
+  /// Hide a received message locally (never deletes from Firestore).
+  Future<void> hideMessage(String messageId) async {
+    await _repo.hideMessage(messageId);
+    _hiddenIds = await _repo.getHiddenIds();
+    notifyListeners();
+  }
+
+  /// True when [msg] was sent by me and is within the 1-hour edit/delete window.
+  static bool canModify(Message msg) =>
+      msg.sender == mySenderId &&
+      DateTime.now().difference(msg.timestamp).inMinutes < 60;
+
+  Future<void> clearMyView() async {
+    await _repo.clearMyView();
+    _clearedAt = await _repo.getClearedAt();
+    _olderMessages = [];
+    _hasMoreMessages = true;
+    notifyListeners();
+  }
+
+  void setReplyingTo(Message? msg) {
+    _replyingTo = msg;
+    if (msg != null) _showAttachMenu = false;
+    notifyListeners();
+  }
+
+  void setShowAttachMenu(bool show) {
+    _showAttachMenu = show;
+    notifyListeners();
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+
+  /// Batch read-receipt writes into 500 ms windows to avoid per-message Firestore calls.
+  void _scheduleMarkRead() {
+    _markReadTimer?.cancel();
+    _markReadTimer = Timer(const Duration(milliseconds: 500), _repo.markRead);
+  }
+
+  String _previewFor(Message msg) {
+    switch (msg.type) {
+      case MessageType.text:  return msg.text;
+      case MessageType.image: return '[Image]';
+      case MessageType.video: return '[Video]';
+      case MessageType.audio: return '[Audio]';
+      case MessageType.file:  return '[File: ${msg.fileName ?? 'file'}]';
+      case MessageType.gif:   return '[GIF]';
+    }
+  }
+
+  @override
+  void dispose() {
+    _typingTimer?.cancel();
+    _markReadTimer?.cancel();
+    _messagesSub?.cancel();
+    _readAtSub?.cancel();
+    _typingSub?.cancel();
+    _presenceSub?.cancel();
+    _lastSeenSub?.cancel();
+    super.dispose();
+  }
+}
+
+// Holds an outgoing text message in the optimistic (pending) or failed state.
+class _PendingEntry {
+  final String clientId;
+  final Message message;
+  final String? replyToId;
+  final String? replyToText;
+  final String? replyToSender;
+  bool failed = false;
+
+  _PendingEntry({
+    required this.clientId,
+    required this.message,
+    this.replyToId,
+    this.replyToText,
+    this.replyToSender,
+  });
+}

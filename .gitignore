@@ -1,0 +1,41 @@
+# ── Firebase credentials (NEVER commit) ─────────────────────────────────────
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+
+# ── Android signing (NEVER commit) ──────────────────────────────────────────
+*.jks
+*.keystore
+key.properties
+android/local.properties
+
+# ── Build output ─────────────────────────────────────────────────────────────
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# ── Android build cache ───────────────────────────────────────────────────────
+android/.gradle/
+android/app/.cxx/
+android/captures/
+
+# ── Dart/Flutter generated ───────────────────────────────────────────────────
+**/*.g.dart
+**/*.freezed.dart
+**/*.mocks.dart
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+.vscode/
+
+# ── macOS ────────────────────────────────────────────────────────────────────
+.DS_Store
+
+# ── Secrets / env ────────────────────────────────────────────────────────────
+.env
+secrets.*
+
+# ── Pub cache (keep pubspec.lock for reproducible builds) ────────────────────
+.pub-cache/
+.pub/

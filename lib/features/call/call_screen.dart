@@ -1,0 +1,427 @@
+// lib/features/call/call_screen.dart
+
+import 'package:flutter/material.dart';
+import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'agora_token_builder.dart';
+import 'call_service.dart';
+import '../../services/chat_service.dart';
+import '../../services/log_service.dart';
+import '../../constants.dart';
+
+class CallScreen extends StatefulWidget {
+  final bool isVideo;
+  final bool isCaller;
+  final String callToken;
+  // true when user returns to a minimized call — skips joinChannel
+  final bool isReconnecting;
+
+  const CallScreen({
+    super.key,
+    required this.isVideo,
+    required this.isCaller,
+    this.callToken = '',
+    this.isReconnecting = false,
+  });
+
+  @override
+  State<CallScreen> createState() => _CallScreenState();
+}
+
+class _CallScreenState extends State<CallScreen> {
+  int? _remoteUid;
+  bool _muted = false;
+  bool _cameraOff = false;
+  bool _callConnected = false;
+  bool _engineReady = false;
+  bool _ending = false;
+  bool _minimizing = false;
+  final _stopwatch = Stopwatch();
+  Duration _durationOffset = Duration.zero;
+  String _duration = '00:00';
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isReconnecting) {
+      _reconnect();
+    } else {
+      _startCall();
+    }
+  }
+
+  // Re-attach UI callbacks to the existing Agora engine session.
+  void _reconnect() {
+    CallService.updateCallbacks(
+      onUserJoined: (uid) {
+        if (!mounted) return;
+        setState(() { _remoteUid = uid; _callConnected = true; });
+        _stopwatch.start();
+        _updateDuration();
+      },
+      onUserLeft: (uid) {
+        if (!mounted) return;
+        setState(() { _remoteUid = null; _callConnected = false; });
+        _stopwatch.stop();
+        _endCall();
+      },
+      onError: () {
+        if (!mounted) return;
+        _endCall();
+      },
+    );
+    CallService.onCallEnded = () {
+      callActiveNotifier.value = false;
+      if (mounted) _endCall();
+    };
+    // Restore connected state if the remote peer is still in the channel
+    final remoteUid = CallService.currentRemoteUid;
+    if (CallService.callStartTime != null) {
+      _durationOffset = DateTime.now().difference(CallService.callStartTime!);
+    }
+    setState(() {
+      _engineReady = true;
+      _muted = CallService.isMuted;
+      _cameraOff = CallService.isCameraOff;
+      if (remoteUid != null) {
+        _remoteUid = remoteUid;
+        _callConnected = true;
+      }
+    });
+    if (remoteUid != null) {
+      _stopwatch.start();
+      _updateDuration();
+    }
+    LogService.i('CallScreen', 'Reconnected — remoteUid=$remoteUid');
+  }
+
+  Future<void> _startCall() async {
+    LogService.i('CallScreen', 'Starting — isCaller=${widget.isCaller} isVideo=${widget.isVideo}');
+    try {
+      final String token;
+      if (agoraToken.isNotEmpty) {
+        token = agoraToken;
+      } else if (widget.isCaller && agoraAppCertificate.isNotEmpty) {
+        token = AgoraTokenBuilder.buildRtcToken(
+          appId: agoraAppId,
+          appCertificate: agoraAppCertificate,
+          channelName: agoraChannel,
+          uid: 0,
+          expireSecs: 3600,
+        );
+      } else {
+        token = widget.callToken;
+      }
+
+      CallService.onCallEnded = () {
+        callActiveNotifier.value = false;
+        if (mounted) _endCall();
+      };
+
+      await CallService.joinCall(
+        videoEnabled: widget.isVideo,
+        token: token,
+        onUserJoined: (uid) {
+          LogService.i('CallScreen', 'onUserJoined uid=$uid');
+          if (!mounted) return;
+          setState(() { _remoteUid = uid; _callConnected = true; });
+          _stopwatch.start();
+          _updateDuration();
+        },
+        onUserLeft: (uid) {
+          LogService.i('CallScreen', 'onUserLeft uid=$uid');
+          if (!mounted) return;
+          setState(() { _remoteUid = null; _callConnected = false; });
+          _stopwatch.stop();
+          _endCall();
+        },
+        onError: () {
+          LogService.e('CallScreen', 'Agora error callback — ending call');
+          _endCall();
+        },
+      );
+      if (!mounted) return;
+      setState(() => _engineReady = true);
+      LogService.i('CallScreen', 'Engine ready — isCaller=${widget.isCaller}');
+      if (widget.isCaller) {
+        ChatService.signalCall(widget.isVideo ? 'video' : 'audio', token: token);
+      }
+
+      Future.delayed(const Duration(seconds: 45), () {
+        if (mounted && !_callConnected) {
+          LogService.w('CallScreen', 'Timeout — no remote user joined after 45s');
+          _endCall();
+        }
+      });
+    } catch (e) {
+      LogService.e('CallScreen', 'joinCall threw: $e');
+      _endCall();
+    }
+  }
+
+  void _updateDuration() {
+    Future.delayed(const Duration(seconds: 1), () {
+      if (!mounted || !_stopwatch.isRunning) return;
+      final s = _stopwatch.elapsed.inSeconds + _durationOffset.inSeconds;
+      setState(() {
+        _duration =
+            '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
+      });
+      _updateDuration();
+    });
+  }
+
+  Future<void> _endCall() async {
+    if (_ending) return;
+    _ending = true;
+    callActiveNotifier.value = false;
+    _stopwatch.stop();
+    await ChatService.updateCallStatus('ended');
+    await CallService.leaveCall();
+    if (mounted) Navigator.pop(context);
+  }
+
+  // Minimize call: keep engine alive, show mini bar in ChatScreen.
+  Future<void> _minimize() async {
+    _minimizing = true;
+    callActiveNotifier.value = true;
+    isCallVideo = widget.isVideo;
+    isCallCaller = widget.isCaller;
+    activeCallToken = widget.callToken;
+    // If remote hangs up while minimized, clean up silently
+    CallService.onCallEnded = () async {
+      callActiveNotifier.value = false;
+      await CallService.leaveCall();
+    };
+    // Clear UI callbacks — this screen is going away
+    CallService.updateCallbacks(
+      onUserJoined: (_) {},
+      onUserLeft: (_) {},
+      onError: () {},
+    );
+    if (mounted) Navigator.pop(context);
+  }
+
+  @override
+  void dispose() {
+    // Only release engine if truly ending, not minimizing
+    if (!_minimizing && !_ending) {
+      CallService.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _minimize();
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
+          children: [
+            // Remote video (full screen) or audio background
+            if (widget.isVideo && _engineReady && _remoteUid != null)
+              SizedBox.expand(
+                child: AgoraVideoView(
+                  controller: VideoViewController.remote(
+                    rtcEngine: CallService.engine,
+                    canvas: VideoCanvas(uid: _remoteUid),
+                    connection: RtcConnection(channelId: agoraChannel),
+                  ),
+                ),
+              )
+            else
+              Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Color(0xFF0D1117), Color(0xFF1A2332)],
+                  ),
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const CircleAvatar(
+                        radius: 60,
+                        backgroundColor: Color(0xFF128C7E),
+                        child: Icon(Icons.person, color: Colors.white, size: 60),
+                      ),
+                      const SizedBox(height: 20),
+                      const Text(
+                        otherDisplayName,
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _callConnected
+                            ? _duration
+                            : widget.isCaller
+                                ? 'Calling...'
+                                : 'Connecting...',
+                        style: const TextStyle(color: Colors.white70, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // Local video preview (small, top right)
+            if (widget.isVideo && _engineReady && !_cameraOff)
+              Positioned(
+                top: 60,
+                right: 16,
+                child: Container(
+                  width: 100,
+                  height: 140,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white, width: 1.5),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: AgoraVideoView(
+                      controller: VideoViewController(
+                        rtcEngine: CallService.engine,
+                        canvas: const VideoCanvas(uid: 0),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+            // Top bar with duration and back-to-chat button
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    children: [
+                      GestureDetector(
+                        onTap: _minimize,
+                        child: const Icon(Icons.keyboard_arrow_down,
+                            color: Colors.white70, size: 28),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        _callConnected
+                            ? _duration
+                            : widget.isCaller
+                                ? 'Calling...'
+                                : 'Connecting...',
+                        style: const TextStyle(color: Colors.white70, fontSize: 14),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            // Bottom controls
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: SafeArea(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _CallButton(
+                        icon: _muted ? Icons.mic_off : Icons.mic,
+                        label: _muted ? 'Unmute' : 'Mute',
+                        onTap: () async {
+                          setState(() => _muted = !_muted);
+                          await CallService.toggleMute(_muted);
+                        },
+                      ),
+                      // Flip camera always in bottom row — never obscured
+                      if (widget.isVideo)
+                        _CallButton(
+                          icon: Icons.flip_camera_ios,
+                          label: 'Flip',
+                          onTap: CallService.switchCamera,
+                        ),
+                      _CallButton(
+                        icon: Icons.call_end,
+                        label: 'End',
+                        color: Colors.red,
+                        size: 60,
+                        onTap: _endCall,
+                      ),
+                      if (widget.isVideo)
+                        _CallButton(
+                          icon: _cameraOff ? Icons.videocam_off : Icons.videocam,
+                          label: _cameraOff ? 'Cam off' : 'Camera',
+                          onTap: () async {
+                            setState(() => _cameraOff = !_cameraOff);
+                            await CallService.toggleCamera(_cameraOff);
+                          },
+                        )
+                      else
+                        _CallButton(
+                          icon: Icons.volume_up,
+                          label: 'Speaker',
+                          onTap: () {},
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CallButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final Color? color;
+  final double size;
+
+  const _CallButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.color,
+    this.size = 52,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              color: color ?? Colors.white24,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: Colors.white, size: size * 0.45),
+          ),
+          const SizedBox(height: 6),
+          Text(label,
+              style: const TextStyle(color: Colors.white70, fontSize: 11)),
+        ],
+      ),
+    );
+  }
+}
