@@ -52,6 +52,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   // Call signal subscription stays here — needs context for showDialog
   StreamSubscription<Map<String, dynamic>?>? _callSub;
 
+  // Debounce timer for presence: prevents brief pauses (system dialogs, etc.)
+  // from immediately marking the user offline (fix for issue #11).
+  Timer? _leaveTimer;
+
   // Business logic lives entirely in the controller
   late final ChatController _ctrl;
 
@@ -84,15 +88,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      // Cancel any pending offline write — user came back before the grace period.
+      _leaveTimer?.cancel();
       _ctrl.enter();
-    } else if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.detached) {
+    } else if (state == AppLifecycleState.paused) {
+      // Debounce: only write offline after 5 s of being in background.
+      // System dialogs (notification permission, in-call UI, etc.) trigger
+      // `paused` briefly — without debouncing they would reset lastSeen to
+      // "just now" and make the user appear offline to the other person.
+      _leaveTimer?.cancel();
+      _leaveTimer = Timer(const Duration(seconds: 5), () {
+        _ctrl.leave();
+        if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
+          Navigator.of(context).popUntil((route) => route.isFirst);
+        }
+      });
+    } else if (state == AppLifecycleState.detached) {
+      // App is being killed — write offline immediately, no grace period.
+      _leaveTimer?.cancel();
       _ctrl.leave();
-      // Navigate to root so the recent-apps thumbnail shows the task screen.
-      // Guard: only pop when chat is the top route (not buried under a call screen).
-      if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
-        Navigator.of(context).popUntil((route) => route.isFirst);
-      }
     }
   }
 
@@ -107,6 +121,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _leaveTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _scrollController.removeListener(_onScroll);
     _callSub?.cancel();
@@ -156,8 +171,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   // ── Device input (file system / camera access, stays in widget layer) ─────
 
   Future<void> _sendText() async {
-    await _ctrl.sendText(_textController.text);
+    final text = _textController.text;
+    // Clear immediately so a second tap while the Firestore write is in flight
+    // hits an empty field and is rejected by the controller's isEmpty guard.
     _textController.clear();
+    await _ctrl.sendText(text);
   }
 
   Future<void> _sendImage(ImageSource source) async {
