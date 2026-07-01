@@ -88,6 +88,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _scrollController.addListener(_onScroll);
     _ctrl.init();
     _listenForCalls();
+    DeviceService.writeHeartbeat();
     final otherId = mySenderId == 'A' ? 'B' : 'A';
     _otherLastOpenedSub = DeviceService.otherLastOpenedStream(otherId).listen(
       (ts) { if (mounted) setState(() => _otherLastOpened = ts); },

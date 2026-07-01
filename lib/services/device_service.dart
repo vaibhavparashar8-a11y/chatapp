@@ -26,7 +26,6 @@ class DeviceService {
       mySenderId = r;
       role = r;
       deviceId = prefs.getString(_deviceKey) ?? 'unknown';
-      await _writeHeartbeat(r);
       return;
     }
 
@@ -74,7 +73,6 @@ class DeviceService {
     mySenderId = assignedRole;
     role = assignedRole;
     await prefs.setString(_roleKey, assignedRole);
-    await _writeHeartbeat(assignedRole);
   }
 
   /// Returns a device identifier that is stable across app reinstalls.
@@ -99,8 +97,12 @@ class DeviceService {
     return id;
   }
 
-  /// Writes the current timestamp and device role to Firestore so the other
-  /// device can tell when this phone last opened the app.
+  /// Writes the current timestamp to Firestore so the other device can tell
+  /// when this phone last entered the chat screen. Call from ChatScreen.initState().
+  static Future<void> writeHeartbeat() async {
+    await _writeHeartbeat(role);
+  }
+
   static Future<void> _writeHeartbeat(String r) async {
     try {
       await FirebaseFirestore.instance
