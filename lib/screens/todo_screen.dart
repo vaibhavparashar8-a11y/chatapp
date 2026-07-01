@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:add_2_calendar/add_2_calendar.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'chat_screen.dart';
@@ -14,7 +15,9 @@ class _Todo {
   final String id;
   String title;
   bool done;
-  _Todo(this.id, this.title, {this.done = false});
+  DateTime? dueDate;
+
+  _Todo(this.id, this.title, {this.done = false, this.dueDate});
 }
 
 class _TodoScreenState extends State<TodoScreen> {
@@ -43,6 +46,9 @@ class _TodoScreenState extends State<TodoScreen> {
                       e['id'] as String,
                       e['title'] as String,
                       done: e['done'] as bool? ?? false,
+                      dueDate: e['dueDate'] != null
+                          ? DateTime.parse(e['dueDate'] as String)
+                          : null,
                     ))
                 .toList();
           });
@@ -54,7 +60,12 @@ class _TodoScreenState extends State<TodoScreen> {
   Future<void> _saveTodos() async {
     final prefs = await SharedPreferences.getInstance();
     final list = _todos
-        .map((t) => {'id': t.id, 'title': t.title, 'done': t.done})
+        .map((t) => {
+              'id': t.id,
+              'title': t.title,
+              'done': t.done,
+              if (t.dueDate != null) 'dueDate': t.dueDate!.toIso8601String(),
+            })
         .toList();
     await prefs.setString(_todosKey, jsonEncode(list));
   }
@@ -96,6 +107,63 @@ class _TodoScreenState extends State<TodoScreen> {
   void _delete(String id) {
     setState(() => _todos.removeWhere((t) => t.id == id));
     _saveTodos();
+  }
+
+  Future<void> _setCalendarReminder(_Todo todo) async {
+    final now = DateTime.now();
+    final initial = todo.dueDate ?? now.add(const Duration(days: 1));
+
+    final date = await showDatePicker(
+      context: context,
+      initialDate: initial.isBefore(now) ? now : initial,
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365)),
+      helpText: 'Pick reminder date',
+    );
+    if (date == null || !mounted) return;
+
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initial),
+      helpText: 'Pick reminder time',
+    );
+    if (time == null || !mounted) return;
+
+    final dueDate = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+
+    setState(() => todo.dueDate = dueDate);
+    await _saveTodos();
+
+    final event = Event(
+      title: todo.title,
+      description: 'Reminder from MyTask: ${todo.title}',
+      startDate: dueDate,
+      endDate: dueDate.add(const Duration(hours: 1)),
+      allDay: false,
+    );
+
+    final added = await Add2Calendar.addEvent2Cal(event);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(added
+            ? 'Reminder set for ${_formatDue(dueDate)}'
+            : 'Could not open calendar'),
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
+  String _formatDue(DateTime dt) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final dtDay = DateTime(dt.year, dt.month, dt.day);
+    final diff = dtDay.difference(today).inDays;
+    final hm =
+        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    if (diff < 0) return 'Was due ${dt.day}/${dt.month} at $hm';
+    if (diff == 0) return 'Due today at $hm';
+    if (diff == 1) return 'Due tomorrow at $hm';
+    return 'Due ${dt.day}/${dt.month} at $hm';
   }
 
   @override
@@ -165,6 +233,9 @@ class _TodoScreenState extends State<TodoScreen> {
   }
 
   Widget _buildTile(_Todo todo) {
+    final hasReminder = todo.dueDate != null;
+    final isOverdue = hasReminder && todo.dueDate!.isBefore(DateTime.now()) && !todo.done;
+
     return Dismissible(
       key: Key(todo.id),
       direction: DismissDirection.endToStart,
@@ -199,15 +270,43 @@ class _TodoScreenState extends State<TodoScreen> {
               fontSize: 15,
             ),
           ),
+          subtitle: hasReminder
+              ? Text(
+                  _formatDue(todo.dueDate!),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: isOverdue ? Colors.red[400] : Colors.indigo[400],
+                    fontWeight: isOverdue ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                )
+              : null,
           controlAffinity: ListTileControlAffinity.leading,
           activeColor: Colors.indigo,
           checkboxShape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(4),
           ),
           contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          secondary: IconButton(
-            icon: Icon(Icons.delete_outline, color: Colors.grey[400], size: 20),
-            onPressed: () => _delete(todo.id),
+          secondary: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: Icon(
+                  hasReminder ? Icons.calendar_today : Icons.calendar_today_outlined,
+                  color: isOverdue
+                      ? Colors.red[400]
+                      : hasReminder
+                          ? Colors.indigo
+                          : Colors.grey[400],
+                  size: 20,
+                ),
+                tooltip: hasReminder ? 'Update reminder' : 'Set reminder',
+                onPressed: () => _setCalendarReminder(todo),
+              ),
+              IconButton(
+                icon: Icon(Icons.delete_outline, color: Colors.grey[400], size: 20),
+                onPressed: () => _delete(todo.id),
+              ),
+            ],
           ),
         ),
       ),
