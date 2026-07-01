@@ -103,11 +103,20 @@ class _TodoScreenState extends State<TodoScreen> {
     await _saveTodos();
 
     if (dueDate != null) {
-      await NotificationService.scheduleReminder(
+      final ok = await NotificationService.scheduleReminder(
         id: id.hashCode,
         title: text,
         scheduledTime: dueDate,
       );
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+            'Grant "Alarms & reminders" in Settings, then tap the calendar icon to re-set.',
+          ),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 6),
+        ));
+      }
     }
   }
 
@@ -148,7 +157,7 @@ class _TodoScreenState extends State<TodoScreen> {
     setState(() => todo.dueDate = dueDate);
     await _saveTodos();
 
-    await NotificationService.scheduleReminder(
+    final ok = await NotificationService.scheduleReminder(
       id: todo.id.hashCode,
       title: todo.title,
       scheduledTime: dueDate,
@@ -156,8 +165,11 @@ class _TodoScreenState extends State<TodoScreen> {
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Reminder set for ${formatDue(dueDate)}'),
+        content: Text(ok
+            ? 'Reminder set for ${formatDue(dueDate)}'
+            : 'Grant "Alarms & reminders" in Settings, then tap the calendar icon to re-set.'),
         behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: ok ? 3 : 6),
       ));
     }
   }
