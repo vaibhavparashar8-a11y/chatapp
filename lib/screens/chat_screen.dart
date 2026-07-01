@@ -313,12 +313,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   String _formatLastSeen(DateTime ts) {
     final now = DateTime.now();
-    final diff = now.difference(ts);
     final hm =
         '${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}';
-    if (diff.inMinutes < 1) return 'just now';
-    if (diff.inDays < 1) return 'today at $hm';
-    if (diff.inDays < 2) return 'yesterday at $hm';
+    if (now.difference(ts).inMinutes < 1) return 'just now';
+    // Compare calendar days, not elapsed hours — "yesterday at 22:00" must not
+    // show as "today" just because fewer than 24 hours have passed.
+    final today = DateTime(now.year, now.month, now.day);
+    final calendarDiff = today.difference(DateTime(ts.year, ts.month, ts.day)).inDays;
+    if (calendarDiff == 0) return 'today at $hm';
+    if (calendarDiff == 1) return 'yesterday at $hm';
     return '${ts.day}/${ts.month} at $hm';
   }
 
