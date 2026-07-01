@@ -1,8 +1,8 @@
 import 'dart:convert';
-import 'package:add_2_calendar/add_2_calendar.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'chat_screen.dart';
+import '../services/notification_service.dart';
 import '../utils/time_utils.dart';
 
 class TodoScreen extends StatefulWidget {
@@ -83,22 +83,111 @@ class _TodoScreenState extends State<TodoScreen> {
     if (value.trim().toLowerCase() == 'flutter') _openChat();
   }
 
-  void _submit() {
+  // ── Task creation (issue #6: prompt for reminder before adding) ─────────────
+
+  Future<void> _submit() async {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
     if (text.toLowerCase() == 'flutter') {
       _openChat();
       return;
     }
-    setState(() {
-      _todos.add(_Todo(
-        DateTime.now().millisecondsSinceEpoch.toString(),
-        text,
-      ));
-    });
+
+    final dueDate = await _promptReminderOnCreate(text);
+    if (!mounted) return;
+
+    final id = DateTime.now().millisecondsSinceEpoch.toString();
+    final todo = _Todo(id, text, dueDate: dueDate);
+    setState(() => _todos.add(todo));
     _controller.clear();
-    _saveTodos();
+    await _saveTodos();
+
+    if (dueDate != null) {
+      await NotificationService.scheduleReminder(
+        id: id.hashCode,
+        title: text,
+        scheduledTime: dueDate,
+      );
+    }
   }
+
+  /// Shows "Set a reminder?" dialog, then date+time pickers if the user agrees.
+  Future<DateTime?> _promptReminderOnCreate(String taskTitle) async {
+    if (!mounted) return null;
+    final want = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Set a reminder?'),
+        content: Text('Add a reminder for "$taskTitle"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Skip'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Set Reminder'),
+          ),
+        ],
+      ),
+    );
+    if (want != true || !mounted) return null;
+    return _pickDateTime();
+  }
+
+  // ── Reminder on existing tile ───────────────────────────────────────────────
+
+  Future<void> _setCalendarReminder(_Todo todo) async {
+    final dueDate = await _pickDateTime(initial: todo.dueDate);
+    if (dueDate == null || !mounted) return;
+
+    if (todo.dueDate != null) {
+      await NotificationService.cancelReminder(todo.id.hashCode);
+    }
+
+    setState(() => todo.dueDate = dueDate);
+    await _saveTodos();
+
+    await NotificationService.scheduleReminder(
+      id: todo.id.hashCode,
+      title: todo.title,
+      scheduledTime: dueDate,
+    );
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Reminder set for ${formatDue(dueDate)}'),
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
+  /// Shared date + time picker flow used by both creation and edit paths.
+  Future<DateTime?> _pickDateTime({DateTime? initial}) async {
+    final now = DateTime.now();
+    final initDate =
+        initial != null && initial.isAfter(now) ? initial : now.add(const Duration(days: 1));
+
+    final date = await showDatePicker(
+      context: context,
+      initialDate: initDate,
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365)),
+      helpText: 'Pick reminder date',
+    );
+    if (date == null || !mounted) return null;
+
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initial ?? initDate),
+      helpText: 'Pick reminder time',
+    );
+    if (time == null) return null;
+
+    return DateTime(date.year, date.month, date.day, time.hour, time.minute);
+  }
+
+  // ── Task management ─────────────────────────────────────────────────────────
 
   void _toggleDone(_Todo todo, bool? val) {
     setState(() => todo.done = val ?? false);
@@ -106,52 +195,12 @@ class _TodoScreenState extends State<TodoScreen> {
   }
 
   void _delete(String id) {
+    final idx = _todos.indexWhere((t) => t.id == id);
+    if (idx != -1 && _todos[idx].dueDate != null) {
+      NotificationService.cancelReminder(id.hashCode);
+    }
     setState(() => _todos.removeWhere((t) => t.id == id));
     _saveTodos();
-  }
-
-  Future<void> _setCalendarReminder(_Todo todo) async {
-    final now = DateTime.now();
-    final initial = todo.dueDate ?? now.add(const Duration(days: 1));
-
-    final date = await showDatePicker(
-      context: context,
-      initialDate: initial.isBefore(now) ? now : initial,
-      firstDate: now,
-      lastDate: now.add(const Duration(days: 365)),
-      helpText: 'Pick reminder date',
-    );
-    if (date == null || !mounted) return;
-
-    final time = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.fromDateTime(initial),
-      helpText: 'Pick reminder time',
-    );
-    if (time == null || !mounted) return;
-
-    final dueDate = DateTime(date.year, date.month, date.day, time.hour, time.minute);
-
-    setState(() => todo.dueDate = dueDate);
-    await _saveTodos();
-
-    final event = Event(
-      title: todo.title,
-      description: 'Reminder from MyTask: ${todo.title}',
-      startDate: dueDate,
-      endDate: dueDate.add(const Duration(hours: 1)),
-      allDay: false,
-    );
-
-    final added = await Add2Calendar.addEvent2Cal(event);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(added
-            ? 'Reminder set for ${formatDue(dueDate)}'
-            : 'Could not open calendar'),
-        behavior: SnackBarBehavior.floating,
-      ));
-    }
   }
 
   @override
@@ -160,6 +209,8 @@ class _TodoScreenState extends State<TodoScreen> {
     _focusNode.dispose();
     super.dispose();
   }
+
+  // ── Build ───────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -251,58 +302,58 @@ class _TodoScreenState extends State<TodoScreen> {
           type: MaterialType.transparency,
           borderRadius: BorderRadius.circular(10),
           child: CheckboxListTile(
-          value: todo.done,
-          onChanged: (val) => _toggleDone(todo, val),
-          title: Text(
-            todo.title,
-            style: TextStyle(
-              decoration: todo.done ? TextDecoration.lineThrough : null,
-              color: todo.done ? Colors.grey : Colors.black87,
-              fontSize: 15,
+            value: todo.done,
+            onChanged: (val) => _toggleDone(todo, val),
+            title: Text(
+              todo.title,
+              style: TextStyle(
+                decoration: todo.done ? TextDecoration.lineThrough : null,
+                color: todo.done ? Colors.grey : Colors.black87,
+                fontSize: 15,
+              ),
             ),
-          ),
-          subtitle: hasReminder
-              ? Text(
-                  formatDue(todo.dueDate!),
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: isOverdue ? Colors.red[400] : Colors.indigo[400],
-                    fontWeight: isOverdue ? FontWeight.w600 : FontWeight.normal,
+            subtitle: hasReminder
+                ? Text(
+                    formatDue(todo.dueDate!),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isOverdue ? Colors.red[400] : Colors.indigo[400],
+                      fontWeight: isOverdue ? FontWeight.w600 : FontWeight.normal,
+                    ),
+                  )
+                : null,
+            controlAffinity: ListTileControlAffinity.leading,
+            activeColor: Colors.indigo,
+            checkboxShape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(4),
+            ),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            secondary: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: Icon(
+                    hasReminder ? Icons.calendar_today : Icons.calendar_today_outlined,
+                    color: isOverdue
+                        ? Colors.red[400]
+                        : hasReminder
+                            ? Colors.indigo
+                            : Colors.grey[400],
+                    size: 20,
                   ),
-                )
-              : null,
-          controlAffinity: ListTileControlAffinity.leading,
-          activeColor: Colors.indigo,
-          checkboxShape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(4),
-          ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          secondary: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                icon: Icon(
-                  hasReminder ? Icons.calendar_today : Icons.calendar_today_outlined,
-                  color: isOverdue
-                      ? Colors.red[400]
-                      : hasReminder
-                          ? Colors.indigo
-                          : Colors.grey[400],
-                  size: 20,
+                  tooltip: hasReminder ? 'Update reminder' : 'Set reminder',
+                  onPressed: () => _setCalendarReminder(todo),
                 ),
-                tooltip: hasReminder ? 'Update reminder' : 'Set reminder',
-                onPressed: () => _setCalendarReminder(todo),
-              ),
-              IconButton(
-                icon: Icon(Icons.delete_outline, color: Colors.grey[400], size: 20),
-                onPressed: () => _delete(todo.id),
-              ),
-            ],
-          ),
-        ),        // CheckboxListTile
-        ),        // Material
-      ),          // Container
-    );            // Dismissible
+                IconButton(
+                  icon: Icon(Icons.delete_outline, color: Colors.grey[400], size: 20),
+                  onPressed: () => _delete(todo.id),
+                ),
+              ],
+            ),
+          ),        // CheckboxListTile
+        ),          // Material
+      ),            // Container
+    );              // Dismissible
   }
 
   Widget _buildInputBar() {
@@ -340,7 +391,7 @@ class _TodoScreenState extends State<TodoScreen> {
           ),
           const SizedBox(width: 8),
           FloatingActionButton.small(
-            onPressed: _submit,
+            onPressed: () => _submit(),
             backgroundColor: Colors.indigo,
             foregroundColor: Colors.white,
             elevation: 0,
