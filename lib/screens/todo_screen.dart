@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'chat_screen.dart';
+import '../services/device_service.dart';
 import '../services/notification_service.dart';
 import '../utils/time_utils.dart';
 
@@ -220,6 +222,41 @@ class _TodoScreenState extends State<TodoScreen> {
     super.dispose();
   }
 
+  // ── Role reset (debug only) ─────────────────────────────────────────────────
+
+  Future<void> _showRoleResetDialog() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset Role Assignment?'),
+        content: const Text(
+          'This clears the role (A/B) for this device and wipes the Firestore '
+          'assignment table.\n\nBoth devices must relaunch after resetting. '
+          'Use this only if roles got mixed up after reinstalling on both phones.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Reset'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await DeviceService.resetAssignments();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Role reset. Relaunch both devices — first launch claims A.'),
+      duration: Duration(seconds: 5),
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
   // ── Build ───────────────────────────────────────────────────────────────────
 
   @override
@@ -230,7 +267,11 @@ class _TodoScreenState extends State<TodoScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
-        title: const Text('My Tasks', style: TextStyle(fontWeight: FontWeight.w600)),
+        // Double-tap the title in debug builds to reset role assignments.
+        title: GestureDetector(
+          onDoubleTap: kDebugMode ? _showRoleResetDialog : null,
+          child: const Text('My Tasks', style: TextStyle(fontWeight: FontWeight.w600)),
+        ),
         backgroundColor: Colors.indigo,
         foregroundColor: Colors.white,
         elevation: 0,

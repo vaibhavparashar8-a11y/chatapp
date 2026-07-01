@@ -17,6 +17,7 @@ import '../services/chat_service.dart';
 import '../widgets/message_bubble.dart';
 import '../features/call/incoming_call_dialog.dart';
 import '../features/call/call_screen.dart';
+import '../services/device_service.dart';
 import '../utils/time_utils.dart';
 
 part 'chat/load_more_indicator.dart';
@@ -63,6 +64,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   // is force-reconstructed and picks up a fresh platform surface.
   int _floatingVideoEpoch = 0;
 
+  // Last time the other device opened the app (null = never / unknown).
+  DateTime? _otherLastOpened;
+  StreamSubscription<DateTime?>? _otherLastOpenedSub;
+
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   @override
@@ -83,6 +88,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _scrollController.addListener(_onScroll);
     _ctrl.init();
     _listenForCalls();
+    final otherId = mySenderId == 'A' ? 'B' : 'A';
+    _otherLastOpenedSub = DeviceService.otherLastOpenedStream(otherId).listen(
+      (ts) { if (mounted) setState(() => _otherLastOpened = ts); },
+    );
   }
 
   @override
@@ -122,6 +131,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     _leaveTimer?.cancel();
+    _otherLastOpenedSub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _scrollController.removeListener(_onScroll);
     _callSub?.cancel();
@@ -257,6 +267,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   // ── Private build methods (one per UI section) ─────────────────────────────
 
+  String _formatOtherInstallStatus() {
+    final ts = _otherLastOpened;
+    if (ts == null) return 'app not yet opened on other device';
+    final diff = DateTime.now().difference(ts);
+    if (diff.inDays >= 30) return 'other device not seen in ${diff.inDays} days — may be uninstalled';
+    if (diff.inDays >= 1) return 'other device: opened ${diff.inDays}d ago';
+    if (diff.inHours >= 1) return 'other device: opened ${diff.inHours}h ago';
+    return 'other device: opened recently';
+  }
+
   AppBar _buildAppBar() {
     return AppBar(
       backgroundColor: Colors.transparent,
@@ -298,7 +318,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     ? 'online'
                     : _ctrl.otherLastSeen != null
                         ? 'last seen ${formatLastSeen(_ctrl.otherLastSeen!)}'
-                        : 'end-to-end encrypted',
+                        : _formatOtherInstallStatus(),
             style: TextStyle(
               fontSize: 11,
               color: _ctrl.otherTyping
