@@ -1,5 +1,6 @@
 import 'dart:developer' as dev;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
@@ -17,7 +18,18 @@ class NotificationService {
   static Future<void> init() async {
     if (testMode || _initialized) return;
     try {
+      // Load timezone database and set the device's local timezone — required
+      // by flutter_local_notifications before calling zonedSchedule().
       tz.initializeTimeZones();
+      try {
+        final tzName = await FlutterTimezone.getLocalTimezone();
+        tz.setLocalLocation(tz.getLocation(tzName));
+        dev.log('timezone: set to $tzName', name: _tag);
+      } catch (e) {
+        // Fallback: leave tz.local as UTC — alarm will still fire, just labeled UTC.
+        dev.log('timezone: could not resolve local timezone — $e', name: _tag);
+      }
+
       const android = AndroidInitializationSettings('@mipmap/ic_launcher');
       await _plugin.initialize(const InitializationSettings(android: android));
       _initialized = true;
@@ -68,23 +80,34 @@ class NotificationService {
           name: _tag);
       scheduleMode = AndroidScheduleMode.exactAllowWhileIdle;
     }
-    dev.log('scheduleMode chosen: $scheduleMode', name: _tag);
+    dev.log('scheduleMode: $scheduleMode', name: _tag);
 
-    final utc = scheduledTime.toUtc();
-    var tzScheduled = tz.TZDateTime(
-      tz.UTC, utc.year, utc.month, utc.day, utc.hour, utc.minute,
-    );
-    final nowUtc = tz.TZDateTime.now(tz.UTC);
+    // Convert the user's picked local DateTime to a TZDateTime in the
+    // device's local timezone. This is the approach recommended by the
+    // flutter_local_notifications docs and is the most reliable on Android.
+    tz.TZDateTime tzScheduled;
+    try {
+      tzScheduled = tz.TZDateTime.from(scheduledTime, tz.local);
+    } catch (e) {
+      // tz.local not set (shouldn't happen after init, but defensive fallback).
+      dev.log('TZDateTime.from failed — $e — using UTC offset', name: _tag);
+      final utc = scheduledTime.toUtc();
+      tzScheduled = tz.TZDateTime(
+          tz.UTC, utc.year, utc.month, utc.day, utc.hour, utc.minute);
+    }
+
+    // Guard: if the picked time is already in the past, fire in 5 s instead
+    // of letting zonedSchedule throw or silently drop the alarm.
+    final nowLocal = tz.TZDateTime.now(tz.local);
     dev.log(
-        'scheduledTime (local)=$scheduledTime  tzScheduled(UTC)=$tzScheduled  nowUtc=$nowUtc',
+        'scheduledTime=$scheduledTime  tzScheduled=$tzScheduled  now=$nowLocal',
         name: _tag);
-
-    if (tzScheduled.isBefore(nowUtc)) {
-      tzScheduled = nowUtc.add(const Duration(seconds: 5));
+    if (tzScheduled.isBefore(nowLocal)) {
+      tzScheduled = nowLocal.add(const Duration(seconds: 5));
       dev.log('past-time guard: rescheduled to $tzScheduled', name: _tag);
     }
 
-    final details = NotificationDetails(
+    const details = NotificationDetails(
       android: AndroidNotificationDetails(
         _channelId,
         _channelName,
@@ -96,7 +119,11 @@ class NotificationService {
 
     try {
       await _plugin.zonedSchedule(
-        id, 'Task Reminder', title, tzScheduled, details,
+        id,
+        'Task Reminder',
+        title,
+        tzScheduled,
+        details,
         androidScheduleMode: scheduleMode,
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
@@ -111,7 +138,11 @@ class NotificationService {
         dev.log('retrying with AndroidScheduleMode.inexact', name: _tag);
         try {
           await _plugin.zonedSchedule(
-            id, 'Task Reminder', title, tzScheduled, details,
+            id,
+            'Task Reminder',
+            title,
+            tzScheduled,
+            details,
             androidScheduleMode: AndroidScheduleMode.inexact,
             uiLocalNotificationDateInterpretation:
                 UILocalNotificationDateInterpretation.absoluteTime,
@@ -132,7 +163,7 @@ class NotificationService {
     if (testMode) return;
     try {
       await _plugin.cancel(id);
-      dev.log('cancelReminder: cancelled id=$id', name: _tag);
+      dev.log('cancelReminder: id=$id', name: _tag);
     } catch (e) {
       dev.log('cancelReminder: failed — $e', name: _tag);
     }
