@@ -1,4 +1,6 @@
+import 'dart:developer' as dev;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
@@ -11,73 +13,109 @@ class NotificationService {
 
   static const _channelId = 'task_reminders';
   static const _channelName = 'Task Reminders';
+  static const _tag = 'NotificationService';
 
   static Future<void> init() async {
     if (testMode || _initialized) return;
-    tz.initializeTimeZones();
-    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-    await _plugin.initialize(const InitializationSettings(android: android));
-    _initialized = true;
+    try {
+      // Load timezone database and set the device's local timezone — required
+      // by flutter_local_notifications before calling zonedSchedule().
+      tz.initializeTimeZones();
+      try {
+        final tzName = await FlutterTimezone.getLocalTimezone();
+        tz.setLocalLocation(tz.getLocation(tzName));
+        dev.log('timezone: set to $tzName', name: _tag);
+      } catch (e) {
+        // Fallback: leave tz.local as UTC — alarm will still fire, just labeled UTC.
+        dev.log('timezone: could not resolve local timezone — $e', name: _tag);
+      }
+
+      const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+      await _plugin.initialize(const InitializationSettings(android: android));
+      _initialized = true;
+      dev.log('init: success', name: _tag);
+    } catch (e, st) {
+      dev.log('init: FAILED — $e', name: _tag, error: e, stackTrace: st);
+      rethrow;
+    }
   }
 
-  /// Schedules a local notification at [scheduledTime] (local device time).
-  ///
-  /// Returns true when the alarm was successfully registered (with exact or
-  /// inexact timing), false only if the underlying platform call threw.
-  ///
-  /// Exact-alarm behaviour by Android version:
-  ///   • Android 13+ (API 33+): USE_EXACT_ALARM in manifest is auto-granted —
-  ///     exact scheduling works without any user interaction.
-  ///   • Android 12 (API 31-32): SCHEDULE_EXACT_ALARM needs user approval.
-  ///     If not yet granted, falls back to inexact mode so the notification
-  ///     still fires (may arrive a few minutes late) — never opens Settings,
-  ///     never crashes.
-  ///   • Android ≤ 11: exact scheduling always allowed, no permission needed.
   static Future<bool> scheduleReminder({
     required int id,
     required String title,
     required DateTime scheduledTime,
   }) async {
     if (testMode) return true;
-    if (!_initialized) await init();
 
-    final androidImpl = _plugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+    if (!_initialized) {
+      try {
+        await init();
+      } catch (e) {
+        dev.log('scheduleReminder: init failed — $e', name: _tag);
+        return false;
+      }
+    }
 
-    // Request POST_NOTIFICATIONS (Android 13+). No-op on older versions or if
-    // already granted. Swallowed — a denied permission just means the
-    // notification won't be visible but we still register the alarm.
+    final androidImpl = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+
     try {
       await androidImpl?.requestNotificationsPermission();
-    } catch (_) {}
+      dev.log('requestNotificationsPermission: done', name: _tag);
+    } catch (e) {
+      dev.log('requestNotificationsPermission: threw — $e', name: _tag);
+    }
 
-    // Pick the best available schedule mode without opening Settings or crashing.
     AndroidScheduleMode scheduleMode;
     try {
       final canExact =
           await androidImpl?.canScheduleExactNotifications() ?? true;
+      dev.log('canScheduleExactNotifications: $canExact', name: _tag);
       scheduleMode = canExact
           ? AndroidScheduleMode.exactAllowWhileIdle
           : AndroidScheduleMode.inexact;
-    } catch (_) {
-      // canScheduleExactNotifications threw (older OS / plugin version) —
-      // assume exact is fine; if it isn't, the catch below handles it.
+    } catch (e) {
+      dev.log(
+          'canScheduleExactNotifications: threw — $e — defaulting to exact',
+          name: _tag);
       scheduleMode = AndroidScheduleMode.exactAllowWhileIdle;
     }
+    dev.log('scheduleMode: $scheduleMode', name: _tag);
 
-    // Build the TZDateTime in UTC so the alarm fires at the correct local moment.
-    final utc = scheduledTime.toUtc();
-    var tzScheduled = tz.TZDateTime(
-      tz.UTC, utc.year, utc.month, utc.day, utc.hour, utc.minute,
-    );
+    // Convert the user's picked local DateTime to a TZDateTime in the
+    // device's local timezone. This is the approach recommended by the
+    // flutter_local_notifications docs and is the most reliable on Android.
+    tz.TZDateTime tzScheduled;
+    try {
+      tzScheduled = tz.TZDateTime.from(scheduledTime, tz.local);
+    } catch (e) {
+      // tz.local not set (shouldn't happen after init, but defensive fallback).
+      dev.log('TZDateTime.from failed — $e — using UTC offset', name: _tag);
+      final utc = scheduledTime.toUtc();
+      tzScheduled = tz.TZDateTime(
+          tz.UTC, utc.year, utc.month, utc.day, utc.hour, utc.minute);
+    }
 
     // Guard: if the picked time is already in the past, fire in 5 s instead
     // of letting zonedSchedule throw or silently drop the alarm.
-    final nowUtc = tz.TZDateTime.now(tz.UTC);
-    if (tzScheduled.isBefore(nowUtc)) {
-      tzScheduled = nowUtc.add(const Duration(seconds: 5));
+    final nowLocal = tz.TZDateTime.now(tz.local);
+    dev.log(
+        'scheduledTime=$scheduledTime  tzScheduled=$tzScheduled  now=$nowLocal',
+        name: _tag);
+    if (tzScheduled.isBefore(nowLocal)) {
+      tzScheduled = nowLocal.add(const Duration(seconds: 5));
+      dev.log('past-time guard: rescheduled to $tzScheduled', name: _tag);
     }
+
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        _channelId,
+        _channelName,
+        channelDescription: 'Reminders for your to-do tasks',
+        importance: Importance.high,
+        priority: Priority.high,
+      ),
+    );
 
     try {
       await _plugin.zonedSchedule(
@@ -85,45 +123,37 @@ class NotificationService {
         'Task Reminder',
         title,
         tzScheduled,
-        const NotificationDetails(
-          android: AndroidNotificationDetails(
-            _channelId,
-            _channelName,
-            channelDescription: 'Reminders for your to-do tasks',
-            importance: Importance.high,
-            priority: Priority.high,
-          ),
-        ),
+        details,
         androidScheduleMode: scheduleMode,
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
       );
+      dev.log('zonedSchedule: SUCCESS (mode=$scheduleMode id=$id)', name: _tag);
       return true;
-    } catch (_) {
-      // zonedSchedule threw (e.g. exact mode rejected on Android 12 without
-      // the user-granted SCHEDULE_EXACT_ALARM) — retry once with inexact.
+    } catch (e, st) {
+      dev.log('zonedSchedule: FAILED (mode=$scheduleMode) — $e',
+          name: _tag, error: e, stackTrace: st);
+
       if (scheduleMode == AndroidScheduleMode.exactAllowWhileIdle) {
+        dev.log('retrying with AndroidScheduleMode.inexact', name: _tag);
         try {
           await _plugin.zonedSchedule(
             id,
             'Task Reminder',
             title,
             tzScheduled,
-            const NotificationDetails(
-              android: AndroidNotificationDetails(
-                _channelId,
-                _channelName,
-                channelDescription: 'Reminders for your to-do tasks',
-                importance: Importance.high,
-                priority: Priority.high,
-              ),
-            ),
+            details,
             androidScheduleMode: AndroidScheduleMode.inexact,
             uiLocalNotificationDateInterpretation:
                 UILocalNotificationDateInterpretation.absoluteTime,
           );
+          dev.log('zonedSchedule: SUCCESS (inexact fallback id=$id)',
+              name: _tag);
           return true;
-        } catch (_) {}
+        } catch (e2, st2) {
+          dev.log('zonedSchedule: inexact fallback ALSO FAILED — $e2',
+              name: _tag, error: e2, stackTrace: st2);
+        }
       }
       return false;
     }
@@ -133,6 +163,9 @@ class NotificationService {
     if (testMode) return;
     try {
       await _plugin.cancel(id);
-    } catch (_) {}
+      dev.log('cancelReminder: id=$id', name: _tag);
+    } catch (e) {
+      dev.log('cancelReminder: failed — $e', name: _tag);
+    }
   }
 }
