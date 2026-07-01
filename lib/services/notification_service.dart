@@ -22,9 +22,9 @@ class NotificationService {
       // by flutter_local_notifications before calling zonedSchedule().
       tz.initializeTimeZones();
       try {
-        final tzName = await FlutterTimezone.getLocalTimezone();
-        tz.setLocalLocation(tz.getLocation(tzName));
-        dev.log('timezone: set to $tzName', name: _tag);
+        final tzInfo = await FlutterTimezone.getLocalTimezone();
+        tz.setLocalLocation(tz.getLocation(tzInfo.identifier));
+        dev.log('timezone: set to ${tzInfo.identifier}', name: _tag);
       } catch (e) {
         // Fallback: leave tz.local as UTC — alarm will still fire, just labeled UTC.
         dev.log('timezone: could not resolve local timezone — $e', name: _tag);

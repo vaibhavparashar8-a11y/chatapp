@@ -41,8 +41,9 @@ dependencies:
   cryptography: ^2.7.0
   flutter_secure_storage: ^9.0.0
   flutter_local_notifications: ^17.0.0
-  flutter_timezone: ^1.0.8
+  flutter_timezone: ^5.1.0
   timezone: ^0.9.4
+  device_info_plus: ^10.1.0
 
 dev_dependencies:
   flutter_test:
