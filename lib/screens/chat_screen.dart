@@ -17,6 +17,7 @@ import '../services/chat_service.dart';
 import '../widgets/message_bubble.dart';
 import '../features/call/incoming_call_dialog.dart';
 import '../features/call/call_screen.dart';
+import '../utils/time_utils.dart';
 
 part 'chat/load_more_indicator.dart';
 part 'chat/attach_option.dart';
@@ -278,7 +279,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 : _ctrl.otherOnline
                     ? 'online'
                     : _ctrl.otherLastSeen != null
-                        ? 'last seen ${_formatLastSeen(_ctrl.otherLastSeen!)}'
+                        ? 'last seen ${formatLastSeen(_ctrl.otherLastSeen!)}'
                         : 'end-to-end encrypted',
             style: TextStyle(
               fontSize: 11,
@@ -309,20 +310,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         ),
       ],
     );
-  }
-
-  String _formatLastSeen(DateTime ts) {
-    final now = DateTime.now();
-    final hm =
-        '${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}';
-    if (now.difference(ts).inMinutes < 1) return 'just now';
-    // Compare calendar days, not elapsed hours — "yesterday at 22:00" must not
-    // show as "today" just because fewer than 24 hours have passed.
-    final today = DateTime(now.year, now.month, now.day);
-    final calendarDiff = today.difference(DateTime(ts.year, ts.month, ts.day)).inDays;
-    if (calendarDiff == 0) return 'today at $hm';
-    if (calendarDiff == 1) return 'yesterday at $hm';
-    return '${ts.day}/${ts.month} at $hm';
   }
 
   Widget _buildMiniCallBar() {
