@@ -110,11 +110,9 @@ class _TodoScreenState extends State<TodoScreen> {
       );
       if (!ok && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text(
-            'Grant "Alarms & reminders" in Settings, then tap the calendar icon to re-set.',
-          ),
+          content: Text('Could not set reminder. Tap the calendar icon to try again.'),
           behavior: SnackBarBehavior.floating,
-          duration: Duration(seconds: 6),
+          duration: Duration(seconds: 4),
         ));
       }
     }
@@ -167,9 +165,9 @@ class _TodoScreenState extends State<TodoScreen> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(ok
             ? 'Reminder set for ${formatDue(dueDate)}'
-            : 'Grant "Alarms & reminders" in Settings, then tap the calendar icon to re-set.'),
+            : 'Could not set reminder. Please try again.'),
         behavior: SnackBarBehavior.floating,
-        duration: Duration(seconds: ok ? 3 : 6),
+        duration: Duration(seconds: ok ? 3 : 4),
       ));
     }
   }
