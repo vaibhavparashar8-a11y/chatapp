@@ -3,6 +3,7 @@ import 'package:add_2_calendar/add_2_calendar.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'chat_screen.dart';
+import '../utils/time_utils.dart';
 
 class TodoScreen extends StatefulWidget {
   const TodoScreen({super.key});
@@ -146,24 +147,11 @@ class _TodoScreenState extends State<TodoScreen> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(added
-            ? 'Reminder set for ${_formatDue(dueDate)}'
+            ? 'Reminder set for ${formatDue(dueDate)}'
             : 'Could not open calendar'),
         behavior: SnackBarBehavior.floating,
       ));
     }
-  }
-
-  String _formatDue(DateTime dt) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final dtDay = DateTime(dt.year, dt.month, dt.day);
-    final diff = dtDay.difference(today).inDays;
-    final hm =
-        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-    if (diff < 0) return 'Was due ${dt.day}/${dt.month} at $hm';
-    if (diff == 0) return 'Due today at $hm';
-    if (diff == 1) return 'Due tomorrow at $hm';
-    return 'Due ${dt.day}/${dt.month} at $hm';
   }
 
   @override
@@ -259,7 +247,10 @@ class _TodoScreenState extends State<TodoScreen> {
             ),
           ],
         ),
-        child: CheckboxListTile(
+        child: Material(
+          type: MaterialType.transparency,
+          borderRadius: BorderRadius.circular(10),
+          child: CheckboxListTile(
           value: todo.done,
           onChanged: (val) => _toggleDone(todo, val),
           title: Text(
@@ -272,7 +263,7 @@ class _TodoScreenState extends State<TodoScreen> {
           ),
           subtitle: hasReminder
               ? Text(
-                  _formatDue(todo.dueDate!),
+                  formatDue(todo.dueDate!),
                   style: TextStyle(
                     fontSize: 11,
                     color: isOverdue ? Colors.red[400] : Colors.indigo[400],
@@ -308,9 +299,10 @@ class _TodoScreenState extends State<TodoScreen> {
               ),
             ],
           ),
-        ),
-      ),
-    );
+        ),        // CheckboxListTile
+        ),        // Material
+      ),          // Container
+    );            // Dismissible
   }
 
   Widget _buildInputBar() {

@@ -435,6 +435,26 @@ myFeatureFlag = _rc.getString('my_feature_flag');
 
 ---
 
+### `lib/utils/time_utils.dart`
+
+Shared time-formatting helpers extracted so they can be unit-tested independently of any Flutter widget.
+
+| Function | Purpose |
+|---|---|
+| `formatLastSeen(DateTime ts)` | Formats chat app-bar subtitle — "just now", "today at HH:MM", "yesterday at HH:MM", "DD/MM at HH:MM" |
+| `formatDue(DateTime dt)` | Formats to-do tile subtitle — "Due today/tomorrow/DD/MM at HH:MM", "Was due ..." for overdue |
+
+**Key invariant** — both functions compare **calendar days**, not elapsed hours:
+
+```dart
+final today = DateTime(now.year, now.month, now.day);
+final calendarDiff = today.difference(DateTime(ts.year, ts.month, ts.day)).inDays;
+```
+
+This fixes the issue where 22:00 yesterday seen at 08:00 today (10 h elapsed, `inDays == 0`) was displayed as "today".
+
+---
+
 ### `lib/repositories/i_chat_repository.dart`
 
 Abstract interface — `ChatController` only ever imports this file.
@@ -825,6 +845,7 @@ main()
 | Messages show "🔒 Old encrypted message" | Legacy Firestore docs have `iv` field; key is gone | Expected behavior — these messages are irrecoverable |
 | `e2eePublicKeys` updating in Firestore | Old APK's `EncryptionService.initialize()` still running | Force-uninstall old app; new app has no encryption init |
 | Single tick permanently, no blue tick | (Fixed) Was: `limit(50)` sliding window reduced `otherCount` | Now: controller calls `markRead()` on any stream emit |
+| Last seen shows "today" for yesterday's timestamp | `diff.inDays` counts 24-hour periods, not calendar days | Fixed: strip time components and compare calendar dates in `formatLastSeen()` |
 | Both devices get role 'B' | Both reinstalled simultaneously — race condition | Call `DeviceService.resetAssignments()` on one device, relaunch A first then B |
 | APK is 260 MB | Building fat APK (`flutter build apk`) | Use `.\build_release.ps1` — passes `--split-per-abi`; arm64 APK = ~105 MB |
 | Video overlay blank after minimize | Platform view surface goes stale on Android | `_surfaceKey = UniqueKey()` on `AppLifecycleState.resumed` forces AgoraVideoView reconstruction |
@@ -953,7 +974,17 @@ The current design has exactly two slots (A and B) in `roleAssignments`. To supp
 
 ---
 
-### 8.6 Re-Enable End-to-End Encryption
+### 8.6 Add Google Calendar Reminders (already implemented)
+
+This feature is live. Each to-do tile has a calendar icon button. The implementation is in `lib/screens/todo_screen.dart` and uses `add_2_calendar ^3.0.1` (no OAuth — uses Android's native calendar intent).
+
+Key points for future changes:
+- `_Todo.dueDate` (nullable `DateTime`) is persisted as ISO-8601 in SharedPreferences
+- `formatDue(DateTime)` lives in `lib/utils/time_utils.dart` — test it there, not in the widget
+- Tapping the icon → `DatePicker` → `TimePicker` → `Add2Calendar.addEvent2Cal(Event(...))`
+- Overdue tasks: subtitle turns red, calendar icon turns red
+
+### 8.7 Re-Enable End-to-End Encryption
 
 `lib/services/encryption_service.dart` is still present but has no callers.
 
@@ -987,9 +1018,25 @@ The current design has exactly two slots (A and B) in `roleAssignments`. To supp
 
 ```
 test/
-└── chat_controller_test.dart    ← unit tests for ChatController
+├── helpers/
+│   └── fake_chat_repository.dart   ← in-memory IChatRepository, no Firebase
+├── controllers/
+│   └── chat_controller_test.dart   ← optimistic UI, pagination, markRead, canModify,
+│                                      hideMessage, editMessage, deleteMessage, presence
+├── models/
+│   └── message_test.dart           ← fromMap/toMap, all MessageTypes, legacy iv field
+├── utils/
+│   └── time_utils_test.dart        ← formatLastSeen (issue #1 regression), formatDue
+└── screens/
+    └── todo_screen_test.dart       ← widget tests: add/complete/delete tasks, calendar button
 integration_test/
-└── app_test.dart                ← end-to-end smoke tests (requires device)
+└── chat_screen_test.dart           ← end-to-end smoke tests (requires physical device)
+```
+
+**Run all unit tests (no device needed):**
+```powershell
+$env:PUB_CACHE = "D:\pub-cache"
+flutter test                        # 87 tests, ~10 seconds
 ```
 
 ### How FakeChatRepository Works
