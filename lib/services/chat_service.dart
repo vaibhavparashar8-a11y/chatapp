@@ -80,6 +80,7 @@ class ChatService {
       replyToSender: map['replyToSender'] as String?,
       clientId: map['clientId'] as String?,
       edited: (map['edited'] as bool?) ?? false,
+      callerId: map['callerId'] as String?,
     );
   }
 
@@ -338,11 +339,27 @@ class ChatService {
         'sender': 'system',
         'type': MessageType.callEvent.name,
         'text': text,
+        'callerId': mySenderId,
         'timestamp': FieldValue.serverTimestamp(),
       });
     } catch (e) {
       LogService.e('ChatService', 'sendCallEvent failed: $e');
     }
+  }
+
+  /// Real-time stream of call events (ended + missed only, newest first).
+  static Stream<List<Message>> callEventsStream() {
+    return _messages
+        .where('type', isEqualTo: MessageType.callEvent.name)
+        .snapshots()
+        .map((snap) {
+          final list = snap.docs
+              .map((d) => _parseMessage(d.data() as Map<String, dynamic>, d.id))
+              .where((m) => !m.text.toLowerCase().contains('started'))
+              .toList()
+            ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+          return list;
+        });
   }
 
   static Future<void> updateCallStatus(String status) async {

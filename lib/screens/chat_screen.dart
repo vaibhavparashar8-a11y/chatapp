@@ -19,6 +19,7 @@ import '../features/call/incoming_call_dialog.dart';
 import '../features/call/call_screen.dart';
 import '../services/device_service.dart';
 import '../utils/time_utils.dart';
+import 'calls_screen.dart';
 
 part 'chat/load_more_indicator.dart';
 part 'chat/attach_option.dart';
@@ -44,11 +45,13 @@ class ChatScreen extends StatefulWidget {
 ///   - App lifecycle → navigation
 ///   - Call signal dialog (requires BuildContext)
 ///   - Device input (image picker, file picker)
-class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
+class _ChatScreenState extends State<ChatScreen>
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   // Flutter-specific controllers that need a widget lifecycle
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
   final _picker = ImagePicker();
+  late TabController _tabCtrl;
 
   // Call signal subscription stays here — needs context for showDialog
   StreamSubscription<Map<String, dynamic>?>? _callSub;
@@ -76,6 +79,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _tabCtrl = TabController(length: 2, vsync: this);
     _ctrl = ChatController(
       widget.repository ?? const FirebaseChatRepository(),
       onUploadError: (msg) {
@@ -140,6 +144,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _callSub?.cancel();
     _textController.dispose();
     _scrollController.dispose();
+    _tabCtrl.dispose();
     _ctrl.dispose();
     super.dispose();
   }
@@ -300,16 +305,31 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           body: Stack(children: [
             Column(children: [
               _buildMiniCallBar(),
-              if (_ctrl.uploadProgress != null) _buildUploadBanner(),
               Expanded(
-                child: ColoredBox(
-                  color: const Color(0xFF0F0F1E),
-                  child: _buildMessageList(),
+                child: TabBarView(
+                  controller: _tabCtrl,
+                  // Disable swipe: messages use horizontal drag for swipe-to-reply
+                  // and the gestures conflict.  Tabs are still switchable by tapping.
+                  physics: const NeverScrollableScrollPhysics(),
+                  children: [
+                    // ── Chat tab ────────────────────────────────────────────
+                    Column(children: [
+                      if (_ctrl.uploadProgress != null) _buildUploadBanner(),
+                      Expanded(
+                        child: ColoredBox(
+                          color: const Color(0xFF0F0F1E),
+                          child: _buildMessageList(),
+                        ),
+                      ),
+                      if (_ctrl.replyingTo != null) _buildReplyBar(),
+                      if (_ctrl.showAttachMenu) _buildAttachMenu(),
+                      _buildInputBar(),
+                    ]),
+                    // ── Calls tab ───────────────────────────────────────────
+                    CallsScreen(onStartCall: _startCall),
+                  ],
                 ),
               ),
-              if (_ctrl.replyingTo != null) _buildReplyBar(),
-              if (_ctrl.showAttachMenu) _buildAttachMenu(),
-              _buildInputBar(),
             ]),
             _buildFloatingVideo(),
           ]),
@@ -400,6 +420,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           },
         ),
       ],
+      bottom: TabBar(
+        controller: _tabCtrl,
+        indicatorColor: Colors.white,
+        indicatorWeight: 2,
+        labelColor: Colors.white,
+        unselectedLabelColor: Colors.white54,
+        labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.5),
+        tabs: const [
+          Tab(text: 'CHAT'),
+          Tab(text: 'CALLS'),
+        ],
+      ),
     );
   }
 

@@ -16,6 +16,9 @@ class Message {
   final String? replyToSender;
   final String? clientId;
   final bool edited;
+  // Who placed the call — present on callEvent messages written after this field
+  // was added. Null on older events (direction cannot be determined).
+  final String? callerId;
 
   // E2EE nonces — null means the message pre-dates encryption (shown as-is).
   final String? iv;       // AES-GCM nonce for the `text` / filename field
@@ -36,6 +39,7 @@ class Message {
     this.replyToSender,
     this.clientId,
     this.edited = false,
+    this.callerId,
     this.iv,
     this.mediaIv,
     this.replyIv,
@@ -61,6 +65,7 @@ class Message {
       replyToSender: map['replyToSender'],
       clientId: map['clientId'],
       edited: (map['edited'] as bool?) ?? false,
+      callerId: map['callerId'] as String?,
       iv: map['iv'] as String?,
       mediaIv: map['mediaIv'] as String?,
       replyIv: map['replyIv'] as String?,
@@ -81,6 +86,7 @@ class Message {
       if (replyToSender != null) 'replyToSender': replyToSender,
       if (clientId != null) 'clientId': clientId,
       if (edited) 'edited': true,
+      if (callerId != null) 'callerId': callerId,
       if (iv != null) 'iv': iv,
       if (mediaIv != null) 'mediaIv': mediaIv,
       if (replyIv != null) 'replyIv': replyIv,
