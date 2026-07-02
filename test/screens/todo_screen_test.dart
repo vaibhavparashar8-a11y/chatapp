@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:chatapp/screens/todo_screen.dart';
 import 'package:chatapp/services/notification_service.dart';
+import 'package:chatapp/services/reminder_service.dart';
 import 'package:chatapp/services/remote_config_service.dart';
 
 void main() {
@@ -10,11 +11,13 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     NotificationService.testMode = true;
     RemoteConfigService.testMode = true;
+    ReminderService.testMode = true;
   });
 
   tearDown(() {
     NotificationService.testMode = false;
     RemoteConfigService.testMode = false;
+    ReminderService.testMode = false;
   });
 
   Widget wrap() => const MaterialApp(home: TodoScreen());
@@ -303,5 +306,111 @@ void main() {
       expect(find.text('Apple'), findsOneWidget);
       expect(find.text('Banana'), findsOneWidget);
     });
+  });
+
+  // ── Remind-other button (add_alert icon) ─────────────────────────────────────
+
+  testWidgets('each task shows an add_alert icon for sending reminder to other',
+      (tester) async {
+    await tester.pumpWidget(wrap());
+    await tester.pump();
+    await addTask(tester, 'Call dentist');
+    expect(find.byIcon(Icons.add_alert_rounded), findsOneWidget);
+  });
+
+  testWidgets('two tasks show two add_alert buttons', (tester) async {
+    await tester.pumpWidget(wrap());
+    await tester.pump();
+    await addTask(tester, 'Task one');
+    await addTask(tester, 'Task two');
+    expect(find.byIcon(Icons.add_alert_rounded), findsNWidgets(2));
+  });
+
+  testWidgets('tapping add_alert opens date picker then Remind dialog',
+      (tester) async {
+    await tester.pumpWidget(wrap());
+    await tester.pump();
+    await addTask(tester, 'Buy flowers');
+
+    await tester.tap(find.byIcon(Icons.add_alert_rounded));
+    await tester.pumpAndSettle();
+
+    // Date picker is open — confirm it
+    expect(find.text('OK'), findsOneWidget);
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+
+    // Time picker is open — confirm it
+    expect(find.text('OK'), findsOneWidget);
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+
+    // Remind dialog is now visible
+    expect(find.text('Remind Them'), findsOneWidget);
+    expect(find.text('Also add to their task list'), findsOneWidget);
+
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('Remind dialog checkbox is unchecked by default', (tester) async {
+    await tester.pumpWidget(wrap());
+    await tester.pump();
+    await addTask(tester, 'Walk dog');
+
+    await tester.tap(find.byIcon(Icons.add_alert_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // date
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // time
+    await tester.pumpAndSettle();
+
+    final checkbox = tester.widget<Checkbox>(find.byType(Checkbox).last);
+    expect(checkbox.value, isFalse);
+
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('Remind dialog checkbox can be toggled', (tester) async {
+    await tester.pumpWidget(wrap());
+    await tester.pump();
+    await addTask(tester, 'Pick up parcel');
+
+    await tester.tap(find.byIcon(Icons.add_alert_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // date
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // time
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(Checkbox).last);
+    await tester.pump();
+
+    final checkbox = tester.widget<Checkbox>(find.byType(Checkbox).last);
+    expect(checkbox.value, isTrue);
+
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('Send in Remind dialog shows snackbar confirmation',
+      (tester) async {
+    await tester.pumpWidget(wrap());
+    await tester.pump();
+    await addTask(tester, 'Gym session');
+
+    await tester.tap(find.byIcon(Icons.add_alert_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // date
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // time
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Send'));
+    await tester.pumpAndSettle();
+
+    // ReminderService.testMode skips the Firestore write; snackbar still shows
+    expect(find.text('Reminder sent to Them'), findsOneWidget);
   });
 }
