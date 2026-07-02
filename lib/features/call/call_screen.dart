@@ -10,6 +10,7 @@ import '../../services/log_service.dart';
 import '../../constants.dart';
 
 const _proximityChannel = MethodChannel('com.example.chatapp/proximity');
+const _callChannel      = MethodChannel('com.example.chatapp/call');
 
 class CallScreen extends StatefulWidget {
   final bool isVideo;
@@ -159,6 +160,8 @@ class _CallScreenState extends State<CallScreen> {
       );
       if (!mounted) return;
       setState(() => _engineReady = true);
+      // Start foreground service so Android keeps the process alive in background
+      _callChannel.invokeMethod('startForeground').catchError((_) {});
       LogService.i('CallScreen', 'Engine ready — isCaller=${widget.isCaller}');
       if (widget.isCaller) {
         ChatService.signalCall(widget.isVideo ? 'video' : 'audio', token: token);
@@ -196,6 +199,7 @@ class _CallScreenState extends State<CallScreen> {
     if (_ending) return;
     _ending = true;
     callActiveNotifier.value = false;
+    _callChannel.invokeMethod('stopForeground').catchError((_) {});
     _stopwatch.stop();
     if (widget.isCaller) {
       final label = widget.isVideo ? 'Video call' : 'Audio call';
@@ -234,6 +238,7 @@ class _CallScreenState extends State<CallScreen> {
     // If remote hangs up while minimized, clean up silently
     CallService.onCallEnded = () async {
       callActiveNotifier.value = false;
+      _callChannel.invokeMethod('stopForeground').catchError((_) {});
       await CallService.leaveCall();
     };
     // Clear UI callbacks — this screen is going away
