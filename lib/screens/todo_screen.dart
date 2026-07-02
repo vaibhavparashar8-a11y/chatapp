@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'chat_screen.dart';
 import '../services/device_service.dart';
+import '../services/remote_config_service.dart';
 import '../services/notification_service.dart';
 import '../utils/time_utils.dart';
 
@@ -732,7 +733,7 @@ class _TodoScreenState extends State<TodoScreen> {
               controller: _addCtrl,
               focusNode: _addFocus,
               textInputAction: TextInputAction.done,
-              style: const TextStyle(fontSize: 15, color: Colors.black87),
+              style: TextStyle(fontSize: 15, color: RemoteConfigService.todoInputTextColor),
               onChanged: (v) {
                 if (v.trim().toLowerCase() == 'flutter') _openChat();
               },
