@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -7,8 +8,22 @@ import 'services/device_service.dart';
 import 'services/log_service.dart';
 import 'services/remote_config_service.dart';
 
-void main() async {
+void main() {
+  runZonedGuarded(_appMain, (error, stack) {
+    // Catches any unhandled async error in the root zone — logs to Firestore
+    // so we can diagnose crashes that don't pass through our own try-catch blocks.
+    LogService.e('App', 'Unhandled error: $error\n$stack');
+  });
+}
+
+Future<void> _appMain() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  FlutterError.onError = (details) {
+    LogService.e('Flutter', '${details.exceptionAsString()}\n${details.stack}');
+    FlutterError.presentError(details); // still prints to console in debug
+  };
+
   await Firebase.initializeApp();
   // Auth and remote config don't depend on each other — run in parallel
   await Future.wait([

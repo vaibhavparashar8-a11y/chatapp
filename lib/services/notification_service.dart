@@ -32,7 +32,14 @@ class NotificationService {
       }
 
       const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-      await _plugin.initialize(const InitializationSettings(android: android));
+      await _plugin.initialize(
+        const InitializationSettings(android: android),
+        // Required in v17+ — without this, tapping a notification while the
+        // app is in the foreground can throw an unhandled PlatformException.
+        onDidReceiveNotificationResponse: (details) {
+          dev.log('onDidReceiveNotificationResponse: id=${details.id}', name: _tag);
+        },
+      );
       _initialized = true;
       dev.log('init: success', name: _tag);
     } catch (e, st) {
