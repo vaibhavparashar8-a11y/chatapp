@@ -23,22 +23,23 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
   VideoPlayerController? _controller;
   bool _initialized = false;
   bool _started = false;
+  bool _error = false;
 
   Future<void> _start() async {
-    setState(() => _started = true);
+    setState(() { _started = true; _error = false; });
     try {
-      _controller = VideoPlayerController.networkUrl(Uri.parse(widget.url));
-      await _controller!.initialize();
+      final ctrl = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+      _controller = ctrl;
+      ctrl.addListener(() { if (mounted) setState(() {}); });
+      await ctrl.initialize();
       if (mounted) {
         setState(() => _initialized = true);
-        _controller!.play();
+        ctrl.play();
       }
-    } catch (_) {
-      if (mounted) setState(() => _started = false);
+    } catch (e) {
+      debugPrint('VideoPlayer: init failed — $e');
+      if (mounted) setState(() { _started = false; _error = true; });
     }
-    _controller?.addListener(() {
-      if (mounted) setState(() {});
-    });
   }
 
   @override
@@ -64,19 +65,32 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
                     width: 220,
                     height: 160,
                     color: Colors.black87,
-                    child: const Icon(Icons.videocam,
-                        color: Colors.white30, size: 48),
+                    child: _error
+                        ? const Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.error_outline, color: Colors.redAccent, size: 36),
+                              SizedBox(height: 6),
+                              Text('Failed to load video',
+                                  style: TextStyle(color: Colors.white54, fontSize: 12)),
+                              SizedBox(height: 2),
+                              Text('Tap to retry',
+                                  style: TextStyle(color: Colors.white38, fontSize: 11)),
+                            ],
+                          )
+                        : const Icon(Icons.videocam, color: Colors.white30, size: 48),
                   ),
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: Colors.black45,
-                      borderRadius: BorderRadius.circular(26),
+                  if (!_error)
+                    Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        color: Colors.black45,
+                        borderRadius: BorderRadius.circular(26),
+                      ),
+                      child: const Icon(Icons.play_arrow,
+                          color: Colors.white, size: 36),
                     ),
-                    child: const Icon(Icons.play_arrow,
-                        color: Colors.white, size: 36),
-                  ),
                 ],
               ),
             ),
