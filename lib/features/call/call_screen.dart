@@ -1,12 +1,15 @@
 // lib/features/call/call_screen.dart
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'agora_token_builder.dart';
 import 'call_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/log_service.dart';
 import '../../constants.dart';
+
+const _proximityChannel = MethodChannel('com.example.chatapp/proximity');
 
 class CallScreen extends StatefulWidget {
   final bool isVideo;
@@ -42,6 +45,10 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void initState() {
     super.initState();
+    // Turn off screen when held to ear during audio calls (proximity sensor)
+    if (!widget.isVideo) {
+      _proximityChannel.invokeMethod('acquire').catchError((_) {});
+    }
     if (widget.isReconnecting) {
       _reconnect();
     } else {
@@ -225,6 +232,10 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
+    // Release proximity wake lock regardless of how the screen exits
+    if (!widget.isVideo) {
+      _proximityChannel.invokeMethod('release').catchError((_) {});
+    }
     // Only release engine if truly ending, not minimizing
     if (!_minimizing && !_ending) {
       CallService.dispose();
