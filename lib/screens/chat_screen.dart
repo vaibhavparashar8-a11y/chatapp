@@ -208,6 +208,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _recordVideo() async {
+    _ctrl.setShowAttachMenu(false);
+    final picked = await _picker.pickVideo(source: ImageSource.camera);
+    if (picked == null) return;
+    await _ctrl.sendMedia(File(picked.path), MessageType.video);
+  }
+
   Future<void> _sendVideo() async {
     _ctrl.setShowAttachMenu(false);
     final result = await FilePicker.platform.pickFiles(
@@ -538,18 +545,22 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     return Container(
       color: const Color(0xFF14112A),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          _AttachOption(icon: Icons.photo_camera, label: 'Camera', color: Colors.purple,
-              onTap: () => _sendImage(ImageSource.camera)),
-          _AttachOption(icon: Icons.photo, label: 'Gallery', color: Colors.pink,
-              onTap: () => _sendImage(ImageSource.gallery)),
-          _AttachOption(icon: Icons.videocam, label: 'Video', color: Colors.orange,
-              onTap: _sendVideo),
-          _AttachOption(icon: Icons.insert_drive_file, label: 'File', color: Colors.blue,
-              onTap: _sendFile),
-        ],
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _AttachOption(icon: Icons.photo_camera, label: 'Camera', color: Colors.purple,
+                onTap: () => _sendImage(ImageSource.camera)),
+            _AttachOption(icon: Icons.videocam, label: 'Record', color: Colors.red,
+                onTap: _recordVideo),
+            _AttachOption(icon: Icons.photo, label: 'Gallery', color: Colors.pink,
+                onTap: () => _sendImage(ImageSource.gallery)),
+            _AttachOption(icon: Icons.video_library, label: 'Videos', color: Colors.orange,
+                onTap: _sendVideo),
+            _AttachOption(icon: Icons.insert_drive_file, label: 'File', color: Colors.blue,
+                onTap: _sendFile),
+          ],
+        ),
       ),
     );
   }
