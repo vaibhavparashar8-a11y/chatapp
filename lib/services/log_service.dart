@@ -25,6 +25,9 @@ class LogService {
 
   static String _deviceId = '';
 
+  // Set to true in tests to skip Firestore writes.
+  static bool testMode = false;
+
   // In-memory log buffer for LogScreen
   static final List<LogEntry> logs = [];
   static final ValueNotifier<int> notifier = ValueNotifier(0);
@@ -44,6 +47,7 @@ class LogService {
     debugPrint('$level/$tag: $msg');
     logs.add(LogEntry(level: level, tag: tag, message: msg, time: DateTime.now()));
     notifier.value++;
+    if (testMode) return;
     // Fire-and-forget — never block the caller
     _col.add({
       'device': _deviceId,

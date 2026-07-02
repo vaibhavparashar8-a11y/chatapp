@@ -3,206 +3,305 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:chatapp/screens/todo_screen.dart';
 import 'package:chatapp/services/notification_service.dart';
+import 'package:chatapp/services/remote_config_service.dart';
 
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
-    // Skip platform-channel calls inside NotificationService during widget tests.
     NotificationService.testMode = true;
+    RemoteConfigService.testMode = true;
   });
 
   tearDown(() {
     NotificationService.testMode = false;
+    RemoteConfigService.testMode = false;
   });
 
   Widget wrap() => const MaterialApp(home: TodoScreen());
 
-  /// Enters [text], triggers submit, taps "Skip" on the reminder dialog, then
-  /// pumps until settled. Use this helper for every test that adds a task.
+  /// Adds a task via the bottom input bar, skipping the reminder dialog.
   Future<void> addTask(WidgetTester tester, String text) async {
-    await tester.enterText(find.byType(TextField), text);
+    await tester.enterText(find.byType(TextField).last, text);
     await tester.testTextInput.receiveAction(TextInputAction.done);
-    await tester.pumpAndSettle(); // dialog appears
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Skip'));
-    await tester.pumpAndSettle(); // task added
+    await tester.pumpAndSettle();
   }
 
-  // ── Empty state ─────────────────────────────────────────────────────────────
+  /// Finds the AppBar search TextField by hint text.
+  Finder searchField() => find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.hintText == 'Search tasks...',
+      );
 
-  testWidgets('shows empty-state hint when no tasks exist', (tester) async {
+  // ── Empty state ──────────────────────────────────────────────────────────────
+
+  testWidgets('shows empty-state when no tasks exist', (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
-    expect(find.text('No tasks yet.\nTap + to add one.'), findsOneWidget);
+    expect(find.text('No tasks yet'), findsOneWidget);
+    expect(find.text('Add a task below to get started'), findsOneWidget);
   });
 
-  // ── Adding tasks ────────────────────────────────────────────────────────────
+  // ── Adding tasks ─────────────────────────────────────────────────────────────
 
   testWidgets('typing a task and pressing done adds it to the list', (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
-
     await addTask(tester, 'Buy groceries');
-
     expect(find.text('Buy groceries'), findsOneWidget);
-    expect(find.text('No tasks yet.\nTap + to add one.'), findsNothing);
+    expect(find.text('No tasks yet'), findsNothing);
   });
 
   testWidgets('tapping the + FAB shows reminder dialog then adds task', (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
-
-    await tester.enterText(find.byType(TextField), 'Walk the dog');
+    await tester.enterText(find.byType(TextField).last, 'Walk the dog');
     await tester.tap(find.byType(FloatingActionButton));
     await tester.pumpAndSettle();
-
     expect(find.text('Set a reminder?'), findsOneWidget);
-
     await tester.tap(find.text('Skip'));
     await tester.pumpAndSettle();
-
     expect(find.text('Walk the dog'), findsOneWidget);
   });
 
   testWidgets('empty input does not show dialog or add a task', (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
-
     await tester.tap(find.byType(FloatingActionButton));
     await tester.pump();
-
     expect(find.text('Set a reminder?'), findsNothing);
-    expect(find.text('No tasks yet.\nTap + to add one.'), findsOneWidget);
+    expect(find.text('No tasks yet'), findsOneWidget);
   });
 
   testWidgets('multiple tasks all appear in the list', (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
-
     for (final title in ['Task A', 'Task B', 'Task C']) {
       await addTask(tester, title);
     }
-
     expect(find.text('Task A'), findsOneWidget);
     expect(find.text('Task B'), findsOneWidget);
     expect(find.text('Task C'), findsOneWidget);
   });
 
-  // ── Completing tasks ────────────────────────────────────────────────────────
+  // ── Completing tasks ──────────────────────────────────────────────────────────
 
   testWidgets('checking a task moves it into the Completed section', (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
-
     await addTask(tester, 'Finish report');
-
     await tester.tap(find.byType(Checkbox).first);
     await tester.pump();
-
-    expect(find.text('Completed (1)'), findsOneWidget);
+    expect(find.text('COMPLETED (1)'), findsOneWidget);
   });
 
   testWidgets('unchecking a completed task moves it back to pending', (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
-
     await addTask(tester, 'Read book');
-
     await tester.tap(find.byType(Checkbox).first);
     await tester.pump();
-    expect(find.text('Completed (1)'), findsOneWidget);
-
+    expect(find.text('COMPLETED (1)'), findsOneWidget);
     await tester.tap(find.byType(Checkbox).first);
     await tester.pump();
-    expect(find.text('Completed (1)'), findsNothing);
+    expect(find.text('COMPLETED (1)'), findsNothing);
   });
 
   testWidgets('completed task text is rendered with strikethrough', (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
-
     await addTask(tester, 'Done task');
-
     await tester.tap(find.byType(Checkbox).first);
     await tester.pump();
-
     final textWidget = tester.widget<Text>(find.text('Done task'));
     expect(textWidget.style?.decoration, TextDecoration.lineThrough);
   });
 
-  // ── Deleting tasks ──────────────────────────────────────────────────────────
-
-  testWidgets('tapping the delete icon removes the task', (tester) async {
-    await tester.pumpWidget(wrap());
-    await tester.pump();
-
-    await addTask(tester, 'Delete me');
-
-    await tester.tap(find.byIcon(Icons.delete_outline).first);
-    await tester.pump();
-
-    expect(find.text('Delete me'), findsNothing);
-  });
+  // ── Deleting tasks ────────────────────────────────────────────────────────────
 
   testWidgets('swiping left dismisses the task', (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
-
     await addTask(tester, 'Swipe away');
-
     await tester.drag(find.text('Swipe away'), const Offset(-600, 0));
     await tester.pumpAndSettle();
-
     expect(find.text('Swipe away'), findsNothing);
   });
 
-  // ── Calendar reminder button ────────────────────────────────────────────────
+  // ── Alarm reminder button ─────────────────────────────────────────────────────
 
-  testWidgets('each task tile shows a calendar icon button', (tester) async {
+  testWidgets('each task tile shows an alarm icon button', (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
-
     await addTask(tester, 'Remind me');
-
-    // Outlined icon = no reminder set (user tapped Skip during creation)
-    expect(find.byIcon(Icons.calendar_today_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.add_alarm_rounded), findsOneWidget);
   });
 
-  testWidgets('two tasks show two calendar buttons', (tester) async {
+  testWidgets('two tasks show two alarm buttons', (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
-
     await addTask(tester, 'Alpha');
     await addTask(tester, 'Beta');
-
-    expect(find.byIcon(Icons.calendar_today_outlined), findsNWidgets(2));
+    expect(find.byIcon(Icons.add_alarm_rounded), findsNWidgets(2));
   });
 
-  // ── Reminder dialog ─────────────────────────────────────────────────────────
+  // ── Reminder dialog ───────────────────────────────────────────────────────────
 
-  testWidgets('reminder dialog appears with task title in content', (tester) async {
+  testWidgets('reminder dialog shows task title in content', (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
-
-    await tester.enterText(find.byType(TextField), 'Buy milk');
+    await tester.enterText(find.byType(TextField).last, 'Buy milk');
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pumpAndSettle();
-
     expect(find.text('Set a reminder?'), findsOneWidget);
     expect(find.textContaining('Add a reminder for'), findsOneWidget);
-
-    // Clean up: dismiss dialog
     await tester.tap(find.text('Skip'));
     await tester.pumpAndSettle();
   });
 
-  testWidgets('tapping Skip on reminder dialog adds task without dueDate', (tester) async {
-    await tester.pumpWidget(wrap());
-    await tester.pump();
+  // ── Search ───────────────────────────────────────────────────────────────────
 
-    await addTask(tester, 'No reminder task');
+  group('search', () {
+    testWidgets('search icon is visible in AppBar', (tester) async {
+      await tester.pumpWidget(wrap());
+      await tester.pump();
+      expect(find.byIcon(Icons.search), findsOneWidget);
+    });
 
-    expect(find.text('No reminder task'), findsOneWidget);
-    // Calendar icon should still be outlined (no dueDate set)
-    expect(find.byIcon(Icons.calendar_today_outlined), findsOneWidget);
+    testWidgets('tapping search icon activates search mode with X button', (tester) async {
+      await tester.pumpWidget(wrap());
+      await tester.pump();
+      await tester.tap(find.byIcon(Icons.search));
+      await tester.pumpAndSettle();
+      expect(searchField(), findsOneWidget);
+      expect(find.byIcon(Icons.close), findsOneWidget);
+    });
+
+    testWidgets('typing filters tasks by title', (tester) async {
+      await tester.pumpWidget(wrap());
+      await tester.pump();
+      await addTask(tester, 'Buy groceries');
+      await addTask(tester, 'Clean house');
+
+      await tester.tap(find.byIcon(Icons.search));
+      await tester.pumpAndSettle();
+      await tester.enterText(searchField(), 'groc');
+      await tester.pump();
+
+      expect(find.text('Buy groceries'), findsOneWidget);
+      expect(find.text('Clean house'), findsNothing);
+    });
+
+    testWidgets('search is case-insensitive', (tester) async {
+      await tester.pumpWidget(wrap());
+      await tester.pump();
+      await addTask(tester, 'BUY MILK');
+
+      await tester.tap(find.byIcon(Icons.search));
+      await tester.pumpAndSettle();
+      await tester.enterText(searchField(), 'buy milk');
+      await tester.pump();
+
+      expect(find.text('BUY MILK'), findsOneWidget);
+    });
+
+    testWidgets('no match shows No matching tasks empty state', (tester) async {
+      await tester.pumpWidget(wrap());
+      await tester.pump();
+      await addTask(tester, 'Buy groceries');
+
+      await tester.tap(find.byIcon(Icons.search));
+      await tester.pumpAndSettle();
+      await tester.enterText(searchField(), 'zzz');
+      await tester.pump();
+
+      expect(find.text('No matching tasks'), findsOneWidget);
+      expect(find.text('Buy groceries'), findsNothing);
+    });
+
+    testWidgets('tapping X clears search and restores full list', (tester) async {
+      await tester.pumpWidget(wrap());
+      await tester.pump();
+      await addTask(tester, 'Task Alpha');
+      await addTask(tester, 'Task Beta');
+
+      await tester.tap(find.byIcon(Icons.search));
+      await tester.pumpAndSettle();
+      await tester.enterText(searchField(), 'alpha');
+      await tester.pump();
+      expect(find.text('Task Beta'), findsNothing);
+
+      await tester.tap(find.byIcon(Icons.close));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Task Alpha'), findsOneWidget);
+      expect(find.text('Task Beta'), findsOneWidget);
+      expect(find.byIcon(Icons.search), findsOneWidget);
+    });
+
+    testWidgets('completed tasks are also filtered by search', (tester) async {
+      await tester.pumpWidget(wrap());
+      await tester.pump();
+      await addTask(tester, 'Pending task');
+      await addTask(tester, 'Done task');
+      // Mark second task done
+      await tester.tap(find.byType(Checkbox).first);
+      await tester.pump();
+
+      await tester.tap(find.byIcon(Icons.search));
+      await tester.pumpAndSettle();
+      await tester.enterText(searchField(), 'done');
+      await tester.pump();
+
+      expect(find.text('Done task'), findsOneWidget);
+      expect(find.text('Pending task'), findsNothing);
+    });
+
+    testWidgets('searching subtask text shows parent task', (tester) async {
+      await tester.pumpWidget(wrap());
+      await tester.pump();
+      await addTask(tester, 'Parent task');
+      await addTask(tester, 'Other task');
+
+      // Expand parent task to reveal subtask input
+      await tester.tap(find.text('Parent task'));
+      await tester.pumpAndSettle();
+
+      // Add a subtask
+      final subtaskField = find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.hintText == 'Add sub-task...',
+      );
+      await tester.enterText(subtaskField, 'unique subtask keyword');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+
+      // Now search for the subtask keyword
+      await tester.tap(find.byIcon(Icons.search));
+      await tester.pumpAndSettle();
+      await tester.enterText(searchField(), 'unique subtask');
+      await tester.pump();
+
+      expect(find.text('Parent task'), findsOneWidget);
+      expect(find.text('Other task'), findsNothing);
+    });
+
+    testWidgets('empty search query shows all tasks', (tester) async {
+      await tester.pumpWidget(wrap());
+      await tester.pump();
+      await addTask(tester, 'Apple');
+      await addTask(tester, 'Banana');
+
+      await tester.tap(find.byIcon(Icons.search));
+      await tester.pumpAndSettle();
+      // Type then clear
+      await tester.enterText(searchField(), 'app');
+      await tester.pump();
+      expect(find.text('Banana'), findsNothing);
+
+      await tester.enterText(searchField(), '');
+      await tester.pump();
+      expect(find.text('Apple'), findsOneWidget);
+      expect(find.text('Banana'), findsOneWidget);
+    });
   });
 }

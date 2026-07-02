@@ -5,10 +5,14 @@ import '../constants.dart' as defaults;
 class RemoteConfigService {
   static final _rc = FirebaseRemoteConfig.instance;
 
+  // Set to true in tests to skip all Firebase calls.
+  static bool testMode = false;
+
   // Returns the todo input text color from Remote Config.
   // Set 'todo_input_text_color' in Firebase Console as a hex string, e.g. #ADADAD.
   // Change it there and restart the app — no rebuild needed.
   static Color get todoInputTextColor {
+    if (testMode) return const Color(0xFFADADAD);
     final raw = _rc.getString('todo_input_text_color').trim().replaceAll('#', '');
     if (raw.length == 6) {
       final value = int.tryParse(raw, radix: 16);
