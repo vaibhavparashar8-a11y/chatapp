@@ -379,8 +379,9 @@ class ChatController extends ChangeNotifier {
       case MessageType.image: return '[Image]';
       case MessageType.video: return '[Video]';
       case MessageType.audio: return '[Audio]';
-      case MessageType.file:  return '[File: ${msg.fileName ?? 'file'}]';
-      case MessageType.gif:   return '[GIF]';
+      case MessageType.file:      return '[File: ${msg.fileName ?? 'file'}]';
+      case MessageType.gif:       return '[GIF]';
+      case MessageType.callEvent: return msg.text;
     }
   }
 
