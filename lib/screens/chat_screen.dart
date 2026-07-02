@@ -153,7 +153,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _callSub = stream.listen((signal) {
       if (signal == null) return;
       if (signal['from'] == mySenderId) return;
-      if (signal['status'] != 'ringing') return;
+
+      final status = signal['status'] as String?;
+
+      // Caller cancelled/ended before B answered — auto-dismiss the popup
+      if (_incomingDialogShowing && status != 'ringing') {
+        _incomingDialogShowing = false;
+        if (mounted) Navigator.of(context).pop();
+        return;
+      }
+
+      if (status != 'ringing') return;
       // Guard 1: already in an active call (e.g. minimized call bar is showing)
       if (callActiveNotifier.value) return;
       // Guard 2: dialog already on screen — rooms doc re-emitted before

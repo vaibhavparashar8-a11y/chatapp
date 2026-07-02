@@ -164,7 +164,7 @@ class _CallScreenState extends State<CallScreen> {
         if (mounted && !_callConnected) {
           LogService.w('CallScreen', 'Timeout — no remote user joined after 20s');
           if (widget.isCaller) {
-            _endCall(missed: true);
+            _endCall();
           } else {
             _endCall(errorMsg: 'Call timed out. Check that the Agora token is valid.');
           }
@@ -188,16 +188,17 @@ class _CallScreenState extends State<CallScreen> {
     });
   }
 
-  Future<void> _endCall({String? errorMsg, bool missed = false}) async {
+  Future<void> _endCall({String? errorMsg}) async {
     if (_ending) return;
     _ending = true;
     callActiveNotifier.value = false;
     _stopwatch.stop();
     if (widget.isCaller) {
       final label = widget.isVideo ? 'Video call' : 'Audio call';
-      if (missed) {
+      // !_callConnected covers both: A manually cuts before B answers, and 20s timeout
+      if (!_callConnected) {
         await ChatService.sendCallEvent('Missed $label');
-      } else if (_callConnected) {
+      } else {
         await ChatService.sendCallEvent('$label ended • $_duration');
       }
     }
