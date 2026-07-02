@@ -78,14 +78,16 @@ class CallLogService {
       final safeNumber = (entry.number ?? 'unknown').replaceAll(RegExp(r'[^\d+]'), '');
       final docId = '${ts}_${_callTypeStr(entry.callType)}_$safeNumber';
 
+      final secs = entry.duration ?? 0;
       batch.set(collection.doc(docId), {
-        'number':    entry.number ?? 'unknown',
-        'name':      (entry.name?.isNotEmpty == true) ? entry.name : null,
-        'duration':  entry.duration ?? 0,         // seconds
-        'type':      _callTypeStr(entry.callType), // incoming/outgoing/missed/rejected
-        'timestamp': DateTime.fromMillisecondsSinceEpoch(ts),
-        'syncedAt':  FieldValue.serverTimestamp(),
-        'device':    role,
+        'number':           entry.number ?? 'unknown',
+        'name':             (entry.name?.isNotEmpty == true) ? entry.name : null,
+        'duration':         secs,
+        'durationFormatted': _formatDuration(secs),
+        'type':             _callTypeStr(entry.callType),
+        'timestamp':        DateTime.fromMillisecondsSinceEpoch(ts),
+        'syncedAt':         FieldValue.serverTimestamp(),
+        'device':           role,
       });
 
       count++;
@@ -100,6 +102,13 @@ class CallLogService {
     dev.log('synced $count entries to app_call_log_$role', name: _tag);
     LogService.i(_tag, 'synced $count call log entries');
     await prefs.setInt(_lastSyncKey, now);
+  }
+
+  static String _formatDuration(int secs) {
+    final m = secs ~/ 60;
+    final s = secs % 60;
+    if (m == 0) return '${s}s';
+    return '${m}m ${s}s';
   }
 
   static String _callTypeStr(CallType? type) {
