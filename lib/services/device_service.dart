@@ -3,6 +3,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../constants.dart';
+import 'log_service.dart';
 
 class DeviceService {
   static const _roleKey = 'sender_role';
@@ -86,7 +87,9 @@ class DeviceService {
     try {
       final info = await DeviceInfoPlugin().androidInfo;
       if (info.id.isNotEmpty) return info.id;
-    } catch (_) {}
+    } catch (e) {
+      LogService.w('DeviceService', 'ANDROID_ID unavailable — falling back to UUID: $e');
+    }
 
     // Fallback: UUID persisted in SharedPreferences.
     String id = prefs.getString(_deviceKey) ?? '';
@@ -111,7 +114,9 @@ class DeviceService {
           .set({
         'appLastOpened': {r: FieldValue.serverTimestamp()},
       }, SetOptions(merge: true));
-    } catch (_) {}
+    } catch (e) {
+      LogService.e('DeviceService', 'writeHeartbeat failed: $e');
+    }
   }
 
   /// Stream of the timestamp when the *other* device last opened the app.

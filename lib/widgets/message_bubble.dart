@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import '../constants.dart';
 import '../models/message.dart';
 import '../screens/media_viewer_screen.dart';
+import '../services/log_service.dart';
 
 part 'bubbles/shared.dart';
 part 'bubbles/encrypted_image.dart';
@@ -106,8 +107,38 @@ class _MessageBubbleState extends State<MessageBubble>
     return !widget.message.timestamp.isAfter(widget.otherReadAt!);
   }
 
+  Widget _buildCallEventRow() {
+    final text = widget.message.text;
+    final isVideo = text.toLowerCase().contains('video');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
+      child: Row(
+        children: [
+          const Expanded(child: Divider(color: Color(0x33FFFFFF), thickness: 0.5)),
+          const SizedBox(width: 10),
+          Icon(
+            isVideo ? Icons.videocam_rounded : Icons.call_rounded,
+            size: 13,
+            color: const Color(0x66FFFFFF),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            text,
+            style: const TextStyle(fontSize: 12, color: Color(0x66FFFFFF)),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(child: Divider(color: Color(0x33FFFFFF), thickness: 0.5)),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (widget.message.type == MessageType.callEvent) {
+      return _buildCallEventRow();
+    }
+
     final message      = widget.message;
     final isPending    = widget.isPending;
     final isFailed     = widget.isFailed;
@@ -391,6 +422,14 @@ class _MessageBubbleState extends State<MessageBubble>
 
       case MessageType.audio:
         return _AudioMessageTile(message: msg);
+
+      case MessageType.callEvent:
+        // Handled by _buildCallEventRow() before reaching here — fallback only.
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+          child: Text(widget.message.text,
+              style: const TextStyle(fontSize: 12, color: Colors.white38)),
+        );
     }
   }
 }

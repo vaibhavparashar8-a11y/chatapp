@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import '../constants.dart';
 import '../models/message.dart';
 import '../repositories/i_chat_repository.dart';
+import '../services/log_service.dart';
 
 /// Owns all chat business logic. Knows nothing about Flutter widgets or Firebase.
 ///
@@ -37,6 +38,7 @@ class ChatController extends ChangeNotifier {
 
   bool _didLeave = false;
   bool _isTyping = false;
+  bool _markReadPaused = false;
   Timer? _typingTimer;
   Timer? _markReadTimer;
 
@@ -179,8 +181,8 @@ class ChatController extends ChangeNotifier {
         final newOnes = older.where((m) => !existingIds.contains(m.id)).toList();
         _olderMessages = [...newOnes, ..._olderMessages];
       }
-    } catch (_) {
-      // Silent — user can trigger again by scrolling
+    } catch (e) {
+      LogService.w('ChatController', 'loadMoreMessages failed: $e');
     } finally {
       _loadingMore = false;
       notifyListeners();
@@ -249,6 +251,7 @@ class ChatController extends ChangeNotifier {
       );
       // Stream listener removes the entry once clientId is confirmed
     } catch (e) {
+      LogService.e('ChatController', 'sendText failed: $e');
       entry.failed = true;
       notifyListeners();
       onUploadError?.call(e.toString().split(']').last.trim());
@@ -269,6 +272,7 @@ class ChatController extends ChangeNotifier {
         },
       );
     } catch (e) {
+      LogService.e('ChatController', 'sendMedia failed: $e');
       onUploadError?.call(e.toString().split(']').last.trim());
     } finally {
       _uploadProgress = null;
@@ -294,6 +298,7 @@ class ChatController extends ChangeNotifier {
         clientId: entry.clientId,
       );
     } catch (e) {
+      LogService.e('ChatController', 'retryMessage failed: $e');
       entry.failed = true;
       notifyListeners();
       onUploadError?.call(e.toString().split(']').last.trim());
@@ -345,8 +350,25 @@ class ChatController extends ChangeNotifier {
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
+  /// Prevent read receipts from firing while the user is on a call screen.
+  /// The background message stream stays active, so without this B's messages
+  /// would be marked read even though B is in CallScreen and hasn't seen them.
+  void pauseMarkRead() {
+    _markReadPaused = true;
+    _markReadTimer?.cancel();
+  }
+
+  /// Resume read receipts after returning from the call screen. Immediately
+  /// schedules a mark-read if the other user has visible messages.
+  void resumeMarkRead() {
+    _markReadPaused = false;
+    final otherId = mySenderId == 'A' ? 'B' : 'A';
+    if (_streamMessages.any((m) => m.sender == otherId)) _scheduleMarkRead();
+  }
+
   /// Batch read-receipt writes into 500 ms windows to avoid per-message Firestore calls.
   void _scheduleMarkRead() {
+    if (_markReadPaused) return;
     _markReadTimer?.cancel();
     _markReadTimer = Timer(const Duration(milliseconds: 500), _repo.markRead);
   }
@@ -357,8 +379,9 @@ class ChatController extends ChangeNotifier {
       case MessageType.image: return '[Image]';
       case MessageType.video: return '[Video]';
       case MessageType.audio: return '[Audio]';
-      case MessageType.file:  return '[File: ${msg.fileName ?? 'file'}]';
-      case MessageType.gif:   return '[GIF]';
+      case MessageType.file:      return '[File: ${msg.fileName ?? 'file'}]';
+      case MessageType.gif:       return '[GIF]';
+      case MessageType.callEvent: return msg.text;
     }
   }
 

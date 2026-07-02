@@ -24,6 +24,19 @@
 }
 -dontwarn kotlinx.coroutines.**
 
+# Gson — flutter_local_notifications uses TypeToken<ArrayList<NotificationDetails>>
+# to serialize scheduled notifications to SharedPreferences. R8 strips generic
+# signatures by default, causing "TypeToken must be created with a type argument"
+# at runtime when zonedSchedule() tries to save the pending notification.
+-keepattributes Signature
+-keepattributes *Annotation*
+-keep,allowobfuscation,allowshrinking class com.google.gson.reflect.TypeToken
+-keep,allowobfuscation,allowshrinking class * extends com.google.gson.reflect.TypeToken
+-keep class com.google.gson.** { *; }
+
+# Keep flutter_local_notifications plugin classes and their notification models
+-keep class com.dexterous.flutterlocalnotifications.** { *; }
+
 # Flutter Play Store split install (not used in sideload builds, suppress missing-class warnings)
 -dontwarn com.google.android.play.core.splitcompat.SplitCompatApplication
 -dontwarn com.google.android.play.core.splitinstall.SplitInstallException

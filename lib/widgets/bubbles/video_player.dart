@@ -23,22 +23,38 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
   VideoPlayerController? _controller;
   bool _initialized = false;
   bool _started = false;
+  bool _error = false;
+  bool _openingExternal = false;
 
   Future<void> _start() async {
-    setState(() => _started = true);
+    setState(() { _started = true; _error = false; });
     try {
-      _controller = VideoPlayerController.networkUrl(Uri.parse(widget.url));
-      await _controller!.initialize();
+      final ctrl = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+      _controller = ctrl;
+      ctrl.addListener(() { if (mounted) setState(() {}); });
+      await ctrl.initialize();
       if (mounted) {
         setState(() => _initialized = true);
-        _controller!.play();
+        ctrl.play();
       }
-    } catch (_) {
-      if (mounted) setState(() => _started = false);
+    } catch (e, st) {
+      LogService.e('VideoPlayer', 'init failed — url=${widget.url} err=$e\n$st');
+      if (mounted) setState(() { _started = false; _error = true; });
     }
-    _controller?.addListener(() {
-      if (mounted) setState(() {});
-    });
+  }
+
+  Future<void> _openExternal() async {
+    if (_openingExternal) return;
+    setState(() => _openingExternal = true);
+    try {
+      final path = await _savePath(widget.fileName);
+      await Dio().download(widget.url, path);
+      await OpenFile.open(path);
+    } catch (e, st) {
+      LogService.e('VideoPlayer', 'open external failed — ${widget.fileName} err=$e\n$st');
+    } finally {
+      if (mounted) setState(() => _openingExternal = false);
+    }
   }
 
   @override
@@ -64,19 +80,52 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
                     width: 220,
                     height: 160,
                     color: Colors.black87,
-                    child: const Icon(Icons.videocam,
-                        color: Colors.white30, size: 48),
+                    child: _error
+                        ? Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.error_outline, color: Colors.redAccent, size: 32),
+                              const SizedBox(height: 4),
+                              const Text('Failed to play video',
+                                  style: TextStyle(color: Colors.white54, fontSize: 11)),
+                              const SizedBox(height: 8),
+                              GestureDetector(
+                                onTap: _openingExternal ? null : _openExternal,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white12,
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: _openingExternal
+                                      ? const SizedBox(width: 14, height: 14,
+                                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70))
+                                      : const Row(mainAxisSize: MainAxisSize.min, children: [
+                                          Icon(Icons.open_in_new, color: Colors.white70, size: 13),
+                                          SizedBox(width: 4),
+                                          Text('Open externally',
+                                              style: TextStyle(color: Colors.white70, fontSize: 11)),
+                                        ]),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              const Text('or tap card to retry',
+                                  style: TextStyle(color: Colors.white30, fontSize: 10)),
+                            ],
+                          )
+                        : const Icon(Icons.videocam, color: Colors.white30, size: 48),
                   ),
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: Colors.black45,
-                      borderRadius: BorderRadius.circular(26),
+                  if (!_error)
+                    Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        color: Colors.black45,
+                        borderRadius: BorderRadius.circular(26),
+                      ),
+                      child: const Icon(Icons.play_arrow,
+                          color: Colors.white, size: 36),
                     ),
-                    child: const Icon(Icons.play_arrow,
-                        color: Colors.white, size: 36),
-                  ),
                 ],
               ),
             ),

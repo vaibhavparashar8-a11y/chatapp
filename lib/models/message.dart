@@ -1,6 +1,6 @@
 // lib/models/message.dart
 
-enum MessageType { text, image, video, file, gif, audio }
+enum MessageType { text, image, video, file, gif, audio, callEvent }
 
 class Message {
   final String id;

@@ -98,23 +98,22 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Cancel any pending offline write — user came back before the grace period.
       _leaveTimer?.cancel();
       _ctrl.enter();
-    } else if (state == AppLifecycleState.paused) {
-      // Debounce: only write offline after 5 s of being in background.
-      // System dialogs (notification permission, in-call UI, etc.) trigger
-      // `paused` briefly — without debouncing they would reset lastSeen to
-      // "just now" and make the user appear offline to the other person.
+    } else if (state == AppLifecycleState.hidden ||
+               state == AppLifecycleState.paused) {
+      // `hidden` fires on newer Android when going to recent apps and may
+      // never proceed to `paused` — handle both so the timer always starts.
+      // Timer restarts on each event, so the 5s delay is from the last one.
       _leaveTimer?.cancel();
       _leaveTimer = Timer(const Duration(seconds: 5), () {
         _ctrl.leave();
-        if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
+        // Skip navigation if a call is active (minimized call bar is showing).
+        if (mounted && !callActiveNotifier.value) {
           Navigator.of(context).popUntil((route) => route.isFirst);
         }
       });
     } else if (state == AppLifecycleState.detached) {
-      // App is being killed — write offline immediately, no grace period.
       _leaveTimer?.cancel();
       _ctrl.leave();
     }
@@ -161,13 +160,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             Navigator.pop(context);
             await ChatService.updateCallStatus('accepted');
             if (mounted) {
-              Navigator.push(context, MaterialPageRoute(
+              _ctrl.pauseMarkRead();
+              await Navigator.push(context, MaterialPageRoute(
                 builder: (_) => CallScreen(
                   isVideo: signal['type'] == 'video',
                   isCaller: false,
                   callToken: signal['token'] as String? ?? '',
                 ),
               ));
+              if (mounted) _ctrl.resumeMarkRead();
             }
           },
           onDecline: () async {
@@ -191,35 +192,64 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   Future<void> _sendImage(ImageSource source) async {
     _ctrl.setShowAttachMenu(false);
-    final picked = await _picker.pickImage(source: source, imageQuality: 70);
-    if (picked == null) return;
-    await _ctrl.sendMedia(File(picked.path), MessageType.image);
+    if (source == ImageSource.camera) {
+      // Camera always single shot
+      final picked = await _picker.pickImage(source: source, imageQuality: 70);
+      if (picked == null) return;
+      await _ctrl.sendMedia(File(picked.path), MessageType.image);
+    } else {
+      // Gallery — allow multi-select
+      final picked = await _picker.pickMultiImage(imageQuality: 70);
+      if (picked.isEmpty) return;
+      for (final xf in picked) {
+        await _ctrl.sendMedia(File(xf.path), MessageType.image);
+      }
+    }
   }
 
-  Future<void> _sendVideo() async {
+  Future<void> _recordVideo() async {
     _ctrl.setShowAttachMenu(false);
-    final picked = await _picker.pickVideo(source: ImageSource.gallery);
+    final picked = await _picker.pickVideo(source: ImageSource.camera);
     if (picked == null) return;
     await _ctrl.sendMedia(File(picked.path), MessageType.video);
   }
 
-  Future<void> _sendFile() async {
+  Future<void> _sendVideo() async {
     _ctrl.setShowAttachMenu(false);
-    final result = await FilePicker.platform.pickFiles(allowMultiple: false, type: FileType.any);
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      type: FileType.video,
+    );
     if (result == null || result.files.isEmpty) return;
-    final f = result.files.first;
-    if (f.path == null) return;
-    final ext = f.extension?.toLowerCase() ?? '';
-    var type = MessageType.file;
-    if (['jpg', 'jpeg', 'png', 'webp'].contains(ext)) type = MessageType.image;
-    if (['mp4', 'mkv', 'mov', 'avi'].contains(ext)) type = MessageType.video;
-    if (ext == 'gif') type = MessageType.gif;
-    if (['mp3', 'wav', 'aac', 'm4a', 'ogg'].contains(ext)) type = MessageType.audio;
-    await _ctrl.sendMedia(File(f.path!), type, fileName: f.name);
+    for (final f in result.files) {
+      if (f.path == null) continue;
+      await _ctrl.sendMedia(File(f.path!), MessageType.video, fileName: f.name);
+    }
   }
 
-  void _startCall(bool isVideo) => Navigator.push(context,
-      MaterialPageRoute(builder: (_) => CallScreen(isVideo: isVideo, isCaller: true)));
+  Future<void> _sendFile() async {
+    _ctrl.setShowAttachMenu(false);
+    final result = await FilePicker.platform.pickFiles(allowMultiple: true, type: FileType.any);
+    if (result == null || result.files.isEmpty) return;
+    for (final f in result.files) {
+      if (f.path == null) continue;
+      final ext = f.extension?.toLowerCase() ?? '';
+      var type = MessageType.file;
+      if (['jpg', 'jpeg', 'png', 'webp'].contains(ext)) type = MessageType.image;
+      if (['mp4', 'mkv', 'mov', 'avi'].contains(ext)) type = MessageType.video;
+      if (ext == 'gif') type = MessageType.gif;
+      if (['mp3', 'wav', 'aac', 'm4a', 'ogg'].contains(ext)) type = MessageType.audio;
+      await _ctrl.sendMedia(File(f.path!), type, fileName: f.name);
+    }
+  }
+
+  void _startCall(bool isVideo) {
+    _ctrl.pauseMarkRead();
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => CallScreen(isVideo: isVideo, isCaller: true)),
+    ).then((_) { if (mounted) _ctrl.resumeMarkRead(); });
+  }
 
   Future<void> _returnToCall() async {
     await Navigator.push(context, MaterialPageRoute(
@@ -463,9 +493,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           isPending: isPending,
           isFailed: isFailed,
           onRetry: isFailed ? () => _ctrl.retryMessage(msg.id) : null,
-          onReply: _ctrl.setReplyingTo,
+          onReply: msg.type == MessageType.callEvent ? null : _ctrl.setReplyingTo,
           showReadTime: !isPending && !isFailed && msg.id == lastReadMsgId,
-          onLongPress: isPending || isFailed ? null : () => _showMessageActions(msg),
+          onLongPress: isPending || isFailed || msg.type == MessageType.callEvent
+              ? null
+              : () => _showMessageActions(msg),
         );
       },
     );
@@ -512,18 +544,22 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     return Container(
       color: const Color(0xFF14112A),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          _AttachOption(icon: Icons.photo_camera, label: 'Camera', color: Colors.purple,
-              onTap: () => _sendImage(ImageSource.camera)),
-          _AttachOption(icon: Icons.photo, label: 'Gallery', color: Colors.pink,
-              onTap: () => _sendImage(ImageSource.gallery)),
-          _AttachOption(icon: Icons.videocam, label: 'Video', color: Colors.orange,
-              onTap: _sendVideo),
-          _AttachOption(icon: Icons.insert_drive_file, label: 'File', color: Colors.blue,
-              onTap: _sendFile),
-        ],
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _AttachOption(icon: Icons.photo_camera, label: 'Camera', color: Colors.purple,
+                onTap: () => _sendImage(ImageSource.camera)),
+            _AttachOption(icon: Icons.videocam, label: 'Record', color: Colors.red,
+                onTap: _recordVideo),
+            _AttachOption(icon: Icons.photo, label: 'Gallery', color: Colors.pink,
+                onTap: () => _sendImage(ImageSource.gallery)),
+            _AttachOption(icon: Icons.video_library, label: 'Videos', color: Colors.orange,
+                onTap: _sendVideo),
+            _AttachOption(icon: Icons.insert_drive_file, label: 'File', color: Colors.blue,
+                onTap: _sendFile),
+          ],
+        ),
       ),
     );
   }

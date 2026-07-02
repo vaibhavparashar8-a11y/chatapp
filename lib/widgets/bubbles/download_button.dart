@@ -21,29 +21,39 @@ class _DownloadButton extends StatefulWidget {
 
 class _DownloadButtonState extends State<_DownloadButton> {
   bool _saving = false;
+  bool _done = false;
+  bool _error = false;
 
-  Future<void> _save() async {
-    if (_saving) return;
-    setState(() => _saving = true);
+  Future<void> _save(BuildContext ctx) async {
+    if (_saving || _done) return;
+    setState(() { _saving = true; _error = false; });
     try {
-      final isImageOrVideo = widget.messageType == MessageType.image ||
-          widget.messageType == MessageType.video ||
-          widget.messageType == MessageType.gif;
+      await Gal.requestAccess();
       final path = await _savePath(widget.fileName);
       await Dio().download(widget.url, path);
-      if (isImageOrVideo) {
+
+      if (widget.messageType == MessageType.video) {
+        await Gal.putVideo(path);
+      } else if (widget.messageType == MessageType.image ||
+                 widget.messageType == MessageType.gif) {
         await Gal.putImage(path);
       }
-    } catch (_) {
-    } finally {
-      if (mounted) setState(() => _saving = false);
+      if (mounted) setState(() { _saving = false; _done = true; });
+    } catch (e) {
+      debugPrint('DownloadButton: save failed — $e');
+      if (mounted) {
+        setState(() { _saving = false; _error = true; });
+        ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(content: Text('Download failed'), duration: Duration(seconds: 2)),
+        );
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: _save,
+      onTap: () => _save(context),
       child: Container(
         padding: const EdgeInsets.all(4),
         decoration: BoxDecoration(
@@ -56,7 +66,11 @@ class _DownloadButtonState extends State<_DownloadButton> {
                 height: 14,
                 child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
               )
-            : const Icon(Icons.download, color: Colors.white, size: 18),
+            : _done
+                ? const Icon(Icons.check, color: Colors.greenAccent, size: 18)
+                : _error
+                    ? const Icon(Icons.error_outline, color: Colors.redAccent, size: 18)
+                    : const Icon(Icons.download, color: Colors.white, size: 18),
       ),
     );
   }
