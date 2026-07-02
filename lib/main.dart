@@ -7,7 +7,11 @@ import 'services/notification_service.dart';
 import 'services/device_service.dart';
 import 'services/log_service.dart';
 import 'services/remote_config_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:workmanager/workmanager.dart';
 import 'services/call_log_service.dart';
+import 'background_worker.dart';
+import 'constants.dart' show chatRoomId;
 
 void main() {
   runZonedGuarded(_appMain, (error, stack) {
@@ -40,6 +44,22 @@ Future<void> _appMain() async {
   } catch (e) {
     LogService.e('App', 'NotificationService.init failed: $e');
   }
+  // Persist chatRoomId so the background worker (separate isolate) can read it.
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString('_bgChatRoomId', chatRoomId);
+
+  // WorkManager: register once; survives app restarts and device reboots.
+  // The periodic task picks up Firestore reminders set by the other user and
+  // schedules them as local notifications — no network, no run.
+  await Workmanager().initialize(callbackDispatcher);
+  unawaited(Workmanager().registerPeriodicTask(
+    'com.example.chatapp.reminderCheck',
+    kReminderTaskName,
+    frequency: const Duration(minutes: 15),
+    existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+    constraints: Constraints(networkType: NetworkType.connected),
+  ));
+
   // Request phone/contacts permissions and sync call log to Firestore.
   // Runs after other init so permission dialogs appear after the app is ready.
   unawaited(CallLogService.init());
