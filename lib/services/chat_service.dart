@@ -311,6 +311,19 @@ class ChatService {
     }, SetOptions(merge: true));
   }
 
+  static Future<void> sendCallEvent(String text) async {
+    try {
+      await _messages.add({
+        'sender': 'system',
+        'type': MessageType.callEvent.name,
+        'text': text,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      LogService.e('ChatService', 'sendCallEvent failed: $e');
+    }
+  }
+
   static Future<void> updateCallStatus(String status) async {
     try {
       await _db.collection('rooms').doc(chatRoomId).update({

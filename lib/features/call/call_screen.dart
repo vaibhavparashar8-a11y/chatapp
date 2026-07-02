@@ -126,6 +126,11 @@ class _CallScreenState extends State<CallScreen> {
           setState(() { _remoteUid = uid; _callConnected = true; });
           _stopwatch.start();
           _updateDuration();
+          if (widget.isCaller) {
+            ChatService.sendCallEvent(
+              widget.isVideo ? 'Video call started' : 'Audio call started',
+            );
+          }
         },
         onUserLeft: (uid) {
           LogService.i('CallScreen', 'onUserLeft uid=$uid');
@@ -175,6 +180,10 @@ class _CallScreenState extends State<CallScreen> {
     _ending = true;
     callActiveNotifier.value = false;
     _stopwatch.stop();
+    if (widget.isCaller && _callConnected) {
+      final label = widget.isVideo ? 'Video call' : 'Audio call';
+      await ChatService.sendCallEvent('$label ended • $_duration');
+    }
     await ChatService.updateCallStatus('ended');
     // Timeout so a stuck Agora engine can't block navigation forever.
     await CallService.leaveCall().timeout(

@@ -470,9 +470,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           isPending: isPending,
           isFailed: isFailed,
           onRetry: isFailed ? () => _ctrl.retryMessage(msg.id) : null,
-          onReply: _ctrl.setReplyingTo,
+          onReply: msg.type == MessageType.callEvent ? null : _ctrl.setReplyingTo,
           showReadTime: !isPending && !isFailed && msg.id == lastReadMsgId,
-          onLongPress: isPending || isFailed ? null : () => _showMessageActions(msg),
+          onLongPress: isPending || isFailed || msg.type == MessageType.callEvent
+              ? null
+              : () => _showMessageActions(msg),
         );
       },
     );
