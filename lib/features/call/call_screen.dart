@@ -136,7 +136,7 @@ class _CallScreenState extends State<CallScreen> {
         },
         onError: () {
           LogService.e('CallScreen', 'Agora error callback — ending call');
-          _endCall();
+          _endCall(errorMsg: 'Call failed. The Agora token may be expired — update it in Remote Config.');
         },
       );
       if (!mounted) return;
@@ -146,10 +146,10 @@ class _CallScreenState extends State<CallScreen> {
         ChatService.signalCall(widget.isVideo ? 'video' : 'audio', token: token);
       }
 
-      Future.delayed(const Duration(seconds: 45), () {
+      Future.delayed(const Duration(seconds: 20), () {
         if (mounted && !_callConnected) {
-          LogService.w('CallScreen', 'Timeout — no remote user joined after 45s');
-          _endCall();
+          LogService.w('CallScreen', 'Timeout — no remote user joined after 20s');
+          _endCall(errorMsg: 'Call timed out. Check that the Agora token is valid.');
         }
       });
     } catch (e) {
@@ -170,14 +170,27 @@ class _CallScreenState extends State<CallScreen> {
     });
   }
 
-  Future<void> _endCall() async {
+  Future<void> _endCall({String? errorMsg}) async {
     if (_ending) return;
     _ending = true;
     callActiveNotifier.value = false;
     _stopwatch.stop();
     await ChatService.updateCallStatus('ended');
-    await CallService.leaveCall();
-    if (mounted) Navigator.pop(context);
+    // Timeout so a stuck Agora engine can't block navigation forever.
+    await CallService.leaveCall().timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {},
+    );
+    if (mounted) {
+      if (errorMsg != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(errorMsg),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 4),
+        ));
+      }
+      Navigator.pop(context);
+    }
   }
 
   // Minimize call: keep engine alive, show mini bar in ChatScreen.

@@ -37,6 +37,7 @@ class ChatController extends ChangeNotifier {
 
   bool _didLeave = false;
   bool _isTyping = false;
+  bool _markReadPaused = false;
   Timer? _typingTimer;
   Timer? _markReadTimer;
 
@@ -345,8 +346,25 @@ class ChatController extends ChangeNotifier {
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
+  /// Prevent read receipts from firing while the user is on a call screen.
+  /// The background message stream stays active, so without this B's messages
+  /// would be marked read even though B is in CallScreen and hasn't seen them.
+  void pauseMarkRead() {
+    _markReadPaused = true;
+    _markReadTimer?.cancel();
+  }
+
+  /// Resume read receipts after returning from the call screen. Immediately
+  /// schedules a mark-read if the other user has visible messages.
+  void resumeMarkRead() {
+    _markReadPaused = false;
+    final otherId = mySenderId == 'A' ? 'B' : 'A';
+    if (_streamMessages.any((m) => m.sender == otherId)) _scheduleMarkRead();
+  }
+
   /// Batch read-receipt writes into 500 ms windows to avoid per-message Firestore calls.
   void _scheduleMarkRead() {
+    if (_markReadPaused) return;
     _markReadTimer?.cancel();
     _markReadTimer = Timer(const Duration(milliseconds: 500), _repo.markRead);
   }

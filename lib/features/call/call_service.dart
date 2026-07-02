@@ -58,6 +58,12 @@ class CallService {
         LogService.e('Call', 'Agora error — code=$err msg=$msg');
         _onError?.call();
       },
+      // Fires when the token has already expired at join time, or expires mid-call.
+      // onError does NOT fire for this case in Agora SDK 4.x.
+      onRequestToken: (connection) {
+        LogService.e('Call', 'Token expired — onRequestToken (channel=${connection.channelId})');
+        _onError?.call();
+      },
     );
     _engine!.registerEventHandler(_handler!);
     _isInitialized = true;

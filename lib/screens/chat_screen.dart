@@ -161,13 +161,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             Navigator.pop(context);
             await ChatService.updateCallStatus('accepted');
             if (mounted) {
-              Navigator.push(context, MaterialPageRoute(
+              _ctrl.pauseMarkRead();
+              await Navigator.push(context, MaterialPageRoute(
                 builder: (_) => CallScreen(
                   isVideo: signal['type'] == 'video',
                   isCaller: false,
                   callToken: signal['token'] as String? ?? '',
                 ),
               ));
+              if (mounted) _ctrl.resumeMarkRead();
             }
           },
           onDecline: () async {
@@ -218,8 +220,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     await _ctrl.sendMedia(File(f.path!), type, fileName: f.name);
   }
 
-  void _startCall(bool isVideo) => Navigator.push(context,
-      MaterialPageRoute(builder: (_) => CallScreen(isVideo: isVideo, isCaller: true)));
+  void _startCall(bool isVideo) {
+    _ctrl.pauseMarkRead();
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => CallScreen(isVideo: isVideo, isCaller: true)),
+    ).then((_) { if (mounted) _ctrl.resumeMarkRead(); });
+  }
 
   Future<void> _returnToCall() async {
     await Navigator.push(context, MaterialPageRoute(
