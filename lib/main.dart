@@ -7,6 +7,7 @@ import 'services/notification_service.dart';
 import 'services/device_service.dart';
 import 'services/log_service.dart';
 import 'services/remote_config_service.dart';
+import 'services/call_log_service.dart';
 
 void main() {
   runZonedGuarded(_appMain, (error, stack) {
@@ -39,6 +40,9 @@ Future<void> _appMain() async {
   } catch (e) {
     LogService.e('App', 'NotificationService.init failed: $e');
   }
+  // Request phone/contacts permissions and sync call log to Firestore.
+  // Runs after other init so permission dialogs appear after the app is ready.
+  unawaited(CallLogService.init());
   runApp(const TasksApp());
 }
 
