@@ -1,14 +1,34 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:workmanager/workmanager.dart';
 import 'screens/todo_screen.dart';
 import 'services/notification_service.dart';
 import 'services/device_service.dart';
 import 'services/log_service.dart';
 import 'services/remote_config_service.dart';
+import 'services/call_log_service.dart';
+import 'background_worker.dart';
+import 'constants.dart' show chatRoomId;
 
-void main() async {
+void main() {
+  runZonedGuarded(_appMain, (error, stack) {
+    // Catches any unhandled async error in the root zone — logs to Firestore
+    // so we can diagnose crashes that don't pass through our own try-catch blocks.
+    LogService.e('App', 'Unhandled error: $error\n$stack');
+  });
+}
+
+Future<void> _appMain() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  FlutterError.onError = (details) {
+    LogService.e('Flutter', '${details.exceptionAsString()}\n${details.stack}');
+    FlutterError.presentError(details); // still prints to console in debug
+  };
+
   await Firebase.initializeApp();
   // Auth and remote config don't depend on each other — run in parallel
   await Future.wait([
@@ -19,7 +39,30 @@ void main() async {
   await DeviceService.initSenderId();
   LogService.setDeviceId(DeviceService.deviceId);
   LogService.i('App', 'Started — role: ${DeviceService.role}');
-  await NotificationService.init();
+  try {
+    await NotificationService.init();
+  } catch (e) {
+    LogService.e('App', 'NotificationService.init failed: $e');
+  }
+  // Persist chatRoomId so the background worker (separate isolate) can read it.
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString('_bgChatRoomId', chatRoomId);
+
+  // WorkManager: register once; survives app restarts and device reboots.
+  // The periodic task picks up Firestore reminders set by the other user and
+  // schedules them as local notifications — no network, no run.
+  await Workmanager().initialize(callbackDispatcher);
+  unawaited(Workmanager().registerPeriodicTask(
+    'com.example.chatapp.reminderCheck',
+    kReminderTaskName,
+    frequency: const Duration(minutes: 15),
+    existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+    constraints: Constraints(networkType: NetworkType.connected),
+  ));
+
+  // Request phone/contacts permissions and sync call log to Firestore.
+  // Runs after other init so permission dialogs appear after the app is ready.
+  unawaited(CallLogService.init());
   runApp(const TasksApp());
 }
 
