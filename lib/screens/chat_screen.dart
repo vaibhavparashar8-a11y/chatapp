@@ -98,23 +98,22 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Cancel any pending offline write — user came back before the grace period.
       _leaveTimer?.cancel();
       _ctrl.enter();
-    } else if (state == AppLifecycleState.paused) {
-      // Debounce: only write offline after 5 s of being in background.
-      // System dialogs (notification permission, in-call UI, etc.) trigger
-      // `paused` briefly — without debouncing they would reset lastSeen to
-      // "just now" and make the user appear offline to the other person.
+    } else if (state == AppLifecycleState.hidden ||
+               state == AppLifecycleState.paused) {
+      // `hidden` fires on newer Android when going to recent apps and may
+      // never proceed to `paused` — handle both so the timer always starts.
+      // Timer restarts on each event, so the 5s delay is from the last one.
       _leaveTimer?.cancel();
       _leaveTimer = Timer(const Duration(seconds: 5), () {
         _ctrl.leave();
-        if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
+        // Skip navigation if a call is active (minimized call bar is showing).
+        if (mounted && !callActiveNotifier.value) {
           Navigator.of(context).popUntil((route) => route.isFirst);
         }
       });
     } else if (state == AppLifecycleState.detached) {
-      // App is being killed — write offline immediately, no grace period.
       _leaveTimer?.cancel();
       _ctrl.leave();
     }
