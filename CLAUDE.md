@@ -34,6 +34,7 @@ Every feature and bug fix must include tests:
 ```
 
 Never type the flutter build command manually. The script:
+- Runs `flutter test` first — **aborts the build if any test fails**
 - Sets the correct `GRADLE_USER_HOME` and `PUB_CACHE` paths (D: drive)
 - Passes `--split-per-abi` (keeps APK size small — one APK per CPU architecture)
 - Outputs `MyTask.apk` automatically
