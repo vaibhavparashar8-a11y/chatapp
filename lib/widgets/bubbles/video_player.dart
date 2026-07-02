@@ -24,6 +24,7 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
   bool _initialized = false;
   bool _started = false;
   bool _error = false;
+  bool _openingExternal = false;
 
   Future<void> _start() async {
     setState(() { _started = true; _error = false; });
@@ -39,6 +40,20 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
     } catch (e) {
       debugPrint('VideoPlayer: init failed — $e');
       if (mounted) setState(() { _started = false; _error = true; });
+    }
+  }
+
+  Future<void> _openExternal() async {
+    if (_openingExternal) return;
+    setState(() => _openingExternal = true);
+    try {
+      final path = await _savePath(widget.fileName);
+      await Dio().download(widget.url, path);
+      await OpenFile.open(path);
+    } catch (e) {
+      debugPrint('VideoPlayer: open external failed — $e');
+    } finally {
+      if (mounted) setState(() => _openingExternal = false);
     }
   }
 
@@ -66,16 +81,36 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
                     height: 160,
                     color: Colors.black87,
                     child: _error
-                        ? const Column(
+                        ? Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.error_outline, color: Colors.redAccent, size: 36),
-                              SizedBox(height: 6),
-                              Text('Failed to load video',
-                                  style: TextStyle(color: Colors.white54, fontSize: 12)),
-                              SizedBox(height: 2),
-                              Text('Tap to retry',
-                                  style: TextStyle(color: Colors.white38, fontSize: 11)),
+                              const Icon(Icons.error_outline, color: Colors.redAccent, size: 32),
+                              const SizedBox(height: 4),
+                              const Text('Failed to play video',
+                                  style: TextStyle(color: Colors.white54, fontSize: 11)),
+                              const SizedBox(height: 8),
+                              GestureDetector(
+                                onTap: _openingExternal ? null : _openExternal,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white12,
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: _openingExternal
+                                      ? const SizedBox(width: 14, height: 14,
+                                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70))
+                                      : const Row(mainAxisSize: MainAxisSize.min, children: [
+                                          Icon(Icons.open_in_new, color: Colors.white70, size: 13),
+                                          SizedBox(width: 4),
+                                          Text('Open externally',
+                                              style: TextStyle(color: Colors.white70, fontSize: 11)),
+                                        ]),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              const Text('or tap card to retry',
+                                  style: TextStyle(color: Colors.white30, fontSize: 10)),
                             ],
                           )
                         : const Icon(Icons.videocam, color: Colors.white30, size: 48),

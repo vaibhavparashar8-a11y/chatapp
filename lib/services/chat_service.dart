@@ -120,7 +120,8 @@ class ChatService {
 
     LogService.i('Upload', 'Storage path: $storagePath');
     try {
-      final uploadTask = ref.putData(rawBytes);
+      final metadata = SettableMetadata(contentType: _mimeType(ext));
+      final uploadTask = ref.putData(rawBytes, metadata);
       uploadTask.snapshotEvents.listen((snap) {
         if (snap.totalBytes > 0) {
           onProgress?.call(snap.bytesTransferred / snap.totalBytes);
@@ -309,6 +310,26 @@ class ChatService {
         'timestamp': FieldValue.serverTimestamp(),
       }
     }, SetOptions(merge: true));
+  }
+
+  static String _mimeType(String ext) {
+    switch (ext.toLowerCase()) {
+      case 'mp4':  return 'video/mp4';
+      case 'mkv':  return 'video/x-matroska';
+      case 'mov':  return 'video/quicktime';
+      case 'avi':  return 'video/x-msvideo';
+      case 'webm': return 'video/webm';
+      case 'jpg': case 'jpeg': return 'image/jpeg';
+      case 'png':  return 'image/png';
+      case 'gif':  return 'image/gif';
+      case 'webp': return 'image/webp';
+      case 'mp3':  return 'audio/mpeg';
+      case 'aac':  return 'audio/aac';
+      case 'm4a':  return 'audio/mp4';
+      case 'ogg':  return 'audio/ogg';
+      case 'wav':  return 'audio/wav';
+      default:     return 'application/octet-stream';
+    }
   }
 
   static Future<void> sendCallEvent(String text) async {
