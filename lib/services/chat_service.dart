@@ -154,16 +154,21 @@ class ChatService {
 
   static const _clearedAtKey = 'clearedAt';
 
-  /// Call when entering the chat screen — marks this user as present.
+  /// Call when entering the chat screen — marks this user as present and
+  /// clears the lastSeen timestamp so the other side never shows "last seen
+  /// just now" while we are actively in the chat.
   static Future<void> enterChat() async {
     try {
-      // update() uses dot-notation so only our own sub-key is touched, never
-      // overwriting the other user's presence entry.
-      await _room.update({'presence.$mySenderId': true});
+      await _room.update({
+        'presence.$mySenderId': true,
+        'lastSeen.$mySenderId': FieldValue.delete(),
+      });
     } catch (_) {
-      // Room doc doesn't exist yet on first launch — create it.
       try {
-        await _room.set({'presence': {mySenderId: true}}, SetOptions(merge: true));
+        await _room.set(
+          {'presence': {mySenderId: true}},
+          SetOptions(merge: true),
+        );
       } catch (_) {}
     }
   }
