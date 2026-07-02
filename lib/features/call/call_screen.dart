@@ -39,6 +39,10 @@ class _CallScreenState extends State<CallScreen> {
   bool _engineReady = false;
   bool _ending = false;
   bool _minimizing = false;
+  // Video layout state
+  bool _localIsMain = false; // when true, local video fills screen, remote is small
+  double? _selfVideoX;       // null = unset, initialized on first build
+  double _selfVideoY = 60;
   final _stopwatch = Stopwatch();
   Duration _durationOffset = Duration.zero;
   String _duration = '00:00';
@@ -265,8 +269,19 @@ class _CallScreenState extends State<CallScreen> {
         backgroundColor: Colors.black,
         body: Stack(
           children: [
-            // Remote video (full screen) or audio background
-            if (widget.isVideo && _engineReady && _remoteUid != null)
+            // ── Full-screen video ───────────────────────────────────────────
+            if (widget.isVideo && _engineReady && _localIsMain && !_cameraOff)
+              // Local video fills the screen
+              SizedBox.expand(
+                child: AgoraVideoView(
+                  controller: VideoViewController(
+                    rtcEngine: CallService.engine,
+                    canvas: const VideoCanvas(uid: 0),
+                  ),
+                ),
+              )
+            else if (widget.isVideo && _engineReady && !_localIsMain && _remoteUid != null)
+              // Remote video fills the screen (default)
               SizedBox.expand(
                 child: AgoraVideoView(
                   controller: VideoViewController.remote(
@@ -277,6 +292,7 @@ class _CallScreenState extends State<CallScreen> {
                 ),
               )
             else
+              // Waiting / audio call background
               Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
@@ -316,29 +332,73 @@ class _CallScreenState extends State<CallScreen> {
                 ),
               ),
 
-            // Local video preview (small, top right)
-            if (widget.isVideo && _engineReady && !_cameraOff)
-              Positioned(
-                top: 60,
-                right: 16,
-                child: Container(
-                  width: 100,
-                  height: 140,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white, width: 1.5),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: AgoraVideoView(
-                      controller: VideoViewController(
-                        rtcEngine: CallService.engine,
-                        canvas: const VideoCanvas(uid: 0),
+            // ── Small draggable video (tap to swap) ─────────────────────────
+            if (widget.isVideo && _engineReady)
+              Builder(builder: (context) {
+                final size = MediaQuery.of(context).size;
+                // Initialise position to top-right on first build
+                _selfVideoX ??= size.width - 116;
+
+                // What to show in the small pip — opposite of full-screen
+                final Widget pipContent;
+                if (_localIsMain) {
+                  // Small = remote
+                  pipContent = _remoteUid != null
+                      ? AgoraVideoView(
+                          controller: VideoViewController.remote(
+                            rtcEngine: CallService.engine,
+                            canvas: VideoCanvas(uid: _remoteUid),
+                            connection: RtcConnection(channelId: agoraChannel),
+                          ),
+                        )
+                      : const ColoredBox(
+                          color: Color(0xFF1A2332),
+                          child: Center(
+                            child: Icon(Icons.person, color: Colors.white38, size: 40),
+                          ),
+                        );
+                } else {
+                  // Small = local (hide pip when camera is off)
+                  if (_cameraOff) return const SizedBox.shrink();
+                  pipContent = AgoraVideoView(
+                    controller: VideoViewController(
+                      rtcEngine: CallService.engine,
+                      canvas: const VideoCanvas(uid: 0),
+                    ),
+                  );
+                }
+
+                return Positioned(
+                  left: _selfVideoX,
+                  top: _selfVideoY,
+                  child: GestureDetector(
+                    onTap: () => setState(() => _localIsMain = !_localIsMain),
+                    onPanUpdate: (d) {
+                      setState(() {
+                        _selfVideoX = (_selfVideoX! + d.delta.dx)
+                            .clamp(0, size.width - 100);
+                        _selfVideoY = (_selfVideoY + d.delta.dy)
+                            .clamp(0, size.height - 160);
+                      });
+                    },
+                    child: Container(
+                      width: 100,
+                      height: 140,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white, width: 1.5),
+                        boxShadow: const [
+                          BoxShadow(color: Colors.black45, blurRadius: 6),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: pipContent,
                       ),
                     ),
                   ),
-                ),
-              ),
+                );
+              }),
 
             // Top bar with duration and back-to-chat button
             Positioned(

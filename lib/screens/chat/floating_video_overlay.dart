@@ -55,6 +55,12 @@ class _FloatingVideoOverlayState extends State<_FloatingVideoOverlay>
                 _y = (_y + d.delta.dy).clamp(0, size.height - 200);
               });
             },
+            // Flick upward OR drag above screen midpoint → expand to full call
+            onPanEnd: (d) {
+              final flickedUp = d.velocity.pixelsPerSecond.dy < -400;
+              final draggedHigh = _y < size.height * 0.35;
+              if (flickedUp || draggedHigh) widget.onTap();
+            },
             child: Container(
               width: 120,
               height: 160,

@@ -131,4 +131,87 @@ void main() {
       expect(row.mainAxisAlignment, MainAxisAlignment.start);
     });
   });
+
+  // ── callEvent row ────────────────────────────────────────────────────────────
+
+  Message callEvent({String text = 'Audio call ended', DateTime? ts}) => Message(
+        id: 'ce1',
+        sender: 'system',
+        text: text,
+        type: MessageType.callEvent,
+        timestamp: ts ?? DateTime(2024, 6, 1, 14, 30),
+      );
+
+  group('MessageBubble — callEvent row', () {
+    testWidgets('renders two Dividers instead of a bubble', (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(message: callEvent())));
+      expect(find.byType(Divider), findsNWidgets(2));
+    });
+
+    testWidgets('does not show status icons (schedule/done/error)', (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(message: callEvent())));
+      expect(find.byIcon(Icons.done), findsNothing);
+      expect(find.byIcon(Icons.done_all), findsNothing);
+      expect(find.byIcon(Icons.schedule), findsNothing);
+      expect(find.byIcon(Icons.error_outline), findsNothing);
+    });
+
+    testWidgets('audio call shows call_rounded icon', (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(
+        message: callEvent(text: 'Audio call ended • 1m 34s'),
+      )));
+      expect(find.byIcon(Icons.call_rounded), findsOneWidget);
+      expect(find.text('Audio call ended • 1m 34s'), findsOneWidget);
+    });
+
+    testWidgets('video call shows videocam_rounded icon', (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(
+        message: callEvent(text: 'Video call ended • 45s'),
+      )));
+      expect(find.byIcon(Icons.videocam_rounded), findsOneWidget);
+    });
+
+    testWidgets('missed audio call shows phone_missed_rounded icon', (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(
+        message: callEvent(text: 'Missed Audio call'),
+      )));
+      expect(find.byIcon(Icons.phone_missed_rounded), findsOneWidget);
+    });
+
+    testWidgets('missed video call shows videocam_off_rounded icon', (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(
+        message: callEvent(text: 'Missed Video call'),
+      )));
+      expect(find.byIcon(Icons.videocam_off_rounded), findsOneWidget);
+    });
+
+    testWidgets('shows HH:mm timestamp from message.timestamp', (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(
+        message: callEvent(ts: DateTime(2024, 6, 1, 9, 5)),
+      )));
+      expect(find.text('09:05'), findsOneWidget);
+    });
+
+    testWidgets('shows HH:mm timestamp — afternoon time', (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(
+        message: callEvent(ts: DateTime(2024, 6, 1, 22, 47)),
+      )));
+      expect(find.text('22:47'), findsOneWidget);
+    });
+
+    testWidgets('call event text is rendered in the row', (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(
+        message: callEvent(text: 'Audio call ended • 2m 0s'),
+      )));
+      expect(find.text('Audio call ended • 2m 0s'), findsOneWidget);
+    });
+
+    testWidgets('missed icon has reddish color', (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(
+        message: callEvent(text: 'Missed Audio call'),
+      )));
+      final icon = tester.widget<Icon>(find.byIcon(Icons.phone_missed_rounded));
+      expect(icon.color, const Color(0xAAFF6B6B));
+    });
+  });
 }
