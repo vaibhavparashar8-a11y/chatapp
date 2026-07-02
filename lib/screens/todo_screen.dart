@@ -44,9 +44,12 @@ class _TodoScreenState extends State<TodoScreen> {
 
   final _addCtrl = TextEditingController();
   final _addFocus = FocusNode();
+  final _searchCtrl = TextEditingController();
   final Map<String, TextEditingController> _subCtrl = {};
   final Set<String> _expanded = {};
   List<_Todo> _todos = [];
+  String _searchQuery = '';
+  bool _searching = false;
 
   @override
   void initState() {
@@ -58,6 +61,7 @@ class _TodoScreenState extends State<TodoScreen> {
   void dispose() {
     _addCtrl.dispose();
     _addFocus.dispose();
+    _searchCtrl.dispose();
     for (final c in _subCtrl.values) c.dispose();
     super.dispose();
   }
@@ -296,23 +300,72 @@ class _TodoScreenState extends State<TodoScreen> {
 
   // ── Build ─────────────────────────────────────────────────────────────────
 
+  void _openSearch() {
+    setState(() {
+      _searching = true;
+      _searchQuery = '';
+    });
+  }
+
+  void _closeSearch() {
+    setState(() {
+      _searching = false;
+      _searchQuery = '';
+      _searchCtrl.clear();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    final pending = _todos.where((t) => !t.done).toList();
-    final done = _todos.where((t) => t.done).toList();
+    final query = _searchQuery.toLowerCase();
+    final filtered = query.isEmpty
+        ? _todos
+        : _todos
+            .where((t) =>
+                t.title.toLowerCase().contains(query) ||
+                t.subtasks.any((s) => s.title.toLowerCase().contains(query)))
+            .toList();
+    final pending = filtered.where((t) => !t.done).toList();
+    final done = filtered.where((t) => t.done).toList();
 
     return Scaffold(
       backgroundColor: const Color(0xFFF0F2F5),
       appBar: AppBar(
-        title: GestureDetector(
-          onDoubleTap: kDebugMode ? _showRoleResetDialog : null,
-          child: const Text('My Tasks',
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 20)),
-        ),
+        title: _searching
+            ? TextField(
+                controller: _searchCtrl,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white, fontSize: 18),
+                cursorColor: Colors.white,
+                decoration: const InputDecoration(
+                  hintText: 'Search tasks...',
+                  hintStyle: TextStyle(color: Colors.white54),
+                  border: InputBorder.none,
+                ),
+                onChanged: (v) => setState(() => _searchQuery = v),
+              )
+            : GestureDetector(
+                onDoubleTap: kDebugMode ? _showRoleResetDialog : null,
+                child: const Text('My Tasks',
+                    style:
+                        TextStyle(fontWeight: FontWeight.w700, fontSize: 20)),
+              ),
         centerTitle: false,
         backgroundColor: Colors.indigo,
         foregroundColor: Colors.white,
         elevation: 0,
+        actions: [
+          if (_searching)
+            IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: _closeSearch,
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.search),
+              onPressed: _openSearch,
+            ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(34),
           child: _buildHeaderStats(pending.length, done.length),
@@ -325,7 +378,9 @@ class _TodoScreenState extends State<TodoScreen> {
               padding: const EdgeInsets.only(top: 12, bottom: 8),
               children: [
                 if (pending.isEmpty && done.isEmpty)
-                  _buildEmptyState()
+                  _searchQuery.isNotEmpty
+                      ? _buildNoResults()
+                      : _buildEmptyState()
                 else ...[
                   ...pending.map(_buildTile),
                   if (done.isNotEmpty) ...[
@@ -384,6 +439,26 @@ class _TodoScreenState extends State<TodoScreen> {
           const SizedBox(height: 6),
           const Text('Add a task below to get started',
               style: TextStyle(fontSize: 13, color: Colors.black26)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNoResults() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 80),
+      child: Column(
+        children: [
+          Icon(Icons.search_off_rounded, size: 72, color: Colors.indigo.shade100),
+          const SizedBox(height: 16),
+          const Text('No matching tasks',
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black38)),
+          const SizedBox(height: 6),
+          Text('No tasks match "$_searchQuery"',
+              style: const TextStyle(fontSize: 13, color: Colors.black26)),
         ],
       ),
     );
