@@ -52,6 +52,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   // Call signal subscription stays here — needs context for showDialog
   StreamSubscription<Map<String, dynamic>?>? _callSub;
+  // Prevent duplicate incoming-call dialogs when the rooms document re-emits
+  // before updateCallStatus('accepted') has committed to Firestore.
+  bool _incomingDialogShowing = false;
 
   // Debounce timer for presence: prevents brief pauses (system dialogs, etc.)
   // from immediately marking the user offline (fix for issue #11).
@@ -151,12 +154,20 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (signal == null) return;
       if (signal['from'] == mySenderId) return;
       if (signal['status'] != 'ringing') return;
+      // Guard 1: already in an active call (e.g. minimized call bar is showing)
+      if (callActiveNotifier.value) return;
+      // Guard 2: dialog already on screen — rooms doc re-emitted before
+      // updateCallStatus('accepted') committed, which would show a second dialog
+      if (_incomingDialogShowing) return;
+
+      _incomingDialogShowing = true;
       showDialog(
         context: context,
         barrierDismissible: false,
         builder: (_) => IncomingCallDialog(
           callType: signal['type'] ?? 'audio',
           onAccept: () async {
+            _incomingDialogShowing = false;
             Navigator.pop(context);
             await ChatService.updateCallStatus('accepted');
             if (mounted) {
@@ -172,11 +183,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             }
           },
           onDecline: () async {
+            _incomingDialogShowing = false;
             Navigator.pop(context);
             await ChatService.updateCallStatus('declined');
           },
         ),
-      );
+      ).whenComplete(() => _incomingDialogShowing = false);
     });
   }
 
