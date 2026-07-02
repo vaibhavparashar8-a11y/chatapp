@@ -25,11 +25,15 @@ class RemoteConfigService {
       // use defaults if offline
     }
 
-    // Push fetched values into the runtime constants
-    defaults.agoraAppId = _rc.getString('agora_app_id');
+    // Push fetched values into runtime constants — fall back to code defaults
+    // if Remote Config returns an empty string (key exists but value is blank).
+    final appId = _rc.getString('agora_app_id');
+    final channel = _rc.getString('agora_channel');
+    final roomId = _rc.getString('chat_room_id');
+    defaults.agoraAppId = appId.isNotEmpty ? appId : defaults.kDefaultAgoraAppId;
     defaults.agoraAppCertificate = _rc.getString('agora_app_certificate');
-    defaults.agoraChannel = _rc.getString('agora_channel');
-    defaults.chatRoomId = _rc.getString('chat_room_id');
-    defaults.agoraToken = _rc.getString('agora_token');
+    defaults.agoraChannel = channel.isNotEmpty ? channel : defaults.kDefaultAgoraChannel;
+    defaults.chatRoomId = roomId.isNotEmpty ? roomId : defaults.kDefaultChatRoomId;
+    defaults.agoraToken = _rc.getString('agora_token'); // empty = no token (App ID only mode)
   }
 }

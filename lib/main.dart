@@ -19,7 +19,11 @@ void main() async {
   await DeviceService.initSenderId();
   LogService.setDeviceId(DeviceService.deviceId);
   LogService.i('App', 'Started — role: ${DeviceService.role}');
-  await NotificationService.init();
+  try {
+    await NotificationService.init();
+  } catch (e) {
+    LogService.e('App', 'NotificationService.init failed: $e');
+  }
   runApp(const TasksApp());
 }
 
