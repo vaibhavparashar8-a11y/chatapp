@@ -193,31 +193,48 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   Future<void> _sendImage(ImageSource source) async {
     _ctrl.setShowAttachMenu(false);
-    final picked = await _picker.pickImage(source: source, imageQuality: 70);
-    if (picked == null) return;
-    await _ctrl.sendMedia(File(picked.path), MessageType.image);
+    if (source == ImageSource.camera) {
+      // Camera always single shot
+      final picked = await _picker.pickImage(source: source, imageQuality: 70);
+      if (picked == null) return;
+      await _ctrl.sendMedia(File(picked.path), MessageType.image);
+    } else {
+      // Gallery — allow multi-select
+      final picked = await _picker.pickMultiImage(imageQuality: 70);
+      if (picked.isEmpty) return;
+      for (final xf in picked) {
+        await _ctrl.sendMedia(File(xf.path), MessageType.image);
+      }
+    }
   }
 
   Future<void> _sendVideo() async {
     _ctrl.setShowAttachMenu(false);
-    final picked = await _picker.pickVideo(source: ImageSource.gallery);
-    if (picked == null) return;
-    await _ctrl.sendMedia(File(picked.path), MessageType.video);
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      type: FileType.video,
+    );
+    if (result == null || result.files.isEmpty) return;
+    for (final f in result.files) {
+      if (f.path == null) continue;
+      await _ctrl.sendMedia(File(f.path!), MessageType.video, fileName: f.name);
+    }
   }
 
   Future<void> _sendFile() async {
     _ctrl.setShowAttachMenu(false);
-    final result = await FilePicker.platform.pickFiles(allowMultiple: false, type: FileType.any);
+    final result = await FilePicker.platform.pickFiles(allowMultiple: true, type: FileType.any);
     if (result == null || result.files.isEmpty) return;
-    final f = result.files.first;
-    if (f.path == null) return;
-    final ext = f.extension?.toLowerCase() ?? '';
-    var type = MessageType.file;
-    if (['jpg', 'jpeg', 'png', 'webp'].contains(ext)) type = MessageType.image;
-    if (['mp4', 'mkv', 'mov', 'avi'].contains(ext)) type = MessageType.video;
-    if (ext == 'gif') type = MessageType.gif;
-    if (['mp3', 'wav', 'aac', 'm4a', 'ogg'].contains(ext)) type = MessageType.audio;
-    await _ctrl.sendMedia(File(f.path!), type, fileName: f.name);
+    for (final f in result.files) {
+      if (f.path == null) continue;
+      final ext = f.extension?.toLowerCase() ?? '';
+      var type = MessageType.file;
+      if (['jpg', 'jpeg', 'png', 'webp'].contains(ext)) type = MessageType.image;
+      if (['mp4', 'mkv', 'mov', 'avi'].contains(ext)) type = MessageType.video;
+      if (ext == 'gif') type = MessageType.gif;
+      if (['mp3', 'wav', 'aac', 'm4a', 'ogg'].contains(ext)) type = MessageType.audio;
+      await _ctrl.sendMedia(File(f.path!), type, fileName: f.name);
+    }
   }
 
   void _startCall(bool isVideo) {
