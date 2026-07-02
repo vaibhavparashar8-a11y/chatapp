@@ -12,6 +12,7 @@ Every change must follow this flow, no exceptions:
 3. `git push origin <branch>`
 4. Create a PR — never merge directly into main
 5. User merges the PR on GitHub
+6. **After every merge into main: run `git fetch origin && git pull origin main`** to bring local in sync — confirm with `git status` showing "up to date"
 
 **Never commit directly to `main`.**
 **Never push directly to `main`.**
