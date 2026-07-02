@@ -6,6 +6,8 @@ import 'chat_screen.dart';
 import '../services/device_service.dart';
 import '../services/remote_config_service.dart';
 import '../services/notification_service.dart';
+import '../services/reminder_service.dart';
+import '../constants.dart' show mySenderId, otherDisplayName;
 import '../utils/time_utils.dart';
 
 // ── Models ────────────────────────────────────────────────────────────────────
@@ -200,6 +202,67 @@ class _TodoScreenState extends State<TodoScreen> {
             : 'Could not set reminder. Please try again.'),
         behavior: SnackBarBehavior.floating,
       ));
+    }
+  }
+
+  /// Sends a reminder to the other person via Firestore.
+  /// Completely separate from the self-reminder flow — no shared dialog.
+  Future<void> _sendReminderToOther(_Todo todo) async {
+    if (!mounted) return;
+    final dueDate = await _pickDateTime();
+    if (dueDate == null || !mounted) return;
+
+    bool addToList = false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: Text('Remind $otherDisplayName'),
+          content: Row(
+            children: [
+              Checkbox(
+                value: addToList,
+                onChanged: (v) => setState(() { addToList = v ?? false; }),
+              ),
+              const Expanded(child: Text('Also add to their task list')),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Send'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final otherId = mySenderId == 'A' ? 'B' : 'A';
+    try {
+      await ReminderService.createReminder(
+        forUser: otherId,
+        title: todo.title,
+        scheduledAt: dueDate,
+        addToList: addToList,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Reminder sent to $otherDisplayName'),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Could not send reminder. Please try again.'),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
     }
   }
 
@@ -664,6 +727,18 @@ class _TodoScreenState extends State<TodoScreen> {
                                   ),
                                   onPressed: () =>
                                       _setCalendarReminder(todo),
+                                  padding: const EdgeInsets.all(6),
+                                  constraints: const BoxConstraints(),
+                                ),
+                                // Send reminder to other person
+                                IconButton(
+                                  icon: Icon(
+                                    Icons.add_alert_rounded,
+                                    size: 19,
+                                    color: Colors.grey.shade400,
+                                  ),
+                                  onPressed: () =>
+                                      _sendReminderToOther(todo),
                                   padding: const EdgeInsets.all(6),
                                   constraints: const BoxConstraints(),
                                 ),
