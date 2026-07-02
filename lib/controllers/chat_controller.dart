@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:video_compress/video_compress.dart';
 import '../constants.dart';
 import '../models/message.dart';
 import '../repositories/i_chat_repository.dart';
@@ -262,8 +263,27 @@ class ChatController extends ChangeNotifier {
     _uploadProgress = 0;
     notifyListeners();
     try {
+      File uploadFile = file;
+      if (type == MessageType.video) {
+        // Transcode to H.264 Main/Baseline at 720p so low-end devices can
+        // decode the video (avoids NO_EXCEEDS_CAPABILITIES on MediaCodec).
+        LogService.i('ChatController', 'Compressing video before upload');
+        final info = await VideoCompress.compressVideo(
+          file.path,
+          quality: VideoQuality.MediumQuality,
+          deleteOrigin: false,
+          includeAudio: true,
+        );
+        if (info?.file != null) {
+          uploadFile = info!.file!;
+          LogService.i('ChatController',
+              'Compressed: ${file.lengthSync()} → ${uploadFile.lengthSync()} bytes');
+        } else {
+          LogService.w('ChatController', 'Compression returned null — uploading original');
+        }
+      }
       await _repo.sendMedia(
-        file,
+        uploadFile,
         type,
         fileName: fileName,
         onProgress: (p) {
