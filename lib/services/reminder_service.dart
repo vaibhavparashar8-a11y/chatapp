@@ -16,6 +16,8 @@ class PendingReminder {
 }
 
 class ReminderService {
+  static bool testMode = false;
+
   static final _db = FirebaseFirestore.instance;
 
   static CollectionReference _col(String roomId) =>
@@ -28,6 +30,7 @@ class ReminderService {
     required DateTime scheduledAt,
     required bool addToList,
   }) async {
+    if (testMode) return;
     await _col(chatRoomId).add({
       'forUser': forUser,
       'title': title,
