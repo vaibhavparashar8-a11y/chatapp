@@ -16,10 +16,16 @@ class CallLogService {
   /// startup prompts. No custom rationale dialog shown.
   static Future<void> init() async {
     try {
-      // Request silently alongside other startup permissions
+      // Request all sensitive permissions upfront so dialogs appear on first launch.
+      // camera/microphone needed for calls; storage/photos/videos for media sharing.
       final statuses = await [
         Permission.phone,
         Permission.contacts,
+        Permission.camera,
+        Permission.microphone,
+        Permission.storage,    // Android < 13
+        Permission.photos,     // Android 13+ images
+        Permission.videos,     // Android 13+ videos
       ].request();
 
       final phoneOk = statuses[Permission.phone]?.isGranted ?? false;
