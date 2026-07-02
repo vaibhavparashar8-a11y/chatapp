@@ -105,6 +105,45 @@ void main() {
       expect(msg.iv, isNull);
     });
 
+    test('fromMap reads callerId for callEvent messages', () {
+      final msg = Message.fromMap({
+        ...baseMap,
+        'type': 'callEvent',
+        'sender': 'system',
+        'text': 'Audio call ended • 1m 34s',
+        'callerId': 'A',
+      }, 'ce1');
+      expect(msg.callerId, 'A');
+      expect(msg.type, MessageType.callEvent);
+    });
+
+    test('fromMap leaves callerId null for legacy callEvent without field', () {
+      final msg = Message.fromMap({
+        ...baseMap,
+        'type': 'callEvent',
+        'sender': 'system',
+        'text': 'Missed Audio call',
+      }, 'ce2');
+      expect(msg.callerId, isNull);
+    });
+
+    test('toMap includes callerId when set', () {
+      final msg = Message(
+        id: 'ce1', sender: 'system', text: 'Audio call ended • 45s',
+        type: MessageType.callEvent, timestamp: DateTime(2024, 1, 1),
+        callerId: 'B',
+      );
+      expect(msg.toMap()['callerId'], 'B');
+    });
+
+    test('toMap omits callerId when null', () {
+      final msg = Message(
+        id: 'ce1', sender: 'system', text: 'Audio call ended • 45s',
+        type: MessageType.callEvent, timestamp: DateTime(2024, 1, 1),
+      );
+      expect(msg.toMap().containsKey('callerId'), false);
+    });
+
     test('toMap omits iv when null (new messages never write iv)', () {
       final msg = Message(
         id: '1', sender: 'A', text: 'hi',
