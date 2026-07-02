@@ -109,22 +109,40 @@ class _MessageBubbleState extends State<MessageBubble>
 
   Widget _buildCallEventRow() {
     final text = widget.message.text;
-    final isVideo = text.toLowerCase().contains('video');
+    final lower = text.toLowerCase();
+    final isVideo = lower.contains('video');
+    final isMissed = lower.contains('missed');
+    final time = DateFormat('HH:mm').format(widget.message.timestamp);
+
+    final IconData icon;
+    final Color iconColor;
+    if (isMissed) {
+      icon = isVideo ? Icons.videocam_off_rounded : Icons.phone_missed_rounded;
+      iconColor = const Color(0xAAFF6B6B);
+    } else {
+      icon = isVideo ? Icons.videocam_rounded : Icons.call_rounded;
+      iconColor = const Color(0x66FFFFFF);
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
       child: Row(
         children: [
           const Expanded(child: Divider(color: Color(0x33FFFFFF), thickness: 0.5)),
           const SizedBox(width: 10),
-          Icon(
-            isVideo ? Icons.videocam_rounded : Icons.call_rounded,
-            size: 13,
-            color: const Color(0x66FFFFFF),
-          ),
+          Icon(icon, size: 13, color: iconColor),
           const SizedBox(width: 5),
           Text(
             text,
-            style: const TextStyle(fontSize: 12, color: Color(0x66FFFFFF)),
+            style: TextStyle(
+              fontSize: 12,
+              color: isMissed ? const Color(0xAAFF6B6B) : const Color(0x66FFFFFF),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            time,
+            style: const TextStyle(fontSize: 11, color: Color(0x44FFFFFF)),
           ),
           const SizedBox(width: 10),
           const Expanded(child: Divider(color: Color(0x33FFFFFF), thickness: 0.5)),

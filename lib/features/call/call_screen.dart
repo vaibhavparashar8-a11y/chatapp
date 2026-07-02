@@ -33,6 +33,7 @@ class CallScreen extends StatefulWidget {
 class _CallScreenState extends State<CallScreen> {
   int? _remoteUid;
   bool _muted = false;
+  bool _speakerOn = false;
   bool _cameraOff = false;
   bool _callConnected = false;
   bool _engineReady = false;
@@ -88,6 +89,7 @@ class _CallScreenState extends State<CallScreen> {
     setState(() {
       _engineReady = true;
       _muted = CallService.isMuted;
+      _speakerOn = CallService.isSpeakerOn;
       _cameraOff = CallService.isCameraOff;
       if (remoteUid != null) {
         _remoteUid = remoteUid;
@@ -161,7 +163,11 @@ class _CallScreenState extends State<CallScreen> {
       Future.delayed(const Duration(seconds: 20), () {
         if (mounted && !_callConnected) {
           LogService.w('CallScreen', 'Timeout — no remote user joined after 20s');
-          _endCall(errorMsg: 'Call timed out. Check that the Agora token is valid.');
+          if (widget.isCaller) {
+            _endCall(missed: true);
+          } else {
+            _endCall(errorMsg: 'Call timed out. Check that the Agora token is valid.');
+          }
         }
       });
     } catch (e) {
@@ -182,14 +188,18 @@ class _CallScreenState extends State<CallScreen> {
     });
   }
 
-  Future<void> _endCall({String? errorMsg}) async {
+  Future<void> _endCall({String? errorMsg, bool missed = false}) async {
     if (_ending) return;
     _ending = true;
     callActiveNotifier.value = false;
     _stopwatch.stop();
-    if (widget.isCaller && _callConnected) {
+    if (widget.isCaller) {
       final label = widget.isVideo ? 'Video call' : 'Audio call';
-      await ChatService.sendCallEvent('$label ended • $_duration');
+      if (missed) {
+        await ChatService.sendCallEvent('Missed $label');
+      } else if (_callConnected) {
+        await ChatService.sendCallEvent('$label ended • $_duration');
+      }
     }
     await ChatService.updateCallStatus('ended');
     // Timeout so a stuck Agora engine can't block navigation forever.
@@ -403,9 +413,28 @@ class _CallScreenState extends State<CallScreen> {
                         )
                       else
                         _CallButton(
-                          icon: Icons.volume_up,
-                          label: 'Speaker',
-                          onTap: () {},
+                          icon: _speakerOn
+                              ? Icons.volume_up
+                              : Icons.volume_down_rounded,
+                          label: _speakerOn ? 'Speaker' : 'Earpiece',
+                          active: _speakerOn,
+                          onTap: () async {
+                            final next = !_speakerOn;
+                            setState(() => _speakerOn = next);
+                            await CallService.toggleSpeaker(next);
+                            // Release proximity lock on speaker (no need to dim
+                            // screen when phone isn't held to ear); re-acquire
+                            // when switching back to earpiece.
+                            if (next) {
+                              _proximityChannel
+                                  .invokeMethod('release')
+                                  .catchError((_) {});
+                            } else {
+                              _proximityChannel
+                                  .invokeMethod('acquire')
+                                  .catchError((_) {});
+                            }
+                          },
                         ),
                     ],
                   ),
@@ -425,6 +454,7 @@ class _CallButton extends StatelessWidget {
   final VoidCallback onTap;
   final Color? color;
   final double size;
+  final bool active;
 
   const _CallButton({
     required this.icon,
@@ -432,6 +462,7 @@ class _CallButton extends StatelessWidget {
     required this.onTap,
     this.color,
     this.size = 52,
+    this.active = false,
   });
 
   @override
@@ -445,7 +476,7 @@ class _CallButton extends StatelessWidget {
             width: size,
             height: size,
             decoration: BoxDecoration(
-              color: color ?? Colors.white24,
+              color: color ?? (active ? Colors.white54 : Colors.white24),
               shape: BoxShape.circle,
             ),
             child: Icon(icon, color: Colors.white, size: size * 0.45),

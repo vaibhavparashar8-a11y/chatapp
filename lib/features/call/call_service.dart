@@ -20,6 +20,7 @@ class CallService {
   // UI state persisted across minimize/restore
   static bool isMuted = false;
   static bool isCameraOff = false;
+  static bool isSpeakerOn = false;
 
   // Called when remote user leaves, even while UI is minimized
   static VoidCallback? onCallEnded;
@@ -139,6 +140,7 @@ class CallService {
     callStartTime = null;
     isMuted = false;
     isCameraOff = false;
+    isSpeakerOn = false;
     if (_handler != null) {
       _engine?.unregisterEventHandler(_handler!);
       _handler = null;
@@ -153,6 +155,11 @@ class CallService {
   static Future<void> toggleMute(bool muted) async {
     isMuted = muted;
     await _engine?.muteLocalAudioStream(muted);
+  }
+
+  static Future<void> toggleSpeaker(bool enabled) async {
+    isSpeakerOn = enabled;
+    await _engine?.setEnableSpeakerphone(enabled);
   }
 
   static Future<void> toggleCamera(bool disabled) async {
