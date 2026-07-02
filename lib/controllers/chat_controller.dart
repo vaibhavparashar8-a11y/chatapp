@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import '../constants.dart';
 import '../models/message.dart';
 import '../repositories/i_chat_repository.dart';
+import '../services/log_service.dart';
 
 /// Owns all chat business logic. Knows nothing about Flutter widgets or Firebase.
 ///
@@ -180,8 +181,8 @@ class ChatController extends ChangeNotifier {
         final newOnes = older.where((m) => !existingIds.contains(m.id)).toList();
         _olderMessages = [...newOnes, ..._olderMessages];
       }
-    } catch (_) {
-      // Silent — user can trigger again by scrolling
+    } catch (e) {
+      LogService.w('ChatController', 'loadMoreMessages failed: $e');
     } finally {
       _loadingMore = false;
       notifyListeners();
@@ -250,6 +251,7 @@ class ChatController extends ChangeNotifier {
       );
       // Stream listener removes the entry once clientId is confirmed
     } catch (e) {
+      LogService.e('ChatController', 'sendText failed: $e');
       entry.failed = true;
       notifyListeners();
       onUploadError?.call(e.toString().split(']').last.trim());
@@ -270,6 +272,7 @@ class ChatController extends ChangeNotifier {
         },
       );
     } catch (e) {
+      LogService.e('ChatController', 'sendMedia failed: $e');
       onUploadError?.call(e.toString().split(']').last.trim());
     } finally {
       _uploadProgress = null;
@@ -295,6 +298,7 @@ class ChatController extends ChangeNotifier {
         clientId: entry.clientId,
       );
     } catch (e) {
+      LogService.e('ChatController', 'retryMessage failed: $e');
       entry.failed = true;
       notifyListeners();
       onUploadError?.call(e.toString().split(']').last.trim());

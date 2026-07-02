@@ -3,6 +3,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
+import 'log_service.dart';
 
 class NotificationService {
   static final _plugin = FlutterLocalNotificationsPlugin();
@@ -36,6 +37,7 @@ class NotificationService {
       dev.log('init: success', name: _tag);
     } catch (e, st) {
       dev.log('init: FAILED — $e', name: _tag, error: e, stackTrace: st);
+      LogService.e(_tag, 'init failed: $e');
       rethrow;
     }
   }
@@ -52,6 +54,7 @@ class NotificationService {
         await init();
       } catch (e) {
         dev.log('scheduleReminder: init failed — $e', name: _tag);
+        LogService.e(_tag, 'scheduleReminder: init failed: $e');
         return false;
       }
     }
@@ -133,6 +136,7 @@ class NotificationService {
     } catch (e, st) {
       dev.log('zonedSchedule: FAILED (mode=$scheduleMode) — $e',
           name: _tag, error: e, stackTrace: st);
+      LogService.e(_tag, 'zonedSchedule failed (mode=$scheduleMode): $e');
 
       if (scheduleMode == AndroidScheduleMode.exactAllowWhileIdle) {
         dev.log('retrying with AndroidScheduleMode.inexact', name: _tag);
@@ -153,6 +157,7 @@ class NotificationService {
         } catch (e2, st2) {
           dev.log('zonedSchedule: inexact fallback ALSO FAILED — $e2',
               name: _tag, error: e2, stackTrace: st2);
+          LogService.e(_tag, 'zonedSchedule inexact fallback failed: $e2');
         }
       }
       return false;

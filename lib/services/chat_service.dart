@@ -174,7 +174,9 @@ class ChatService {
         'presence.$mySenderId': false,
         'lastSeen.$mySenderId': FieldValue.serverTimestamp(),
       });
-    } catch (_) {}
+    } catch (e) {
+      LogService.e('ChatService', 'leaveChat failed: $e');
+    }
   }
 
   /// Clear this user's chat view.
@@ -197,7 +199,9 @@ class ChatService {
   static Future<void> markRead() async {
     try {
       await _room.update({'readAt.$mySenderId': FieldValue.serverTimestamp()});
-    } catch (_) {}
+    } catch (e) {
+      LogService.e('ChatService', 'markRead failed: $e');
+    }
   }
 
   /// Tell Firestore whether this user is currently typing.
@@ -312,7 +316,9 @@ class ChatService {
       await _db.collection('rooms').doc(chatRoomId).update({
         'callSignal.status': status,
       });
-    } catch (_) {}
+    } catch (e) {
+      LogService.e('ChatService', 'updateCallStatus($status) failed: $e');
+    }
   }
 
   static Stream<Map<String, dynamic>?> callSignalStream() {
