@@ -37,8 +37,8 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
         setState(() => _initialized = true);
         ctrl.play();
       }
-    } catch (e) {
-      debugPrint('VideoPlayer: init failed — $e');
+    } catch (e, st) {
+      LogService.e('VideoPlayer', 'init failed — url=${widget.url} err=$e\n$st');
       if (mounted) setState(() { _started = false; _error = true; });
     }
   }
@@ -50,8 +50,8 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
       final path = await _savePath(widget.fileName);
       await Dio().download(widget.url, path);
       await OpenFile.open(path);
-    } catch (e) {
-      debugPrint('VideoPlayer: open external failed — $e');
+    } catch (e, st) {
+      LogService.e('VideoPlayer', 'open external failed — ${widget.fileName} err=$e\n$st');
     } finally {
       if (mounted) setState(() => _openingExternal = false);
     }

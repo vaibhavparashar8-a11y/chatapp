@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import '../constants.dart';
 import '../models/message.dart';
 import '../screens/media_viewer_screen.dart';
+import '../services/log_service.dart';
 
 part 'bubbles/shared.dart';
 part 'bubbles/encrypted_image.dart';
