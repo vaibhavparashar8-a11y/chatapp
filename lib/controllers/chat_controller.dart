@@ -38,6 +38,7 @@ class ChatController extends ChangeNotifier {
   bool _loadingMore = false;
 
   bool _didLeave = false;
+  int _leaveVersion = 0;  // incremented by enter() to abort a concurrent leave()
   bool _isTyping = false;
   bool _markReadPaused = false;
   Timer? _typingTimer;
@@ -145,8 +146,9 @@ class ChatController extends ChangeNotifier {
 
   Future<void> enter() async {
     _didLeave = false;
+    _leaveVersion++;          // abort any leave() suspended at an await point
     await _repo.enterChat();
-    _scheduleMarkRead(); // always mark read on resume, not just when new msgs arrive
+    _scheduleMarkRead();
   }
 
   Future<void> leave() async {
@@ -154,7 +156,9 @@ class ChatController extends ChangeNotifier {
     _didLeave = true;
     _typingTimer?.cancel();
     _markReadTimer?.cancel();
+    final version = _leaveVersion;
     await _repo.setTyping(false);
+    if (_leaveVersion != version) return;  // enter() was called while we awaited
     await _repo.leaveChat();
   }
 
