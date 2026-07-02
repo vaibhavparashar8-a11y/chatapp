@@ -51,13 +51,13 @@ class ReminderService {
         .where('locallyScheduled', isEqualTo: false)
         .get();
     return snap.docs.map((d) {
-      final data = d.data() as Map<String, dynamic>;
+      final data = d.data();
       return PendingReminder(
         id: d.id,
         title: (data['title'] as String?)?.trim().isNotEmpty == true
             ? data['title'] as String
             : 'Reminder',
-        scheduledAt: (data['scheduledAt'] as Timestamp?)!.toDate(),
+        scheduledAt: (data['scheduledAt'] as Timestamp).toDate(),
         addToList: (data['addToList'] as bool?) ?? false,
       );
     }).toList();
