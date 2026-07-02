@@ -3,11 +3,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:chatapp/constants.dart';
 import 'package:chatapp/controllers/chat_controller.dart';
 import 'package:chatapp/models/message.dart';
+import 'package:chatapp/services/log_service.dart';
 import '../helpers/fake_chat_repository.dart';
 
 void main() {
   // Set a stable sender ID for all tests
-  setUpAll(() => mySenderId = 'A');
+  setUpAll(() {
+    mySenderId = 'A';
+    LogService.testMode = true;
+  });
+
+  tearDownAll(() => LogService.testMode = false);
 
   group('ChatController — init', () {
     test('enters chat and subscribes to streams on init()', () async {
