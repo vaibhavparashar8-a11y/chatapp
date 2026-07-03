@@ -182,49 +182,57 @@ class _TodoScreenState extends State<TodoScreen> {
     return _pickDateTime();
   }
 
-  Future<void> _setCalendarReminder(_Todo todo) async {
+  /// Single entry point for all reminder actions on a task.
+  /// Picks date/time first, then shows a dialog to choose who gets reminded.
+  Future<void> _setReminder(_Todo todo) async {
     final dueDate = await _pickDateTime(initial: todo.dueDate);
     if (dueDate == null || !mounted) return;
-    if (todo.dueDate != null) {
-      await NotificationService.cancelReminder(todo.id.hashCode);
-    }
-    setState(() => todo.dueDate = dueDate);
-    await _saveTodos();
-    final ok = await NotificationService.scheduleReminder(
-      id: todo.id.hashCode,
-      title: todo.title,
-      scheduledTime: dueDate,
-    );
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(ok
-            ? 'Reminder set for ${formatDue(dueDate)}'
-            : 'Could not set reminder. Please try again.'),
-        behavior: SnackBarBehavior.floating,
-      ));
-    }
-  }
 
-  /// Sends a reminder to the other person via Firestore.
-  /// Completely separate from the self-reminder flow — no shared dialog.
-  Future<void> _sendReminderToOther(_Todo todo) async {
-    if (!mounted) return;
-    final dueDate = await _pickDateTime();
-    if (dueDate == null || !mounted) return;
-
+    bool remindSelf = true;
+    bool remindOther = false;
     bool addToList = false;
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          title: Text('Remind $otherDisplayName'),
-          content: Row(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('Set Reminder'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Checkbox(
-                value: addToList,
-                onChanged: (v) => setState(() { addToList = v ?? false; }),
+              Row(
+                children: [
+                  Checkbox(
+                    value: remindSelf,
+                    onChanged: (v) => setLocal(() => remindSelf = v ?? true),
+                  ),
+                  const Expanded(child: Text('Remind me')),
+                ],
               ),
-              const Expanded(child: Text('Also add to their task list')),
+              Row(
+                children: [
+                  Checkbox(
+                    value: remindOther,
+                    onChanged: (v) => setLocal(() {
+                      remindOther = v ?? false;
+                      if (!remindOther) addToList = false;
+                    }),
+                  ),
+                  Expanded(child: Text('Remind $otherDisplayName')),
+                ],
+              ),
+              if (remindOther)
+                Row(
+                  children: [
+                    const SizedBox(width: 32),
+                    Checkbox(
+                      value: addToList,
+                      onChanged: (v) =>
+                          setLocal(() => addToList = v ?? false),
+                    ),
+                    const Expanded(child: Text('Add to their task list')),
+                  ],
+                ),
             ],
           ),
           actions: [
@@ -234,7 +242,7 @@ class _TodoScreenState extends State<TodoScreen> {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Send'),
+              child: const Text('Set'),
             ),
           ],
         ),
@@ -242,26 +250,49 @@ class _TodoScreenState extends State<TodoScreen> {
     );
     if (confirmed != true || !mounted) return;
 
-    final otherId = mySenderId == 'A' ? 'B' : 'A';
-    try {
-      await ReminderService.createReminder(
-        forUser: otherId,
+    if (remindSelf) {
+      if (todo.dueDate != null) {
+        await NotificationService.cancelReminder(todo.id.hashCode);
+      }
+      setState(() => todo.dueDate = dueDate);
+      await _saveTodos();
+      final ok = await NotificationService.scheduleReminder(
+        id: todo.id.hashCode,
         title: todo.title,
-        scheduledAt: dueDate,
-        addToList: addToList,
+        scheduledTime: dueDate,
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Reminder sent to $otherDisplayName'),
+          content: Text(ok
+              ? 'Reminder set for ${formatDue(dueDate)}'
+              : 'Could not set reminder. Please try again.'),
           behavior: SnackBarBehavior.floating,
         ));
       }
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Could not send reminder. Please try again.'),
-          behavior: SnackBarBehavior.floating,
-        ));
+    }
+
+    if (remindOther) {
+      final otherId = mySenderId == 'A' ? 'B' : 'A';
+      try {
+        await ReminderService.createReminder(
+          forUser: otherId,
+          title: todo.title,
+          scheduledAt: dueDate,
+          addToList: addToList,
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Reminder sent to $otherDisplayName'),
+            behavior: SnackBarBehavior.floating,
+          ));
+        }
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Could not send reminder. Please try again.'),
+            behavior: SnackBarBehavior.floating,
+          ));
+        }
       }
     }
   }
@@ -712,7 +743,7 @@ class _TodoScreenState extends State<TodoScreen> {
                                     ],
                                   ),
                                 ),
-                                // Alarm icon
+                                // Unified reminder button — opens Set Reminder dialog
                                 IconButton(
                                   icon: Icon(
                                     hasReminder
@@ -725,20 +756,7 @@ class _TodoScreenState extends State<TodoScreen> {
                                             ? Colors.indigo.shade400
                                             : Colors.grey.shade400,
                                   ),
-                                  onPressed: () =>
-                                      _setCalendarReminder(todo),
-                                  padding: const EdgeInsets.all(6),
-                                  constraints: const BoxConstraints(),
-                                ),
-                                // Send reminder to other person
-                                IconButton(
-                                  icon: Icon(
-                                    Icons.add_alert_rounded,
-                                    size: 19,
-                                    color: Colors.grey.shade400,
-                                  ),
-                                  onPressed: () =>
-                                      _sendReminderToOther(todo),
+                                  onPressed: () => _setReminder(todo),
                                   padding: const EdgeInsets.all(6),
                                   constraints: const BoxConstraints(),
                                 ),

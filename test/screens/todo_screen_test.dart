@@ -308,109 +308,140 @@ void main() {
     });
   });
 
-  // ── Remind-other button (add_alert icon) ─────────────────────────────────────
+  // ── Unified Set Reminder dialog ───────────────────────────────────────────────
 
-  testWidgets('each task shows an add_alert icon for sending reminder to other',
-      (tester) async {
+  testWidgets('no add_alert icon — only one alarm button per task', (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
     await addTask(tester, 'Call dentist');
-    expect(find.byIcon(Icons.add_alert_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.add_alert_rounded), findsNothing);
+    expect(find.byIcon(Icons.add_alarm_rounded), findsOneWidget);
   });
 
-  testWidgets('two tasks show two add_alert buttons', (tester) async {
-    await tester.pumpWidget(wrap());
-    await tester.pump();
-    await addTask(tester, 'Task one');
-    await addTask(tester, 'Task two');
-    expect(find.byIcon(Icons.add_alert_rounded), findsNWidgets(2));
-  });
-
-  testWidgets('tapping add_alert opens date picker then Remind dialog',
+  testWidgets('tapping alarm opens date/time pickers then Set Reminder dialog',
       (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
     await addTask(tester, 'Buy flowers');
 
-    await tester.tap(find.byIcon(Icons.add_alert_rounded));
+    await tester.tap(find.byIcon(Icons.add_alarm_rounded));
     await tester.pumpAndSettle();
 
-    // Date picker is open — confirm it
+    // Date picker
     expect(find.text('OK'), findsOneWidget);
     await tester.tap(find.text('OK'));
     await tester.pumpAndSettle();
 
-    // Time picker is open — confirm it
+    // Time picker
     expect(find.text('OK'), findsOneWidget);
     await tester.tap(find.text('OK'));
     await tester.pumpAndSettle();
 
-    // Remind dialog is now visible
+    // Unified dialog is visible with both options
+    expect(find.text('Set Reminder'), findsOneWidget);
+    expect(find.text('Remind me'), findsOneWidget);
     expect(find.text('Remind Them'), findsOneWidget);
-    expect(find.text('Also add to their task list'), findsOneWidget);
 
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
   });
 
-  testWidgets('Remind dialog checkbox is unchecked by default', (tester) async {
+  testWidgets('Set Reminder dialog: Remind me pre-checked, Remind Them unchecked',
+      (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
     await addTask(tester, 'Walk dog');
 
-    await tester.tap(find.byIcon(Icons.add_alert_rounded));
+    await tester.tap(find.byIcon(Icons.add_alarm_rounded));
     await tester.pumpAndSettle();
     await tester.tap(find.text('OK')); // date
     await tester.pumpAndSettle();
     await tester.tap(find.text('OK')); // time
     await tester.pumpAndSettle();
 
-    final checkbox = tester.widget<Checkbox>(find.byType(Checkbox).last);
-    expect(checkbox.value, isFalse);
+    final checkboxes = tester.widgetList<Checkbox>(find.byType(Checkbox)).toList();
+    // First checkbox is the task tile's done-checkbox, next two are in the dialog
+    final remindMe = checkboxes[checkboxes.length - 2];
+    final remindOther = checkboxes[checkboxes.length - 1];
+    expect(remindMe.value, isTrue);
+    expect(remindOther.value, isFalse);
 
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
   });
 
-  testWidgets('Remind dialog checkbox can be toggled', (tester) async {
+  testWidgets('checking Remind Them reveals Add to their task list option',
+      (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
     await addTask(tester, 'Pick up parcel');
 
-    await tester.tap(find.byIcon(Icons.add_alert_rounded));
+    await tester.tap(find.byIcon(Icons.add_alarm_rounded));
     await tester.pumpAndSettle();
     await tester.tap(find.text('OK')); // date
     await tester.pumpAndSettle();
     await tester.tap(find.text('OK')); // time
     await tester.pumpAndSettle();
 
+    expect(find.text('Add to their task list'), findsNothing);
+
+    // Tap the "Remind Them" checkbox (last checkbox in dialog)
     await tester.tap(find.byType(Checkbox).last);
     await tester.pump();
 
-    final checkbox = tester.widget<Checkbox>(find.byType(Checkbox).last);
-    expect(checkbox.value, isTrue);
+    expect(find.text('Add to their task list'), findsOneWidget);
 
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
   });
 
-  testWidgets('Send in Remind dialog shows snackbar confirmation',
+  testWidgets('Set with Remind me only shows reminder-set snackbar',
+      (tester) async {
+    await tester.pumpWidget(wrap());
+    await tester.pump();
+    await addTask(tester, 'Morning run');
+
+    await tester.tap(find.byIcon(Icons.add_alarm_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // date
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // time
+    await tester.pumpAndSettle();
+
+    // Remind me is already checked; leave Remind Them unchecked
+    await tester.tap(find.text('Set'));
+    await tester.pumpAndSettle();
+
+    // NotificationService.testMode returns true — snackbar shows formatted date
+    expect(find.textContaining('Reminder set for'), findsOneWidget);
+    expect(find.text('Reminder sent to Them'), findsNothing);
+  });
+
+  testWidgets('Set with Remind Them checked shows Reminder sent snackbar',
       (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
     await addTask(tester, 'Gym session');
 
-    await tester.tap(find.byIcon(Icons.add_alert_rounded));
+    await tester.tap(find.byIcon(Icons.add_alarm_rounded));
     await tester.pumpAndSettle();
     await tester.tap(find.text('OK')); // date
     await tester.pumpAndSettle();
     await tester.tap(find.text('OK')); // time
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Send'));
+    // Checkboxes in tree: [0]=task-done, [1]=Remind me (checked), [2]=Remind Them
+    // Uncheck "Remind me" so only the "send to other" path runs.
+    await tester.tap(find.byType(Checkbox).at(1));
+    await tester.pump();
+    // Check "Remind Them" (still index 2 / last since no extra checkbox yet)
+    await tester.tap(find.byType(Checkbox).last);
+    await tester.pump();
+
+    await tester.tap(find.text('Set'));
     await tester.pumpAndSettle();
 
-    // ReminderService.testMode skips the Firestore write; snackbar still shows
+    // ReminderService.testMode skips Firestore; snackbar still shows
     expect(find.text('Reminder sent to Them'), findsOneWidget);
   });
 }
