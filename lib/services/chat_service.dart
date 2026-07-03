@@ -1,5 +1,6 @@
 // lib/services/chat_service.dart
 
+import 'dart:async';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -13,6 +14,35 @@ class ChatService {
   static final _db = FirebaseFirestore.instance;
   static final _storage = FirebaseStorage.instance;
   static const _uuid = Uuid();
+
+  // ── Shared room-document stream ──────────────────────────────────────────
+  //
+  // Previously each derived stream (typing, presence, readAt, lastSeen,
+  // callSignal, appLastOpened) opened its own _room.snapshots() listener.
+  // Six simultaneous listeners on the same document meant every write to that
+  // document (e.g. someone starts typing) cost 6 Firestore reads instead of 1.
+  //
+  // _roomBcast holds a single broadcast StreamController backed by exactly one
+  // Firestore listener. All derived streams below subscribe to it, so the SDK
+  // only reports one snapshot per document change regardless of how many callers
+  // are listening.  The controller is created lazily and lives for the app
+  // lifetime — acceptable for a single-room chat app.
+  static StreamController<Map<String, dynamic>>? _roomBcast;
+
+  static Stream<Map<String, dynamic>> _sharedRoomData() {
+    if (_roomBcast == null) {
+      _roomBcast = StreamController<Map<String, dynamic>>.broadcast();
+      _room.snapshots().listen(
+        (snap) => _roomBcast?.add(snap.data() as Map<String, dynamic>? ?? {}),
+        onError: (e, st) => _roomBcast?.addError(e, st),
+      );
+    }
+    return _roomBcast!.stream;
+  }
+
+  /// Publicly exposed so [DeviceService] and other callers outside this file
+  /// can fan out from the same single Firestore listener.
+  static Stream<Map<String, dynamic>> get roomDataStream => _sharedRoomData();
 
   static CollectionReference get _messages =>
       _db.collection('rooms').doc(chatRoomId).collection('messages');
@@ -221,11 +251,8 @@ class ChatService {
   /// Emits the timestamp when the other user last left the chat, or null.
   static Stream<DateTime?> otherLastSeenStream() {
     final otherId = mySenderId == 'A' ? 'B' : 'A';
-    return _room.snapshots().map((doc) {
-      if (!doc.exists) return null;
-      final data = doc.data() as Map<String, dynamic>? ?? {};
-      final lastSeen = data['lastSeen'] as Map<String, dynamic>? ?? {};
-      final ts = lastSeen[otherId];
+    return _sharedRoomData().map((data) {
+      final ts = (data['lastSeen'] as Map<String, dynamic>? ?? {})[otherId];
       return ts != null ? (ts as dynamic).toDate() as DateTime : null;
     });
   }
@@ -233,33 +260,22 @@ class ChatService {
   /// Emits true while the other user has the chat screen open.
   static Stream<bool> otherPresenceStream() {
     final otherId = mySenderId == 'A' ? 'B' : 'A';
-    return _room.snapshots().map((doc) {
-      if (!doc.exists) return false;
-      final data = doc.data() as Map<String, dynamic>? ?? {};
-      final presence = data['presence'] as Map<String, dynamic>? ?? {};
-      return presence[otherId] == true;
-    });
+    return _sharedRoomData().map((data) =>
+        (data['presence'] as Map<String, dynamic>? ?? {})[otherId] == true);
   }
 
   /// Emits true whenever the other user is actively typing.
   static Stream<bool> otherTypingStream() {
     final otherId = mySenderId == 'A' ? 'B' : 'A';
-    return _room.snapshots().map((doc) {
-      if (!doc.exists) return false;
-      final data = doc.data() as Map<String, dynamic>? ?? {};
-      final typing = data['typing'] as Map<String, dynamic>? ?? {};
-      return typing[otherId] == true;
-    });
+    return _sharedRoomData().map((data) =>
+        (data['typing'] as Map<String, dynamic>? ?? {})[otherId] == true);
   }
 
   /// Stream of the other user's last-read timestamp for tick display.
   static Stream<DateTime?> otherReadAtStream() {
     final otherId = mySenderId == 'A' ? 'B' : 'A';
-    return _room.snapshots().map((doc) {
-      if (!doc.exists) return null;
-      final data = doc.data() as Map<String, dynamic>? ?? {};
-      final readAt = data['readAt'] as Map<String, dynamic>? ?? {};
-      final ts = readAt[otherId];
+    return _sharedRoomData().map((data) {
+      final ts = (data['readAt'] as Map<String, dynamic>? ?? {})[otherId];
       return ts != null ? (ts as dynamic).toDate() as DateTime : null;
     });
   }
@@ -378,9 +394,7 @@ class ChatService {
   }
 
   static Stream<Map<String, dynamic>?> callSignalStream() {
-    return _db.collection('rooms').doc(chatRoomId).snapshots().map((doc) {
-      if (!doc.exists) return null;
-      return (doc.data()?['callSignal']) as Map<String, dynamic>?;
-    });
+    return _sharedRoomData().map((data) =>
+        data['callSignal'] as Map<String, dynamic>?);
   }
 }

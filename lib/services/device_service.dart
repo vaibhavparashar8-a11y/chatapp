@@ -3,6 +3,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../constants.dart';
+import 'chat_service.dart';
 import 'log_service.dart';
 
 class DeviceService {
@@ -122,12 +123,8 @@ class DeviceService {
   /// Stream of the timestamp when the *other* device last opened the app.
   /// Emits null if the field has never been written.
   static Stream<DateTime?> otherLastOpenedStream(String otherId) {
-    return FirebaseFirestore.instance
-        .collection('rooms')
-        .doc(chatRoomId)
-        .snapshots()
-        .map((snap) {
-      final ts = (snap.data()?['appLastOpened'] ?? {})[otherId];
+    return ChatService.roomDataStream.map((data) {
+      final ts = (data['appLastOpened'] as Map<String, dynamic>? ?? {})[otherId];
       if (ts is Timestamp) return ts.toDate();
       return null;
     });
