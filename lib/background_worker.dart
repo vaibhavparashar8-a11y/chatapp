@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,7 +9,6 @@ import 'services/reminder_service.dart';
 const kReminderTaskName = 'checkReminders';
 const _roleKey = 'sender_role';
 const _roomKey = '_bgChatRoomId';
-const _todosKey = 'todos_v1';
 
 /// WorkManager entry point — runs in a background Dart isolate.
 /// Must be a top-level function annotated with vm:entry-point.
@@ -76,7 +74,7 @@ void callbackDispatcher() {
       // Optionally insert into B's todo list in SharedPreferences.
       if (r.addToList) {
         try {
-          await _insertTodo(prefs, r);
+          await ReminderService.insertTodoToPrefs(prefs, r);
         } catch (_) {
           // Non-fatal — notification is already scheduled
         }
@@ -95,19 +93,3 @@ void callbackDispatcher() {
   });
 }
 
-/// Insert a reminder as a todo task into SharedPreferences.
-/// Guards against duplicates in case the worker runs twice.
-Future<void> _insertTodo(SharedPreferences prefs, PendingReminder r) async {
-  final raw = prefs.getString(_todosKey);
-  final list = raw != null ? jsonDecode(raw) as List : <dynamic>[];
-  final guardId = 'reminder_${r.id}';
-  if (list.any((e) => (e as Map)['id'] == guardId)) return; // already added
-  list.insert(0, {
-    'id': guardId,
-    'title': r.title,
-    'done': false,
-    'dueDate': r.scheduledAt.toIso8601String(),
-    'subtasks': <dynamic>[],
-  });
-  await prefs.setString(_todosKey, jsonEncode(list));
-}

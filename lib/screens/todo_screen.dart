@@ -7,7 +7,7 @@ import '../services/device_service.dart';
 import '../services/remote_config_service.dart';
 import '../services/notification_service.dart';
 import '../services/reminder_service.dart';
-import '../constants.dart' show mySenderId, otherDisplayName;
+import '../constants.dart' show mySenderId, otherDisplayName, todoRefreshNotifier;
 import '../utils/time_utils.dart';
 
 // ── Models ────────────────────────────────────────────────────────────────────
@@ -57,16 +57,20 @@ class _TodoScreenState extends State<TodoScreen> {
   void initState() {
     super.initState();
     _loadTodos();
+    todoRefreshNotifier.addListener(_onRemoteTaskArrived);
   }
 
   @override
   void dispose() {
+    todoRefreshNotifier.removeListener(_onRemoteTaskArrived);
     _addCtrl.dispose();
     _addFocus.dispose();
     _searchCtrl.dispose();
     for (final c in _subCtrl.values) c.dispose();
     super.dispose();
   }
+
+  void _onRemoteTaskArrived() => _loadTodos();
 
   // ── Persistence ───────────────────────────────────────────────────────────
 

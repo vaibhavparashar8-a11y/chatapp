@@ -37,6 +37,7 @@ dependencies:
   shared_preferences: ^2.2.2
   crypto: ^3.0.3
   firebase_remote_config: ^4.4.0
+  firebase_messaging: ^14.9.4
   gal: ^1.1.0
   flutter_local_notifications: ^17.0.0
   flutter_timezone: ^5.1.0

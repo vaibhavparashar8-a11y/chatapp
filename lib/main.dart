@@ -7,11 +7,13 @@ import 'services/notification_service.dart';
 import 'services/device_service.dart';
 import 'services/log_service.dart';
 import 'services/remote_config_service.dart';
+import 'services/reminder_service.dart';
+import 'services/fcm_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
 import 'services/call_log_service.dart';
 import 'background_worker.dart';
-import 'constants.dart' show chatRoomId;
+import 'constants.dart' show chatRoomId, mySenderId, todoRefreshNotifier;
 
 void main() {
   runZonedGuarded(_appMain, (error, stack) {
@@ -47,6 +49,26 @@ Future<void> _appMain() async {
   // Persist chatRoomId so the background worker (separate isolate) can read it.
   final prefs = await SharedPreferences.getInstance();
   await prefs.setString('_bgChatRoomId', chatRoomId);
+
+  // FCM: request permission, store token, wire up message handlers.
+  unawaited(FcmService.init(forUser: mySenderId));
+
+  // Foreground stream: fires within seconds when the other user creates a
+  // reminder for us — schedules the local notification immediately instead
+  // of waiting for the next WorkManager window (15-30 min).
+  ReminderService.pendingStream(mySenderId).listen((r) async {
+    final ok = await NotificationService.scheduleReminder(
+      id: r.id.hashCode.abs() % 0x7FFFFFFF,
+      title: r.title,
+      scheduledTime: r.scheduledAt,
+    );
+    if (!ok) return;
+    if (r.addToList) {
+      await ReminderService.insertTodoToPrefs(prefs, r);
+      todoRefreshNotifier.value++;
+    }
+    await ReminderService.markScheduled(r.id, chatRoomId);
+  });
 
   // WorkManager: register once; survives app restarts and device reboots.
   // The periodic task picks up Firestore reminders set by the other user and

@@ -180,4 +180,36 @@ class NotificationService {
       dev.log('cancelReminder: failed — $e', name: _tag);
     }
   }
+
+  /// Show an immediate (non-scheduled) notification — used when an FCM
+  /// push arrives to alert the user right away regardless of app state.
+  static Future<void> showNow({
+    required int id,
+    required String title,
+    required String body,
+  }) async {
+    if (testMode) return;
+    if (!_initialized) {
+      try {
+        await init();
+      } catch (_) {
+        return;
+      }
+    }
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        _channelId,
+        _channelName,
+        channelDescription: 'Reminders for your to-do tasks',
+        importance: Importance.high,
+        priority: Priority.high,
+      ),
+    );
+    try {
+      await _plugin.show(id, title, body, details);
+      dev.log('showNow: id=$id title=$title', name: _tag);
+    } catch (e) {
+      dev.log('showNow: FAILED — $e', name: _tag);
+    }
+  }
 }
