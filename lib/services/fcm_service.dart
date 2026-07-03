@@ -4,6 +4,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
+import '../utils/time_utils.dart';
 import 'notification_service.dart';
 import 'reminder_service.dart';
 
@@ -31,12 +32,9 @@ Future<void> _processReminderPayload(Map<String, dynamic> data) async {
 
   if (reminderId == null || scheduledAtStr == null) return;
 
-  DateTime scheduledAt;
-  try {
-    scheduledAt = DateTime.parse(scheduledAtStr);
-  } catch (_) {
-    return;
-  }
+  // MUST be local time: the payload string is UTC — see parseReminderTimestamp.
+  final scheduledAt = parseReminderTimestamp(scheduledAtStr);
+  if (scheduledAt == null) return;
 
   // Skip if the reminder time has already passed.
   if (scheduledAt.isBefore(DateTime.now().subtract(const Duration(minutes: 1)))) {
