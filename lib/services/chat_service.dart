@@ -84,14 +84,11 @@ class ChatService {
       orElse: () => MessageType.text,
     );
     final isMedia = type != MessageType.text;
-    // Legacy: messages sent before encryption was removed have an `iv` field.
-    // The key pair resets on reinstall so we can't decrypt them — show a label.
-    final isLegacyEncrypted = map['iv'] != null;
-    final text = isLegacyEncrypted && !isMedia
+    // Old messages in Firestore have an `iv` field (from a previous E2E-encrypted
+    // version). Their `text` is ciphertext we can no longer decrypt — show a label.
+    final text = (map['iv'] != null && !isMedia)
         ? '\u{1F512} Old encrypted message'
         : (map['text'] as String? ?? '');
-    // For legacy encrypted media the filename was stored encrypted in `text`
-    // (not in `fileName`), so this will be null — the UI handles that gracefully.
     final fileName = map['fileName'] as String?;
 
     return Message(

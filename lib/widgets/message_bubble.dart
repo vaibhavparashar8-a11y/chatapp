@@ -397,8 +397,6 @@ class _MessageBubbleState extends State<MessageBubble>
                   builder: (_) => MediaViewerScreen(
                     url: msg.mediaUrl!,
                     isVideo: false,
-                    mediaIv: msg.mediaIv,
-                    cacheKey: msg.id,
                   ),
                 ),
               ),
@@ -407,8 +405,6 @@ class _MessageBubbleState extends State<MessageBubble>
                     const BorderRadius.vertical(top: Radius.circular(12)),
                 child: _EncryptedImage(
                   url: msg.mediaUrl!,
-                  mediaIv: msg.mediaIv,
-                  cacheKey: msg.id,
                   width: 220,
                   height: 200,
                 ),
@@ -421,7 +417,6 @@ class _MessageBubbleState extends State<MessageBubble>
                 url: msg.mediaUrl!,
                 fileName: msg.fileName ?? '${msg.id}.$ext',
                 messageType: msg.type,
-                mediaIv: msg.mediaIv,
               ),
             ),
           ],
@@ -431,7 +426,6 @@ class _MessageBubbleState extends State<MessageBubble>
         return _InlineVideoPlayer(
           url: msg.mediaUrl!,
           fileName: msg.fileName ?? '${msg.id}.mp4',
-          mediaIv: msg.mediaIv,
           messageId: msg.id,
         );
 

@@ -95,16 +95,6 @@ void main() {
       expect(map['replyToSender'], 'B');
     });
 
-    test('fromMap deserializes iv field for legacy encrypted messages', () {
-      final msg = Message.fromMap({...baseMap, 'iv': 'base64nonce=='}, 'x');
-      expect(msg.iv, 'base64nonce==');
-    });
-
-    test('fromMap leaves iv null for new plaintext messages', () {
-      final msg = Message.fromMap(baseMap, 'x');
-      expect(msg.iv, isNull);
-    });
-
     test('fromMap reads callerId for callEvent messages', () {
       final msg = Message.fromMap({
         ...baseMap,
@@ -142,23 +132,6 @@ void main() {
         type: MessageType.callEvent, timestamp: DateTime(2024, 1, 1),
       );
       expect(msg.toMap().containsKey('callerId'), false);
-    });
-
-    test('toMap omits iv when null (new messages never write iv)', () {
-      final msg = Message(
-        id: '1', sender: 'A', text: 'hi',
-        type: MessageType.text, timestamp: DateTime(2024, 1, 1),
-      );
-      expect(msg.toMap().containsKey('iv'), false);
-    });
-
-    test('toMap includes iv when present (round-trip of legacy doc)', () {
-      final msg = Message(
-        id: '1', sender: 'A', text: 'cipher',
-        type: MessageType.text, timestamp: DateTime(2024, 1, 1),
-        iv: 'abc123==',
-      );
-      expect(msg.toMap()['iv'], 'abc123==');
     });
 
     for (final type in MessageType.values) {

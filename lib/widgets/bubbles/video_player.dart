@@ -5,14 +5,12 @@ part of '../message_bubble.dart';
 class _InlineVideoPlayer extends StatefulWidget {
   final String url;
   final String fileName;
-  final String? mediaIv; // kept for API compat, no longer used
   final String messageId;
 
   const _InlineVideoPlayer({
     required this.url,
     required this.fileName,
     required this.messageId,
-    this.mediaIv,
   });
 
   @override

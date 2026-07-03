@@ -20,11 +20,6 @@ class Message {
   // was added. Null on older events (direction cannot be determined).
   final String? callerId;
 
-  // E2EE nonces — null means the message pre-dates encryption (shown as-is).
-  final String? iv;       // AES-GCM nonce for the `text` / filename field
-  final String? mediaIv;  // AES-GCM nonce for the encrypted media bytes in Storage
-  final String? replyIv;  // AES-GCM nonce for the `replyToText` snippet
-
   Message({
     required this.id,
     required this.sender,
@@ -40,9 +35,6 @@ class Message {
     this.clientId,
     this.edited = false,
     this.callerId,
-    this.iv,
-    this.mediaIv,
-    this.replyIv,
   });
 
   factory Message.fromMap(Map<String, dynamic> map, String id) {
@@ -66,9 +58,6 @@ class Message {
       clientId: map['clientId'],
       edited: (map['edited'] as bool?) ?? false,
       callerId: map['callerId'] as String?,
-      iv: map['iv'] as String?,
-      mediaIv: map['mediaIv'] as String?,
-      replyIv: map['replyIv'] as String?,
     );
   }
 
@@ -87,9 +76,6 @@ class Message {
       if (clientId != null) 'clientId': clientId,
       if (edited) 'edited': true,
       if (callerId != null) 'callerId': callerId,
-      if (iv != null) 'iv': iv,
-      if (mediaIv != null) 'mediaIv': mediaIv,
-      if (replyIv != null) 'replyIv': replyIv,
     };
   }
 }

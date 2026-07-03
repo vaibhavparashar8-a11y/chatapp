@@ -38,8 +38,6 @@ dependencies:
   crypto: ^3.0.3
   firebase_remote_config: ^4.4.0
   gal: ^1.1.0
-  cryptography: ^2.7.0
-  flutter_secure_storage: ^9.0.0
   flutter_local_notifications: ^17.0.0
   flutter_timezone: ^5.1.0
   timezone: ^0.9.4

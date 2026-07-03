@@ -4,15 +4,11 @@ part of '../message_bubble.dart';
 
 class _EncryptedImage extends StatelessWidget {
   final String url;
-  final String? mediaIv;  // kept for API compat, no longer used
-  final String? cacheKey;
   final double width;
   final double height;
 
   const _EncryptedImage({
     required this.url,
-    this.mediaIv,
-    this.cacheKey,
     this.width = 220,
     this.height = 200,
   });

@@ -14,15 +14,11 @@ import 'package:video_player/video_player.dart';
 class MediaViewerScreen extends StatefulWidget {
   final String url;
   final bool isVideo;
-  final String? mediaIv;
-  final String? cacheKey;
 
   const MediaViewerScreen({
     super.key,
     required this.url,
     required this.isVideo,
-    this.mediaIv,
-    this.cacheKey,
   });
 
   @override
@@ -48,7 +44,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
 
   Future<void> _initImage() async {
     try {
-      final bytes = await _fetchDecrypted();
+      final bytes = await _fetchBytes();
       if (mounted) setState(() { _imageBytes = bytes; _loading = false; });
     } catch (e) {
       if (mounted) setState(() { _error = e.toString(); _loading = false; });
@@ -75,7 +71,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
     }
   }
 
-  Future<Uint8List> _fetchDecrypted() async {
+  Future<Uint8List> _fetchBytes() async {
     final resp = await Dio().get<List<int>>(
       widget.url,
       options: Options(responseType: ResponseType.bytes),
