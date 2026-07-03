@@ -15,10 +15,22 @@ class _FloatingVideoOverlayState extends State<_FloatingVideoOverlay>
     with WidgetsBindingObserver {
   double _x = 16;
   double _y = 80;
+  double _w = 120;
+  double _h = 160;
+
+  // Whether the current pan gesture started in the resize handle corner.
+  bool _resizeMode = false;
+
   // Changing this key forces AgoraVideoView to fully recreate its platform
   // surface, which re-attaches to the Agora engine after the app resumes
   // from background (the old surface becomes stale when the app is paused).
   Key _surfaceKey = UniqueKey();
+
+  static const _handleSize = 24.0;
+  static const _minW = 80.0;
+  static const _maxW = 260.0;
+  static const _minH = 100.0;
+  static const _maxH = 340.0;
 
   @override
   void initState() {
@@ -49,21 +61,36 @@ class _FloatingVideoOverlayState extends State<_FloatingVideoOverlay>
           top: _y,
           child: GestureDetector(
             onTap: widget.onTap,
+            // Decide at touch-down whether this is a move or a resize gesture.
+            onPanDown: (d) {
+              _resizeMode = d.localPosition.dx > _w - _handleSize &&
+                  d.localPosition.dy > _h - _handleSize;
+            },
             onPanUpdate: (d) {
               setState(() {
-                _x = (_x + d.delta.dx).clamp(0, size.width - 120);
-                _y = (_y + d.delta.dy).clamp(0, size.height - 200);
+                if (_resizeMode) {
+                  _w = (_w + d.delta.dx).clamp(_minW, _maxW);
+                  _h = (_h + d.delta.dy).clamp(_minH, _maxH);
+                  // Keep overlay inside screen after resize
+                  _x = _x.clamp(0, size.width - _w);
+                  _y = _y.clamp(0, size.height - _h);
+                } else {
+                  _x = (_x + d.delta.dx).clamp(0, size.width - _w);
+                  _y = (_y + d.delta.dy).clamp(0, size.height - _h);
+                }
               });
             },
-            // Flick upward OR drag above screen midpoint → expand to full call
+            // Only expand on a deliberate upward flick — never on position alone,
+            // since the overlay often starts in the "upper" zone already.
             onPanEnd: (d) {
-              final flickedUp = d.velocity.pixelsPerSecond.dy < -400;
-              final draggedHigh = _y < size.height * 0.35;
-              if (flickedUp || draggedHigh) widget.onTap();
+              if (!_resizeMode && d.velocity.pixelsPerSecond.dy < -600) {
+                widget.onTap();
+              }
+              _resizeMode = false;
             },
             child: Container(
-              width: 120,
-              height: 160,
+              width: _w,
+              height: _h,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: Colors.white, width: 2),
@@ -110,6 +137,25 @@ class _FloatingVideoOverlayState extends State<_FloatingVideoOverlay>
                           child: const Icon(Icons.call_end,
                               color: Colors.white, size: 14),
                         ),
+                      ),
+                    ),
+                    // Resize handle (bottom-right corner) — visual indicator only;
+                    // the pan logic above detects touches in this area via _resizeMode.
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
+                      child: Container(
+                        width: _handleSize,
+                        height: _handleSize,
+                        decoration: const BoxDecoration(
+                          color: Colors.white24,
+                          borderRadius: BorderRadius.only(
+                            topLeft: Radius.circular(6),
+                            bottomRight: Radius.circular(10),
+                          ),
+                        ),
+                        child: const Icon(Icons.open_in_full_rounded,
+                            size: 12, color: Colors.white70),
                       ),
                     ),
                   ],
