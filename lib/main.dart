@@ -70,6 +70,19 @@ Future<void> _appMain() async {
     await ReminderService.markScheduled(r.id, chatRoomId);
   });
 
+  // Shared-task mirror: when the other user edits, completes or deletes a
+  // shared task, apply the change to the local list and reschedule/cancel
+  // its notification. Deletions are only trusted on server-confirmed
+  // snapshots (a cache-only snapshot may be missing docs).
+  ReminderService.sharedTasksStream().listen((snap) async {
+    final changed = await ReminderService.applySharedSnapshot(
+      prefs,
+      snap.tasks,
+      applyDeletes: !snap.fromCache,
+    );
+    if (changed) todoRefreshNotifier.value++;
+  });
+
   // WorkManager: register once; survives app restarts and device reboots.
   // The periodic task picks up Firestore reminders set by the other user and
   // schedules them as local notifications — no network, no run.
