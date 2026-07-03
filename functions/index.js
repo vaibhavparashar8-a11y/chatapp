@@ -1,4 +1,4 @@
-const { onDocumentCreated } = require('firebase-functions/v2/firestore');
+const functions = require('firebase-functions');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
 const { getMessaging } = require('firebase-admin/messaging');
@@ -11,47 +11,46 @@ initializeApp();
  * device wakes up and schedules the local notification — regardless of whether
  * the app is open, backgrounded, or completely killed.
  */
-exports.onReminderCreated = onDocumentCreated(
-  'rooms/{roomId}/reminders/{reminderId}',
-  async (event) => {
-    const snap = event.data;
-    if (!snap) return;
-
+exports.onReminderCreated = functions.firestore
+  .document('rooms/{roomId}/reminders/{reminderId}')
+  .onCreate(async (snap, context) => {
     const data = snap.data();
     const forUser = data.forUser;
-    const roomId = event.params.roomId;
+    const roomId = context.params.roomId;
+    const reminderId = context.params.reminderId;
 
     // Look up the recipient's FCM token stored under rooms/{roomId}/fcmTokens.
     const roomDoc = await getFirestore().collection('rooms').doc(roomId).get();
-    const fcmTokens = roomDoc.data()?.fcmTokens ?? {};
+    const fcmTokens = (roomDoc.data() || {}).fcmTokens || {};
     const token = fcmTokens[forUser];
 
     // Token is absent if the recipient has never opened the app on this device.
-    if (!token) return;
+    if (!token) return null;
 
-    const scheduledAt = data.scheduledAt?.toDate()?.toISOString();
-    if (!scheduledAt) return;
+    const scheduledAt = data.scheduledAt && data.scheduledAt.toDate
+      ? data.scheduledAt.toDate().toISOString()
+      : null;
+    if (!scheduledAt) return null;
 
-    await getMessaging().send({
+    return getMessaging().send({
       token,
       // Notification payload: shown automatically by Android when the app is
-      // backgrounded/killed (system tray). The data payload is processed by
-      // the Flutter FCM handler to also schedule the future local notification.
+      // backgrounded/killed. The data payload lets the Flutter handler also
+      // schedule the future local notification.
       notification: {
         title: 'Task Reminder',
         body: data.title || 'You have a reminder',
       },
       data: {
         type: 'reminder',
-        reminderId: event.params.reminderId,
+        reminderId,
         title: data.title || 'Reminder',
         scheduledAt,
-        addToList: String(data.addToList ?? false),
+        addToList: String(data.addToList || false),
       },
       android: {
         priority: 'high',
         notification: { channelId: 'task_reminders' },
       },
     });
-  },
-);
+  });
