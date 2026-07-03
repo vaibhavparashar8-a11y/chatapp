@@ -33,3 +33,13 @@ String formatDue(DateTime dt) {
 
 String _hm(DateTime dt) =>
     '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+
+/// Parse an ISO-8601 timestamp from an FCM data payload into LOCAL time.
+///
+/// The Cloud Function serialises Firestore timestamps with toISOString(),
+/// which is always UTC ("...Z"). DateTime.parse keeps that UTC flag, so
+/// formatting its .hour directly shows UTC wall-clock time — off by the
+/// device's UTC offset (e.g. 5:30 for IST: a 22:30 reminder displayed
+/// as 17:00). Converting to local fixes display, scheduling and storage.
+DateTime? parseReminderTimestamp(String iso) =>
+    DateTime.tryParse(iso)?.toLocal();

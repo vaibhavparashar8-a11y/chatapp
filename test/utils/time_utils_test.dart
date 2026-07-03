@@ -97,4 +97,31 @@ void main() {
       expect(formatDue(yesterdayDue), startsWith('Was due'));
     });
   });
+
+  // ── parseReminderTimestamp ──────────────────────────────────────────────────
+
+  group('parseReminderTimestamp', () {
+    // Regression: FCM payloads carry UTC ISO strings ("...Z"). Displaying the
+    // parsed hour without converting to local showed UTC wall-clock time —
+    // a 22:30 IST reminder appeared as 17:00 in B's notification.
+    test('converts a UTC payload string to local time', () {
+      final parsed = parseReminderTimestamp('2030-01-01T17:00:00.000Z');
+      expect(parsed, isNotNull);
+      expect(parsed!.isUtc, isFalse,
+          reason: 'must be local so .hour formats as local wall-clock time');
+      // Same instant — only the representation changes.
+      expect(parsed.isAtSameMomentAs(DateTime.utc(2030, 1, 1, 17)), isTrue);
+    });
+
+    test('keeps a local (offset-free) string as-is', () {
+      final parsed = parseReminderTimestamp('2030-01-01T22:30:00.000');
+      expect(parsed, isNotNull);
+      expect(parsed!.hour, 22);
+      expect(parsed.minute, 30);
+    });
+
+    test('returns null for garbage input', () {
+      expect(parseReminderTimestamp('not-a-date'), isNull);
+    });
+  });
 }
