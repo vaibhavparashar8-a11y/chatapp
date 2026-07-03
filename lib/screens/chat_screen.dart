@@ -520,9 +520,11 @@ class _ChatScreenState extends State<ChatScreen>
     // Only that one bubble shows the "Read HH:mm" label beneath it.
     String? lastReadMsgId;
     if (_ctrl.otherReadAt != null) {
+      final pendingIds = _ctrl.pendingIds;
       for (int i = messages.length - 1; i >= 0; i--) {
         final m = messages[i];
         if (m.sender == mySenderId &&
+            !pendingIds.contains(m.id) &&
             !m.timestamp.isAfter(_ctrl.otherReadAt!)) {
           lastReadMsgId = m.id;
           break;
