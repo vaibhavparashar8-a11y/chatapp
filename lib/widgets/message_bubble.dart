@@ -103,7 +103,7 @@ class _MessageBubbleState extends State<MessageBubble>
   bool get isMe => widget.message.sender == mySenderId;
 
   bool get _isRead {
-    if (!isMe || widget.otherReadAt == null) return false;
+    if (!isMe || widget.otherReadAt == null || widget.isPending) return false;
     return !widget.message.timestamp.isAfter(widget.otherReadAt!);
   }
 
