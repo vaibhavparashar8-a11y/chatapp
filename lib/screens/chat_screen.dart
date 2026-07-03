@@ -107,6 +107,18 @@ class _ChatScreenState extends State<ChatScreen>
     if (state == AppLifecycleState.resumed) {
       _leaveTimer?.cancel();
       _ctrl.enter();
+    } else if (state == AppLifecycleState.inactive) {
+      // Some Android devices only fire `inactive` for incoming call overlays
+      // and never follow up with `paused`/`hidden`. Start the leave timer only
+      // if one isn't already running (??= guards against restarting it on the
+      // normal resumed→inactive→paused sequence where `hidden`/`paused` also fire).
+      _leaveTimer ??= Timer(const Duration(seconds: 8), () {
+        _leaveTimer = null;
+        _ctrl.leave();
+        if (mounted && !callActiveNotifier.value) {
+          Navigator.of(context).popUntil((route) => route.isFirst);
+        }
+      });
     } else if (state == AppLifecycleState.hidden ||
                state == AppLifecycleState.paused) {
       // `hidden` fires on newer Android when going to recent apps and may
