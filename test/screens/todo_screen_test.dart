@@ -308,6 +308,64 @@ void main() {
     });
   });
 
+  // ── Edit task (long-press) ──────────────────────────────────────────────────
+
+  testWidgets('long-press on a task opens the Edit Task dialog prefilled',
+      (tester) async {
+    await tester.pumpWidget(wrap());
+    await tester.pump();
+    await addTask(tester, 'Pay rent');
+
+    await tester.longPress(find.text('Pay rent'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Edit Task'), findsOneWidget);
+    final field = tester.widget<TextField>(
+      find.descendant(
+          of: find.byType(AlertDialog), matching: find.byType(TextField)),
+    );
+    expect(field.controller!.text, 'Pay rent');
+  });
+
+  testWidgets('saving a new title renames the task', (tester) async {
+    await tester.pumpWidget(wrap());
+    await tester.pump();
+    await addTask(tester, 'Old name');
+
+    await tester.longPress(find.text('Old name'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.descendant(
+          of: find.byType(AlertDialog), matching: find.byType(TextField)),
+      'New name',
+    );
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('New name'), findsOneWidget);
+    expect(find.text('Old name'), findsNothing);
+  });
+
+  testWidgets('cancelling the edit dialog keeps the original title',
+      (tester) async {
+    await tester.pumpWidget(wrap());
+    await tester.pump();
+    await addTask(tester, 'Keep me');
+
+    await tester.longPress(find.text('Keep me'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.descendant(
+          of: find.byType(AlertDialog), matching: find.byType(TextField)),
+      'Discarded',
+    );
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Keep me'), findsOneWidget);
+    expect(find.text('Discarded'), findsNothing);
+  });
+
   // ── Unified Set Reminder dialog ───────────────────────────────────────────────
 
   testWidgets('no add_alert icon — only one alarm button per task', (tester) async {

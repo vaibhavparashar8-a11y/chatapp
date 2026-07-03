@@ -26,8 +26,12 @@ class _Todo {
   DateTime? dueDate;
   List<_SubTodo> subtasks;
 
+  /// Firestore reminder-doc ID when this task is shared with the other
+  /// person ("Add to their task list") — edits/deletes sync via that doc.
+  String? sharedId;
+
   _Todo(this.id, this.title,
-      {this.done = false, this.dueDate, List<_SubTodo>? subtasks})
+      {this.done = false, this.dueDate, List<_SubTodo>? subtasks, this.sharedId})
       : subtasks = subtasks ?? [];
 
   int get doneSubtasks => subtasks.where((s) => s.done).length;
@@ -90,14 +94,20 @@ class _TodoScreenState extends State<TodoScreen> {
                     done: s['done'] as bool? ?? false,
                   ))
               .toList();
+          final id = e['id'] as String;
           return _Todo(
-            e['id'] as String,
+            id,
             e['title'] as String,
             done: e['done'] as bool? ?? false,
             dueDate: e['dueDate'] != null
                 ? DateTime.parse(e['dueDate'] as String)
                 : null,
             subtasks: subs,
+            // Legacy shared copies (pre-sync) carry the doc ID in their local ID.
+            sharedId: e['sharedId'] as String? ??
+                (id.startsWith('reminder_')
+                    ? id.substring('reminder_'.length)
+                    : null),
           );
         }).toList();
       });
@@ -113,6 +123,7 @@ class _TodoScreenState extends State<TodoScreen> {
                 'id': t.id,
                 'title': t.title,
                 'done': t.done,
+                if (t.sharedId != null) 'sharedId': t.sharedId,
                 if (t.dueDate != null) 'dueDate': t.dueDate!.toIso8601String(),
                 'subtasks': t.subtasks
                     .map((s) => {'id': s.id, 'title': s.title, 'done': s.done})
@@ -257,15 +268,24 @@ class _TodoScreenState extends State<TodoScreen> {
       }
     }
 
-    if (remindOther) {
+    if (todo.sharedId != null) {
+      // Already-shared task: push the new time to the shared doc instead of
+      // creating a duplicate — the other side's mirror reschedules from it.
+      ReminderService.updateSharedTask(todo.sharedId!, scheduledAt: dueDate)
+          .catchError((_) {});
+    } else if (remindOther) {
       final otherId = mySenderId == 'A' ? 'B' : 'A';
       try {
-        await ReminderService.createReminder(
+        final docId = await ReminderService.createReminder(
           forUser: otherId,
           title: todo.title,
           scheduledAt: dueDate,
           addToList: addToList,
         );
+        if (addToList && docId != null) {
+          todo.sharedId = docId; // link my copy for future edit/delete sync
+          await _saveTodos();
+        }
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text('Reminder sent to $otherDisplayName'),
@@ -332,17 +352,58 @@ class _TodoScreenState extends State<TodoScreen> {
   void _toggleDone(_Todo todo, bool? val) {
     setState(() => todo.done = val ?? false);
     _saveTodos();
+    if (todo.sharedId != null) {
+      ReminderService.updateSharedTask(todo.sharedId!, done: todo.done)
+          .catchError((_) {}); // offline edit — Firestore retries when back online
+    }
   }
 
   void _delete(String id) {
     final idx = _todos.indexWhere((t) => t.id == id);
+    final sharedId = idx != -1 ? _todos[idx].sharedId : null;
     if (idx != -1 && _todos[idx].dueDate != null) {
       NotificationService.cancelReminder(id.hashCode);
+      if (sharedId != null) {
+        NotificationService.cancelReminder(sharedId.hashCode.abs() % 0x7FFFFFFF);
+      }
     }
     _subCtrl.remove(id)?.dispose();
     _expanded.remove(id);
     setState(() => _todos.removeWhere((t) => t.id == id));
     _saveTodos();
+    if (sharedId != null) {
+      ReminderService.deleteSharedTask(sharedId).catchError((_) {});
+    }
+  }
+
+  /// Long-press on a task tile — rename it. Shared tasks push the new title
+  /// to Firestore so the other person's copy updates too.
+  Future<void> _editTask(_Todo todo) async {
+    final newTitle = await showDialog<String>(
+      context: context,
+      builder: (_) => _EditTaskDialog(initial: todo.title),
+    );
+    final trimmed = newTitle?.trim();
+    if (trimmed == null || trimmed.isEmpty || trimmed == todo.title || !mounted) {
+      return;
+    }
+    setState(() => todo.title = trimmed);
+    await _saveTodos();
+    // Re-schedule so the pending notification carries the new title.
+    if (todo.dueDate != null &&
+        !todo.done &&
+        todo.dueDate!.isAfter(DateTime.now())) {
+      await NotificationService.cancelReminder(todo.id.hashCode);
+      await NotificationService.scheduleReminder(
+        id: todo.id.hashCode,
+        title: trimmed,
+        scheduledTime: todo.dueDate!,
+      );
+    }
+    if (todo.sharedId != null) {
+      ReminderService.updateSharedTask(todo.sharedId!, title: trimmed)
+          .catchError((_) {});
+    }
   }
 
   // ── Role reset (debug only) ───────────────────────────────────────────────
@@ -627,6 +688,7 @@ class _TodoScreenState extends State<TodoScreen> {
                           onTap: () => setState(() => isExpanded
                               ? _expanded.remove(todo.id)
                               : _expanded.add(todo.id)),
+                          onLongPress: () => _editTask(todo),
                           child: Padding(
                             padding:
                                 const EdgeInsets.fromLTRB(10, 10, 8, 10),
@@ -917,6 +979,56 @@ class _TodoScreenState extends State<TodoScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Rename dialog — owns its TextEditingController so it is disposed with the
+/// route (disposing in the caller crashes the still-animating dialog exit).
+class _EditTaskDialog extends StatefulWidget {
+  final String initial;
+  const _EditTaskDialog({required this.initial});
+
+  @override
+  State<_EditTaskDialog> createState() => _EditTaskDialogState();
+}
+
+class _EditTaskDialogState extends State<_EditTaskDialog> {
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initial);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Edit Task'),
+      content: TextField(
+        controller: _ctrl,
+        autofocus: true,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: const InputDecoration(hintText: 'Task title'),
+        onSubmitted: (v) => Navigator.pop(context, v),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _ctrl.text),
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }

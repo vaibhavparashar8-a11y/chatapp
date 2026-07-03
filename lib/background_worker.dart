@@ -89,6 +89,17 @@ void callbackDispatcher() {
       }
     }
 
+    // ── Mirror shared-task edits/deletes made while the app was killed ──────
+    // fetchSharedTasks forces a server read, so an offline device throws here
+    // (skipped) rather than mass-deleting local tasks from an empty cache.
+    try {
+      final shared = await ReminderService.fetchSharedTasks(chatRoomId);
+      await ReminderService.applySharedSnapshot(prefs, shared,
+          applyDeletes: true);
+    } catch (_) {
+      // Server unreachable — retry next interval.
+    }
+
     return true;
   });
 }
