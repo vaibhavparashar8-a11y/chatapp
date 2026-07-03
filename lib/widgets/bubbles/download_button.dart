@@ -6,13 +6,11 @@ class _DownloadButton extends StatefulWidget {
   final String url;
   final String fileName;
   final MessageType messageType;
-  final String? mediaIv; // kept for API compat, no longer used
 
   const _DownloadButton({
     required this.url,
     required this.fileName,
     required this.messageType,
-    this.mediaIv,
   });
 
   @override
