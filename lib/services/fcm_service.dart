@@ -47,7 +47,26 @@ Future<void> _processReminderPayload(Map<String, dynamic> data) async {
 
   final notifId = reminderId.hashCode.abs() % 0x7FFFFFFF;
 
-  // Schedule the local notification to fire at the exact time A picked.
+  // Immediate confirmation — tells B right now that a reminder has been set,
+  // exactly as if B had set it themselves.
+  final hm = '${scheduledAt.hour.toString().padLeft(2, '0')}:'
+      '${scheduledAt.minute.toString().padLeft(2, '0')}';
+  final now = DateTime.now();
+  final todayDate = DateTime(now.year, now.month, now.day);
+  final remDate = DateTime(scheduledAt.year, scheduledAt.month, scheduledAt.day);
+  final diffDays = remDate.difference(todayDate).inDays;
+  final whenStr = diffDays == 0
+      ? 'today at $hm'
+      : diffDays == 1
+          ? 'tomorrow at $hm'
+          : '${scheduledAt.day}/${scheduledAt.month} at $hm';
+  await NotificationService.showNow(
+    id: notifId ^ 0x1000000,
+    title: 'Reminder set',
+    body: '$title — $whenStr',
+  );
+
+  // Schedule the local notification to fire at the exact time.
   await NotificationService.scheduleReminder(
     id: notifId,
     title: title,
