@@ -33,3 +33,8 @@ String mySenderId = '';
 // ── Display ──────────────────────────────────────────────────────────────────
 const String myDisplayName = 'You';
 const String otherDisplayName = 'Them';
+
+// ── Remote task arrival signal ────────────────────────────────────────────────
+// Incremented whenever a remote reminder adds a task to the local todo list,
+// so TodoScreen knows to reload from SharedPreferences immediately.
+final ValueNotifier<int> todoRefreshNotifier = ValueNotifier(0);
