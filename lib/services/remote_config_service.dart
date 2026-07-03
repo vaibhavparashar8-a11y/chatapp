@@ -1,6 +1,7 @@
 import 'package:firebase_remote_config/firebase_remote_config.dart';
 import 'package:flutter/material.dart';
 import '../constants.dart' as defaults;
+import 'log_service.dart';
 
 class RemoteConfigService {
   static final _rc = FirebaseRemoteConfig.instance;
@@ -30,6 +31,7 @@ class RemoteConfigService {
       'chat_room_id': defaults.kDefaultChatRoomId,
       'agora_token': '', // paste a console-generated temp token here to enable calls
       'todo_input_text_color': '#ADADAD',
+      'enable_firestore_logging': false, // off by default — enable remotely to debug
     });
 
     await _rc.setConfigSettings(RemoteConfigSettings(
@@ -53,5 +55,6 @@ class RemoteConfigService {
     defaults.agoraChannel = channel.isNotEmpty ? channel : defaults.kDefaultAgoraChannel;
     defaults.chatRoomId = roomId.isNotEmpty ? roomId : defaults.kDefaultChatRoomId;
     defaults.agoraToken = _rc.getString('agora_token'); // empty = no token (App ID only mode)
+    LogService.firestoreLoggingEnabled = _rc.getBool('enable_firestore_logging');
   }
 }
