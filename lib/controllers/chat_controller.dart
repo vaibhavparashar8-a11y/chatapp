@@ -54,6 +54,11 @@ class ChatController extends ChangeNotifier {
   Message? _replyingTo;
   bool _showAttachMenu = false;
 
+  // Read-receipt guard: ID of the latest message from the other person that we
+  // have already scheduled a markRead for. Only updated when !_markReadPaused
+  // so that pauseMarkRead/resumeMarkRead correctly detects deferred reads.
+  String? _lastSeenOtherMsgId;
+
   // ── Public getters ───────────────────────────────────────────────────────
 
   /// Combined, filtered message list: paginated older + stream recent + pending.
@@ -122,7 +127,7 @@ class ChatController extends ChangeNotifier {
     });
 
     await _repo.enterChat();
-    _scheduleMarkRead(); // mark existing messages read as soon as chat opens
+    // Initial mark-read is handled by the first stream emission in _subscribeMessages().
   }
 
   void _subscribeMessages() {
@@ -136,10 +141,18 @@ class ChatController extends ChangeNotifier {
           .toSet();
       _pendingEntries.removeWhere((e) => confirmedClientIds.contains(e.clientId));
 
-      // Mark as read whenever the other person has any visible messages.
-      // The debouncer ensures at most one Firestore write per 500 ms window.
+      // Only mark read when a genuinely new message from the other person arrives.
+      // Comparing the latest message ID prevents re-writing readAt on every
+      // Firestore stream re-emission (e.g. on chat re-open with no new messages).
       final otherId = mySenderId == 'A' ? 'B' : 'A';
-      if (msgs.any((m) => m.sender == otherId)) _scheduleMarkRead();
+      final otherMsgs = msgs.where((m) => m.sender == otherId).toList();
+      if (otherMsgs.isNotEmpty) {
+        final latestId = otherMsgs.last.id;
+        if (latestId != _lastSeenOtherMsgId && !_markReadPaused) {
+          _lastSeenOtherMsgId = latestId;
+          _scheduleMarkRead();
+        }
+      }
       notifyListeners();
     });
   }
@@ -148,7 +161,8 @@ class ChatController extends ChangeNotifier {
     _didLeave = false;
     _leaveVersion++;          // abort any leave() suspended at an await point
     await _repo.enterChat();
-    _scheduleMarkRead();
+    // Stream re-emits on reconnect; _subscribeMessages will handle mark-read
+    // only if there is a genuinely new message (latestId != _lastSeenOtherMsgId).
   }
 
   Future<void> leave() async {
@@ -382,12 +396,20 @@ class ChatController extends ChangeNotifier {
     _markReadTimer?.cancel();
   }
 
-  /// Resume read receipts after returning from the call screen. Immediately
-  /// schedules a mark-read if the other user has visible messages.
+  /// Resume read receipts after returning from the call screen. Schedules a
+  /// mark-read only if new messages arrived from the other person while paused
+  /// (i.e. the stream advanced beyond _lastSeenOtherMsgId during the call).
   void resumeMarkRead() {
     _markReadPaused = false;
     final otherId = mySenderId == 'A' ? 'B' : 'A';
-    if (_streamMessages.any((m) => m.sender == otherId)) _scheduleMarkRead();
+    final otherMsgs = _streamMessages.where((m) => m.sender == otherId).toList();
+    if (otherMsgs.isNotEmpty) {
+      final latestId = otherMsgs.last.id;
+      if (latestId != _lastSeenOtherMsgId) {
+        _lastSeenOtherMsgId = latestId;
+        _scheduleMarkRead();
+      }
+    }
   }
 
   /// Batch read-receipt writes into 500 ms windows to avoid per-message Firestore calls.

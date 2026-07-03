@@ -251,13 +251,37 @@ void main() {
       repo.close();
     });
 
+    test('markRead is NOT called when stream re-emits the same messages (re-open bug fix)',
+        () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(repo);
+      await ctrl.init();
+
+      // First open — B has one message. markRead fires exactly once.
+      final bMsg = makeMessage(id: 'b1', sender: 'B');
+      repo.emitMessages([bMsg]);
+      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 600));
+      expect(repo.markReadCount, 1);
+
+      // Chat re-opened (Firestore stream re-emits same snapshot).
+      // readAt must NOT be overwritten — still same message, not "new".
+      repo.emitMessages([bMsg]);
+      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 600));
+      expect(repo.markReadCount, 1, reason: 're-open must not overwrite readAt');
+
+      ctrl.dispose();
+      repo.close();
+    });
+
     test('markRead is NOT called when only my own messages arrive', () async {
       final repo = FakeChatRepository();
       final ctrl = ChatController(repo);
       await ctrl.init();
 
-      // init() unconditionally calls _scheduleMarkRead once on enter.
-      // Wait for that baseline fire before checking subsequent behaviour.
+      // With the ID-tracking fix, init() no longer unconditionally writes.
+      // Baseline should be 0 (no B messages emitted yet).
       await Future.delayed(const Duration(milliseconds: 600));
       final baselineCount = repo.markReadCount;
 
