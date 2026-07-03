@@ -141,37 +141,18 @@ class _TodoScreenState extends State<TodoScreen> {
       return;
     }
 
-    final dueDate = await _promptReminderOnCreate(text);
-    if (!mounted) return;
-
     final id = DateTime.now().millisecondsSinceEpoch.toString();
-    setState(() => _todos.insert(0, _Todo(id, text, dueDate: dueDate)));
+    final todo = _Todo(id, text);
+    setState(() => _todos.insert(0, todo));
     _addCtrl.clear();
     await _saveTodos();
 
-    if (dueDate != null) {
-      final ok = await NotificationService.scheduleReminder(
-        id: id.hashCode,
-        title: text,
-        scheduledTime: dueDate,
-      );
-      if (!ok && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content:
-              Text('Could not set reminder. Tap the alarm icon to try again.'),
-          behavior: SnackBarBehavior.floating,
-        ));
-      }
-    }
-  }
-
-  Future<DateTime?> _promptReminderOnCreate(String title) async {
-    if (!mounted) return null;
+    if (!mounted) return;
     final want = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Set a reminder?'),
-        content: Text('Add a reminder for "$title"?'),
+        content: Text('Add a reminder for "$text"?'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -182,8 +163,9 @@ class _TodoScreenState extends State<TodoScreen> {
         ],
       ),
     );
-    if (want != true || !mounted) return null;
-    return _pickDateTime();
+    if (want == true && mounted) {
+      await _setReminder(todo);
+    }
   }
 
   /// Single entry point for all reminder actions on a task.
