@@ -9,6 +9,7 @@ import 'services/log_service.dart';
 import 'services/remote_config_service.dart';
 import 'services/reminder_service.dart';
 import 'services/fcm_service.dart';
+import 'services/agora_token_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
 import 'services/call_log_service.dart';
@@ -52,6 +53,12 @@ Future<void> _appMain() async {
 
   // FCM: request permission, store token, wire up message handlers.
   unawaited(FcmService.init(forUser: mySenderId));
+
+  // Agora token: restore cached token and refresh from the getAgoraToken
+  // Cloud Function if it is older than 12h. Runs after sign-in (callable
+  // needs auth) and RemoteConfigService.init (fetched token must win over
+  // any manually pasted Remote Config token).
+  unawaited(AgoraTokenService.init());
 
   // Foreground stream: fires within seconds when the other user creates a
   // reminder for us — schedules the local notification immediately instead
