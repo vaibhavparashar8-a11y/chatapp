@@ -91,6 +91,12 @@ class CallService {
     if (withVideo) await Permission.camera.request();
   }
 
+  /// True from joinCall until leaveCall — covers full-screen AND minimized
+  /// calls. callActiveNotifier only covers the minimized state, which let
+  /// ChatScreen's background-leave navigation pop a full-screen CallScreen
+  /// and dispose the engine mid-call.
+  static bool inCall = false;
+
   static Future<void> joinCall({
     required bool videoEnabled,
     required String token,
@@ -98,6 +104,7 @@ class CallService {
     required void Function(int uid) onUserLeft,
     required void Function() onError,
   }) async {
+    inCall = true; // set before any await so a pending leave-timer can't pop us
     final myUid = mySenderId == 'A' ? 1 : 2;
     LogService.i('Call', 'joinCall — role=$mySenderId uid=$myUid token=${token.isEmpty ? "none" : "set(${token.length})"}');
 
@@ -132,6 +139,7 @@ class CallService {
 
   static Future<void> leaveCall() async {
     LogService.i('Call', 'leaveCall — releasing engine');
+    inCall = false;
     _onUserJoined = null;
     _onUserLeft = null;
     _onError = null;

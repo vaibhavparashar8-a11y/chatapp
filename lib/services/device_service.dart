@@ -7,6 +7,9 @@ import 'chat_service.dart';
 import 'log_service.dart';
 
 class DeviceService {
+  /// Skips Firestore access in widget tests (heartbeat + last-opened stream).
+  static bool testMode = false;
+
   static const _roleKey = 'sender_role';
   static const _deviceKey = 'device_id';
 
@@ -104,6 +107,7 @@ class DeviceService {
   /// Writes the current timestamp to Firestore so the other device can tell
   /// when this phone last entered the chat screen. Call from ChatScreen.initState().
   static Future<void> writeHeartbeat() async {
+    if (testMode) return;
     await _writeHeartbeat(role);
   }
 
@@ -123,6 +127,7 @@ class DeviceService {
   /// Stream of the timestamp when the *other* device last opened the app.
   /// Emits null if the field has never been written.
   static Stream<DateTime?> otherLastOpenedStream(String otherId) {
+    if (testMode) return Stream<DateTime?>.value(null);
     return ChatService.roomDataStream.map((data) {
       final ts = (data['appLastOpened'] as Map<String, dynamic>? ?? {})[otherId];
       if (ts is Timestamp) return ts.toDate();
