@@ -759,7 +759,21 @@ bool get _isRead {
 
 **Foreground service:** `CallScreen` invokes `startForeground` /
 `stopForeground` on a platform channel so Android keeps the process alive
-while a call runs in the background.
+while a call runs in the background. Native side:
+`android/.../MainActivity.java` (channel handler) →
+`android/.../CallForegroundService.java` (the service).
+
+Android **requires** every foreground service to show a notification — it
+cannot be removed. For discretion it is made as invisible as the OS allows:
+
+- Channel `chatapp_bg_channel_v2` with `IMPORTANCE_MIN` — no status-bar
+  icon; entry collapses to the bottom of the notification shade
+- `VISIBILITY_SECRET` — hidden from the lock screen
+- Neutral wording ("MyTask — Running", channel name "Background sync") and
+  a generic checkmark icon — nothing references a call
+- Channel IDs are **cached by the OS** once created: importance changes
+  need a new channel ID; the legacy `chatapp_call_channel` is deleted on
+  service create so it vanishes from the app's notification settings
 
 **Minimize / restore call:**
 
@@ -1169,6 +1183,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
 | Reminder for other person never arrives | Recipient's phone has no FCM token registered | Check `rooms/{roomId}/fcmTokens` in Firestore Console — open the app once on that phone to register |
 | Calls fail with token error | Cached token expired and `getAgoraToken` unreachable at last app open | Open the app once with network (token refreshes), or check function logs: `firebase functions:log` |
+| "Call in progress" notification visible during background calls | Foreground service notification (required by Android) was IMPORTANCE_LOW with call-specific wording | (Fixed) IMPORTANCE_MIN channel + VISIBILITY_SECRET + neutral "MyTask — Running" text. A notification cannot be removed entirely — MIN importance is the OS maximum for discretion |
 
 ---
 

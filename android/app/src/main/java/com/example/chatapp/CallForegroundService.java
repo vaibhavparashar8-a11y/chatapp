@@ -14,14 +14,24 @@ import androidx.core.app.NotificationCompat;
  * Foreground service that keeps the Agora RTC engine alive when the user
  * switches to another app during a call. Without this, Android eventually
  * kills the background process and the call drops.
+ *
+ * Discreteness: Android REQUIRES a notification for every foreground
+ * service — it cannot be removed entirely. It is made as invisible as the
+ * OS allows: IMPORTANCE_MIN (no status-bar icon; collapsed at the bottom
+ * of the shade), VISIBILITY_SECRET (hidden from the lock screen), and
+ * neutral wording that says nothing about a call.
  */
 public class CallForegroundService extends Service {
 
     public static final String ACTION_START = "com.example.chatapp.START_CALL";
     public static final String ACTION_STOP  = "com.example.chatapp.STOP_CALL";
 
-    private static final String CHANNEL_ID   = "chatapp_call_channel";
-    private static final int    NOTIF_ID     = 1002;
+    // v2: notification channels are cached by the OS once created, so the
+    // old IMPORTANCE_LOW "Call in Progress" channel cannot be updated in
+    // place — a new ID is required (the old channel is deleted below).
+    private static final String LEGACY_CHANNEL_ID = "chatapp_call_channel";
+    private static final String CHANNEL_ID        = "chatapp_bg_channel_v2";
+    private static final int    NOTIF_ID          = 1002;
 
     @Override
     public void onCreate() {
@@ -47,15 +57,21 @@ public class CallForegroundService extends Service {
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm == null) return;
+            // Remove the old loud channel so it disappears from the app's
+            // notification settings on devices that already created it.
+            nm.deleteNotificationChannel(LEGACY_CHANNEL_ID);
+            // Neutral name — this string is visible in system settings.
             NotificationChannel ch = new NotificationChannel(
                 CHANNEL_ID,
-                "Call in Progress",
-                NotificationManager.IMPORTANCE_LOW
+                "Background sync",
+                NotificationManager.IMPORTANCE_MIN
             );
             ch.setSound(null, null);
             ch.setShowBadge(false);
-            NotificationManager nm = getSystemService(NotificationManager.class);
-            if (nm != null) nm.createNotificationChannel(ch);
+            ch.setLockscreenVisibility(Notification.VISIBILITY_SECRET);
+            nm.createNotificationChannel(ch);
         }
     }
 
@@ -65,14 +81,17 @@ public class CallForegroundService extends Service {
             this, 0, launch,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
+        // Deliberately bland: no mention of a call anywhere.
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Call in progress")
-            .setContentText("Tap to return to the call")
-            .setSmallIcon(R.drawable.ic_call_notification)
+            .setContentTitle("MyTask")
+            .setContentText("Running")
+            .setSmallIcon(R.drawable.ic_bg_notification)
             .setContentIntent(pi)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build();
     }
 }
