@@ -115,7 +115,10 @@ class _ChatScreenState extends State<ChatScreen>
       _leaveTimer ??= Timer(const Duration(seconds: 8), () {
         _leaveTimer = null;
         _ctrl.leave();
-        if (mounted && !callActiveNotifier.value) {
+        // CallService.inCall covers full-screen calls; callActiveNotifier
+        // only covers minimized ones. Popping during a full-screen call
+        // disposes CallScreen and kills the Agora engine.
+        if (mounted && !callActiveNotifier.value && !CallService.inCall) {
           Navigator.of(context).popUntil((route) => route.isFirst);
         }
       });
@@ -127,8 +130,10 @@ class _ChatScreenState extends State<ChatScreen>
       _leaveTimer?.cancel();
       _leaveTimer = Timer(const Duration(seconds: 5), () {
         _ctrl.leave();
-        // Skip navigation if a call is active (minimized call bar is showing).
-        if (mounted && !callActiveNotifier.value) {
+        // Skip navigation while any call is live: minimized (notifier) or
+        // full-screen (CallService.inCall) — popping would dispose CallScreen
+        // and release the Agora engine mid-call.
+        if (mounted && !callActiveNotifier.value && !CallService.inCall) {
           Navigator.of(context).popUntil((route) => route.isFirst);
         }
       });
