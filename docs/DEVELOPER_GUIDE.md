@@ -1550,6 +1550,42 @@ Gradle and pub download gigabytes of dependencies. The env vars redirect all cac
 
 Without these variables Flutter falls back to `%USERPROFILE%\AppData` (C: drive).
 
+### Known Build Warnings (safe to ignore — for now)
+
+Two warnings appear on every build. Neither affects the produced APK:
+
+**1. Kotlin Gradle Plugin (KGP) deprecation**
+
+```
+WARNING: Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP):
+device_info_plus, flutter_timezone, package_info_plus, video_compress,
+wakelock_plus, workmanager_android
+Future versions of Flutter will fail to build ...
+```
+
+Harmless with the current Flutter SDK. It becomes a **build failure only
+when the Flutter SDK is upgraded** past the removal point. The fix is a
+full dependency migration — tracked as a GitHub issue ("dependency
+migration: Firebase majors + Built-in Kotlin plugins"). Scale of the jump
+(as of July 2026): firebase_core 2.x→4.x, cloud_firestore 4.x→6.x,
+firebase_messaging 14→16, flutter_local_notifications 17→22,
+device_info_plus 10→13 — breaking API changes across most service files,
+so it needs a dedicated chore PR series with on-device retesting of calls,
+reminders, FCM, and notifications.
+
+**Rule until that migration lands: do NOT upgrade the Flutter SDK.**
+
+**2. `open_file` macOS default-plugin complaint**
+
+```
+Package open_file:macos references open_file_macos:macos as the default plugin,
+but the package does not exist ...
+```
+
+Upstream packaging noise about a missing macOS implementation. This app is
+Android-only, so it is irrelevant; it disappears when `open_file` is bumped
+to 4.x during the same migration.
+
 ### ProGuard Warnings vs Errors
 
 The build prints warnings like:
