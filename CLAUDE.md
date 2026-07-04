@@ -28,6 +28,24 @@ Every feature and bug fix must include tests:
 - Run `flutter test` before committing to confirm all tests pass
 - If a feature genuinely cannot be tested (platform-native, third-party SDK with no mock) document why in the PR description — do not silently skip
 
+## Documentation — MANDATORY, never skip
+
+Every change that adds, removes, or alters app behavior must update
+`docs/DEVELOPER_GUIDE.md` **in the same PR** as the code change:
+
+- New feature → document it in the relevant module section (§5); add a
+  data-flow diagram (§6) if it spans devices/services
+- Bug fix → add a row to Common Issues & Fixes (§7) if the root cause is
+  instructive; update any guide snippet the fix invalidated
+- Schema change (Firestore fields/collections, SharedPreferences keys,
+  Remote Config keys) → update the §4 schema / §2 config tables
+- New service, Cloud Function, or startup step → update §3 architecture,
+  the §5 main.dart startup order, and §11 for functions
+- New tests or test seams → update §9 (test tree, count, seam table)
+
+Pure refactors with no behavior change need no docs update — but check
+whether any guide snippet references the moved code.
+
 ## APK Builds — always use the script
 
 ```powershell
