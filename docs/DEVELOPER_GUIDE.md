@@ -17,6 +17,7 @@ This guide covers every module with code examples, data flow diagrams, and runna
 8. [Enhancement Guide](#8-enhancement-guide)
 9. [Testing Guide](#9-testing-guide)
 10. [Build & Release](#10-build--release)
+11. [Cloud Functions](#11-cloud-functions)
 
 ---
 
@@ -34,7 +35,11 @@ A private, two-person mobile chat app. Both users install the same APK; the app 
 | File storage | Firebase Storage | SDK 12.x |
 | Authentication | Firebase Auth (anonymous) | SDK 5.x |
 | Runtime config | Firebase Remote Config | SDK 5.x |
+| Push messaging | Firebase Cloud Messaging | firebase_messaging 14.x |
+| Server functions | Cloud Functions (Node 20, 1st gen) | firebase-functions 4.x |
 | Audio/video calls | Agora RTC Engine | 6.3.x |
+| Local notifications | flutter_local_notifications | 17.x |
+| Background tasks | WorkManager | workmanager 0.9.x |
 | Local storage | SharedPreferences | — |
 | HTTP client | Dio | — |
 | Platform | Android (arm64-v8a) | minSdk 21 |
@@ -84,10 +89,12 @@ Set these in Firebase Console → Remote Config → Add parameter:
 | Key | Default | Purpose |
 |---|---|---|
 | `agora_app_id` | (your App ID) | Identifies your Agora project |
-| `agora_app_certificate` | `""` | Leave empty for Test Mode (no token required) |
+| `agora_app_certificate` | `""` | **Legacy fallback** — certificate now lives in Secret Manager (see §11). Blank this out once the `getAgoraToken` function is deployed |
 | `agora_channel` | `my-call-channel-001` | Both users must share the same channel |
 | `chat_room_id` | `my-chat-room-001` | Firestore document path segment |
-| `agora_token` | `""` | Paste a temp token from Agora Console to enable calls |
+| `agora_token` | `""` | **Legacy fallback** — tokens are now fetched from the `getAgoraToken` Cloud Function on app open (see §5 AgoraTokenService) |
+| `todo_input_text_color` | `#ADADAD` | Hex color of the to-do input hint text |
+| `enable_firestore_logging` | `false` | When true, LogService also writes to Firestore `app_logs/` |
 
 ### Build & Run
 
@@ -124,10 +131,16 @@ flutter run
 │                  Service Layer                        │
 │  ChatService · DeviceService · LogService             │
 │  RemoteConfigService · NotificationService            │
-│  CallService · AgoraTokenBuilder                      │
+│  ReminderService · FcmService · AgoraTokenService     │
+│  CallService · CallLogService · AgoraTokenBuilder     │
+├──────────────────────────────────────────────────────┤
+│              Background Execution                     │
+│  background_worker.dart (WorkManager, 15-min isolate) │
+│  FCM background handler (fcm_service.dart)            │
 ├──────────────────────────────────────────────────────┤
 │              Firebase / Agora SDKs                    │
 │  Firestore · Storage · Auth · Remote Config · RTC     │
+│  Cloud Messaging · Cloud Functions (see §11)          │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -165,14 +178,34 @@ rooms/
     │   ├── A: Timestamp                 ← set by leaveChat()
     │   └── B: Timestamp                 ← shown as "Last seen HH:MM" in app bar
     ├── roleAssignments/
-    │   ├── A: "device-uuid-A"           ← stable device UUID (SharedPreferences)
-    │   └── B: "device-uuid-B"
+    │   ├── A: "android-id-A"            ← ANDROID_ID — survives app reinstall
+    │   └── B: "android-id-B"               (UUID fallback for emulators)
+    ├── fcmTokens/
+    │   ├── A: "fcm-token..."            ← written by FcmService.init(); read by the
+    │   └── B: "fcm-token..."               onReminderCreated Cloud Function
+    ├── appLastOpened/
+    │   ├── A: Timestamp                 ← heartbeat from ChatScreen.initState();
+    │   └── B: Timestamp                    shows "other device last opened" info
     └── callSignal/
         ├── from: "A" | "B"
         ├── type: "audio" | "video"
         ├── status: "ringing" | "accepted" | "declined" | "ended"
         ├── token: string                ← Agora RTC token (may be empty in Test Mode)
         └── timestamp: Timestamp
+
+rooms/{chatRoomId}/reminders/
+└── {auto-id}                            ← one doc per cross-device reminder; ALSO the
+    ├── forUser: "A" | "B"                  shared-task source of truth (addToList=true)
+    ├── title: string
+    ├── scheduledAt: Timestamp           ← when the reminder should fire
+    ├── addToList: bool                  ← true = also insert into recipient's todo list
+    ├── done: bool                       ← synced both ways for shared tasks
+    ├── locallyScheduled: bool           ← recipient sets true once its notification
+    │                                       is scheduled (WorkManager skip guard)
+    ├── createdBy: "A" | "B"
+    ├── createdAt: Timestamp
+    ├── updatedBy: "A" | "B"?            ← set by updateSharedTask()
+    └── updatedAt: Timestamp?
 
 rooms/{chatRoomId}/messages/
 └── {auto-id}                            ← one document per message
@@ -211,13 +244,21 @@ app_logs/
 Entry point. Startup runs in this order — order matters due to dependencies:
 
 ```
-1. WidgetsFlutterBinding.ensureInitialized()
-2. Firebase.initializeApp()
-3. [parallel] FirebaseAuth.signInAnonymously()  +  RemoteConfigService.init()
-4. DeviceService.initSenderId()    ← needs auth for Firestore transaction
-5. LogService.setDeviceId(...)     ← needs device ID from step 4
-6. NotificationService.init()
-7. runApp(TasksApp())
+ 1. WidgetsFlutterBinding.ensureInitialized()
+ 2. Firebase.initializeApp()
+ 3. [parallel] FirebaseAuth.signInAnonymously()  +  RemoteConfigService.init()
+ 4. DeviceService.initSenderId()    ← needs auth for Firestore transaction
+ 5. LogService.setDeviceId(...)     ← needs device ID from step 4
+ 6. NotificationService.init()
+ 7. prefs.setString('_bgChatRoomId', chatRoomId)  ← for the background isolate
+ 8. [unawaited] FcmService.init(forUser: mySenderId)   ← FCM token + handlers
+ 9. ReminderService.pendingStream(mySenderId).listen() ← foreground reminder delivery
+10. ReminderService.sharedTasksStream().listen()       ← shared-task two-way mirror
+11. [unawaited] AgoraTokenService.init()  ← needs auth (step 3) AND Remote Config
+                                            (fetched token must win over RC token)
+12. Workmanager().registerPeriodicTask()  ← 15-min background reminder/sync worker
+13. [unawaited] CallLogService.init()     ← phone/contacts permissions + call log sync
+14. runApp(TasksApp())
 ```
 
 **How to add a new init step:**
@@ -369,11 +410,18 @@ Assigns and persists the A/B role. Called once in `main()`.
 
 The entire check-and-write runs in a single atomic Firestore transaction — two simultaneous installs cannot both claim A.
 
+**Stable device ID:** the primary identifier is Android's `ANDROID_ID` (via `device_info_plus`), which survives app reinstall — so a reinstalled device reclaims its original role instead of falling into the "both slots taken" path. A UUID persisted in SharedPreferences is the fallback for emulators/unusual OEM builds.
+
+**Heartbeat:** `writeHeartbeat()` (called from `ChatScreen.initState()`) stamps `appLastOpened.{role}` on the room doc; `otherLastOpenedStream(otherId)` lets each device see when the other last opened the app.
+
+**Test seam:** `DeviceService.testMode = true` makes `writeHeartbeat` a no-op and `otherLastOpenedStream` emit `null` — required to widget-test `ChatScreen` without Firebase.
+
 **Reset both roles (e.g., after reinstalling on both devices):**
 
 ```dart
 await DeviceService.resetAssignments();
 // Then relaunch both devices. Launch A first to claim slot A.
+// In debug builds: double-tap the TodoScreen AppBar title → reset dialog.
 ```
 
 ---
@@ -443,6 +491,7 @@ Shared time-formatting helpers extracted so they can be unit-tested independentl
 |---|---|
 | `formatLastSeen(DateTime ts)` | Formats chat app-bar subtitle — "just now", "today at HH:MM", "yesterday at HH:MM", "DD/MM at HH:MM" |
 | `formatDue(DateTime dt)` | Formats to-do tile subtitle — "Due today/tomorrow/DD/MM at HH:MM", "Was due ..." for overdue |
+| `parseReminderTimestamp(String iso)` | Parses an FCM payload timestamp **into local time**. Payload strings are UTC (`...Z`); parsing without `.toLocal()` displayed UTC wall-clock time (a 22:30 IST reminder showed as 17:00) |
 
 **Key invariant** — both functions compare **calendar days**, not elapsed hours:
 
@@ -590,16 +639,39 @@ ChatScreen (StatefulWidget)
 └── IncomingCallDialog (overlay, shown by callSignalStream)
 ```
 
-**Lifecycle hooks:**
+**Lifecycle hooks — presence debounce + call protection:**
+
+Leaving the app does NOT immediately mark the user offline. A debounce timer
+absorbs brief interruptions (system dialogs, notification shade, permission
+prompts) and the navigation pop is skipped while a call is live:
 
 ```dart
 @override
 void didChangeAppLifecycleState(AppLifecycleState state) {
   if (state == AppLifecycleState.resumed) {
-    _controller.enter();          // marks presence, fires markRead
-    _surfaceKey = UniqueKey();    // forces AgoraVideoView reconstruction (see §5.10)
-  } else if (state == AppLifecycleState.paused) {
-    _controller.leave();          // marks offline, clears typing
+    _leaveTimer?.cancel();
+    _ctrl.enter();                        // marks presence online
+  } else if (state == AppLifecycleState.inactive) {
+    // Some Android devices fire ONLY `inactive` for incoming-call overlays
+    // (WhatsApp etc.) and never follow up with paused/hidden.
+    // ??= starts the timer only if one isn't already running.
+    _leaveTimer ??= Timer(const Duration(seconds: 8), () { ... });
+  } else if (state == AppLifecycleState.hidden ||
+             state == AppLifecycleState.paused) {
+    _leaveTimer?.cancel();
+    _leaveTimer = Timer(const Duration(seconds: 5), () {
+      _ctrl.leave();                      // marks offline, clears typing
+      // Pop back to TodoScreen — but NEVER during a live call:
+      // callActiveNotifier covers minimized calls, CallService.inCall
+      // covers full-screen calls (popping would dispose CallScreen and
+      // release the Agora engine mid-call).
+      if (mounted && !callActiveNotifier.value && !CallService.inCall) {
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      }
+    });
+  } else if (state == AppLifecycleState.detached) {
+    _leaveTimer?.cancel();
+    _ctrl.leave();
   }
 }
 ```
@@ -641,13 +713,17 @@ GestureDetector(
 **Status icon logic** (sent messages only):
 
 ```dart
-// Single grey tick = sent but not read
-// Double blue tick = other user has called markRead() after this message's timestamp
-Icon _statusIcon(Message msg, DateTime? otherReadAt) {
-  if (otherReadAt != null && msg.timestamp.isBefore(otherReadAt)) {
-    return const Icon(Icons.done_all, color: Colors.blue, size: 14);
-  }
-  return const Icon(Icons.done, color: Colors.grey, size: 14);
+// Clock icon      = pending (optimistic, not yet confirmed by Firestore)
+// Single tick     = sent but not read
+// Green ticks     = other user has called markRead() after this timestamp
+bool get _isRead {
+  // isPending guard: optimistic messages use DateTime.now() (LOCAL clock).
+  // If the device clock is behind Firebase's server clock, otherReadAt (a
+  // server timestamp) can be later than a brand-new message's timestamp,
+  // which falsely showed read ticks on unread messages. A message can only
+  // be "read" once Firestore has confirmed it with a server timestamp.
+  if (!isMe || widget.otherReadAt == null || widget.isPending) return false;
+  return !widget.message.timestamp.isAfter(widget.otherReadAt!);
 }
 ```
 
@@ -662,18 +738,33 @@ Icon _statusIcon(Message msg, DateTime? otherReadAt) {
 | `incoming_call_dialog.dart` | Bottom-sheet shown when `callSignal.status == 'ringing'` |
 | `agora_token_builder.dart` | Client-side HMAC-SHA256 token builder (Test Mode fallback) |
 
-**Token priority chain** (in `CallScreen._joinCall()`):
+**Token priority chain** (in `CallScreen._startCall()`):
 
 ```
-1. agoraToken from Remote Config (non-empty)  → use directly
-2. agoraAppCertificate from Remote Config (non-empty) → build token locally with HMAC
-3. Neither set → join with empty token (Agora Test Mode — App ID only)
+1. agoraToken global (non-empty)  → use directly
+   ← normally set by AgoraTokenService from the getAgoraToken Cloud Function
+     (fetch-on-app-open caching); falls back to the Remote Config agora_token
+2. agoraAppCertificate from Remote Config (non-empty, caller only)
+   → build token locally with HMAC (legacy fallback)
+3. Neither set → callee uses the token forwarded via callSignal;
+   or join with empty token (Agora Test Mode — App ID only)
 ```
+
+**Call-lifetime flags** — two globals with different scopes:
+
+| Flag | True when | Used for |
+|---|---|---|
+| `CallService.inCall` | `joinCall()` → `leaveCall()` (entire call) | Blocks ChatScreen's background-leave navigation from popping CallScreen and killing the engine |
+| `callActiveNotifier` | Call is **minimized** only | Shows the mini call bar / floating video overlay in ChatScreen |
+
+**Foreground service:** `CallScreen` invokes `startForeground` /
+`stopForeground` on a platform channel so Android keeps the process alive
+while a call runs in the background.
 
 **Minimize / restore call:**
 
 ```dart
-// User taps minimize button in CallScreen
+// User taps minimize (or back) in CallScreen
 callActiveNotifier.value = true;   // triggers FloatingVideoOverlay in ChatScreen
 Navigator.pop(context);            // pops CallScreen
 
@@ -686,6 +777,15 @@ Navigator.push(context, MaterialPageRoute(builder: (_) => CallScreen()));
 // CallScreen.initState() calls CallService.updateCallbacks(...) — no re-join needed
 ```
 
+**Floating video overlay gestures** (`floating_video_overlay.dart`):
+
+- Drag anywhere → moves the overlay (clamped to screen bounds)
+- Drag from the bottom-right 24×24 corner handle → resizes (80–260 × 100–340)
+- Fast upward flick (velocity < −600 px/s) → restores full-screen call
+- Tap → restores full-screen call. Position alone NEVER triggers restore —
+  an earlier `_y < 35% of screen` check fired on every drag release because
+  the overlay starts at y=80.
+
 **AgoraVideoView blank-screen fix:**
 
 ```dart
@@ -694,6 +794,168 @@ _surfaceKey = UniqueKey();   // forces widget tree to dispose+recreate AgoraVide
 // The platform view's SurfaceTexture goes stale after backgrounding on Android.
 // Recreating the widget from scratch re-attaches it to the running engine.
 ```
+
+---
+
+### `lib/services/notification_service.dart`
+
+Local notifications via `flutter_local_notifications` (channel `task_reminders`).
+
+| Method | What it does |
+|---|---|
+| `init()` | Creates the channel, requests permission, sets up timezone data |
+| `scheduleReminder({id, title, scheduledTime})` | Exact-time scheduled notification; returns `false` if permission/alarm unavailable |
+| `cancelReminder(int id)` | Cancels a scheduled notification |
+| `showNow({id, title, body})` | Immediate notification — used by the FCM handler for the "Reminder set" confirmation |
+
+`NotificationService.testMode = true` makes everything a no-op in tests.
+
+**Notification ID convention:** a reminder may be scheduled under either
+`todo.id.hashCode` (self-set via the alarm button) or
+`reminderDocId.hashCode.abs() % 0x7FFFFFFF` (FCM/WorkManager delivery path).
+Code that cancels/reschedules a shared task's notification must cancel **both**.
+
+---
+
+### `lib/services/reminder_service.dart`
+
+Cross-device reminders AND two-way shared-task sync — both built on the
+`rooms/{roomId}/reminders` collection.
+
+**Reminder delivery (A sets a reminder for B):**
+
+| Method | Role |
+|---|---|
+| `createReminder({forUser, title, scheduledAt, addToList})` | A writes the doc; returns the doc ID so A can link its local task copy |
+| `pendingStream(forUser)` | Foreground path — B's app (if open) schedules the notification within seconds |
+| `fetchPending(forUser, roomId)` + `markScheduled(docId, roomId)` | Background path — WorkManager worker picks up unprocessed docs every 15 min |
+| `insertTodoToPrefs(prefs, r)` | Inserts the task into B's local list (id `reminder_{docId}`, duplicate-guarded, `sharedId` linked) |
+
+The third delivery path is FCM push (see FcmService below) — so B gets the
+reminder whether the app is open, backgrounded, or killed.
+
+**Shared-task sync (tasks created with "Add to their task list"):**
+
+The reminder doc is the source of truth. Both devices link their local copy
+via a `sharedId` field (legacy `reminder_*` IDs are backfilled automatically).
+
+| Method | Role |
+|---|---|
+| `updateSharedTask(docId, {title, scheduledAt, done})` | Local edits write through to the doc |
+| `deleteSharedTask(docId)` | Deleting on either phone deletes for both |
+| `sharedTasksStream()` | Live mirror — main.dart listener applies remote changes within seconds |
+| `fetchSharedTasks(roomId)` | Server-forced one-shot for the background worker (offline throws instead of returning a partial cache) |
+| `applySharedSnapshot(prefs, docs, {applyDeletes})` | The reconcile: applies title/done/dueDate changes, removes deleted tasks, reschedules notifications |
+
+**Reconcile safety rules:**
+- Deletions apply only from **server-confirmed** snapshots (`applyDeletes` =
+  `!snapshot.isFromCache`) — an offline cache can never mass-delete tasks
+- Remote due-date changes apply only to copies that already track a due date
+  (a creator who declined "Remind me" never gets surprise alarms)
+- Docs without a `done` field (pre-feature) never revert local done state
+
+---
+
+### `lib/services/fcm_service.dart`
+
+Firebase Cloud Messaging wiring — makes reminder delivery instant even when
+the app is killed.
+
+- `init(forUser:)` — registers the background handler, requests permission,
+  writes the device's FCM token to `rooms/{roomId}/fcmTokens.{forUser}`
+  (refreshed on token rotation), and listens for foreground messages
+- `_onBackgroundMessage` — top-level `@pragma('vm:entry-point')` handler;
+  runs in a separate isolate when the app is backgrounded/terminated
+- `_processReminderPayload` — shared by both paths: parses the payload
+  (**UTC → local via `parseReminderTimestamp`**), shows an immediate
+  "Reminder set — [task] today at HH:mm" confirmation, schedules the real
+  notification for the exact time, and inserts the task into the local list
+  when `addToList` is true
+
+The push itself is sent by the `onReminderCreated` Cloud Function (§11).
+
+---
+
+### `lib/services/agora_token_service.dart`
+
+Fetch-on-open caching of the Agora RTC token — replaces manually pasted
+Remote Config temp tokens.
+
+```
+App opens → restore cached token into `agoraToken` immediately
+          → if cache older than 12h: call getAgoraToken Cloud Function
+            (mints a 24h wildcard uid-0 token) → cache + replace
+```
+
+- The Cloud Function cold start (~1–3 s) happens during app open — **never
+  at call time**, so calls start instantly
+- Fetch failure keeps the cached token (still valid 12–24 h)
+- `fetchOverride` static is the test seam
+- Runs after anonymous sign-in (callable requires auth) and after
+  `RemoteConfigService.init()` (fetched token must win over the RC value)
+
+---
+
+### `lib/background_worker.dart`
+
+WorkManager entry point (`callbackDispatcher`, `@pragma('vm:entry-point')`) —
+runs every 15 minutes in a separate Dart isolate, even after reboot:
+
+```
+1. Firebase.initializeApp() (isolate has no app state)
+2. Read role + room ID from SharedPreferences ('sender_role', '_bgChatRoomId')
+3. fetchPending() → schedule notifications for unprocessed reminders
+   → insertTodoToPrefs when addToList → markScheduled
+4. fetchSharedTasks() → applySharedSnapshot(applyDeletes: true)
+   → mirrors shared-task edits/deletes made while the app was killed
+```
+
+Being a separate isolate it shares NO memory with the app — everything goes
+through SharedPreferences and Firestore.
+
+---
+
+### `lib/screens/todo_screen.dart`
+
+The home screen — a personal to-do list with cross-device features.
+
+| Feature | How |
+|---|---|
+| Add task | Bottom input bar → "Set a reminder?" prompt → unified Set Reminder dialog |
+| Rename task | **Long-press** the tile → Edit Task dialog (shared tasks push the new title to the other phone) |
+| Complete / delete | Checkbox / swipe-left — both write through to Firestore for shared tasks |
+| Sub-tasks | Expand a tile → add/check/delete; progress bar on the tile |
+| Search | AppBar search icon — filters by title and subtask text |
+| Reminders | One alarm button per task → date/time picker → unified dialog |
+| Open chat | Type `flutter` in the add-task field (hidden trigger) |
+| Role reset | Debug builds: double-tap the AppBar title |
+
+**Unified Set Reminder dialog** (single entry point `_setReminder`):
+
+```
+Pick date/time → dialog:
+  ☑ Remind me            (pre-checked — local notification on this phone)
+  ☐ Remind Them          (creates a reminder doc → FCM push to other phone)
+      ☐ Add to their task list   (only visible when Remind Them is checked;
+                                  makes it a synced shared task)
+```
+
+Tasks persist as JSON in SharedPreferences under `todos_v1`
+(`id`, `title`, `done`, `dueDate?`, `sharedId?`, `subtasks[]`).
+`todoRefreshNotifier` (in constants.dart) signals the screen to reload when
+a remote task arrives or the shared-task mirror changes something.
+
+---
+
+### `lib/screens/calls_screen.dart` + `lib/services/call_log_service.dart`
+
+- `CallsScreen` — the "Calls" tab inside ChatScreen: renders call history from
+  `ChatService.callEventsStream()` (call-event messages in the messages
+  collection), with audio/video call buttons. `callsStream` parameter is the
+  test seam.
+- `CallLogService.init()` — requests phone/contacts permissions on startup
+  and syncs the device call log to Firestore (runs last in startup so its
+  permission dialogs don't block the app).
 
 ---
 
@@ -832,7 +1094,55 @@ main()
   │
   ├─ NotificationService.init()
   │
+  ├─ FcmService.init() · reminder streams · AgoraTokenService.init()
+  │  Workmanager registration · CallLogService.init()   (see §5 main.dart)
+  │
   └─ runApp(TasksApp()) → MaterialApp → TodoScreen → ChatScreen
+```
+
+### 6.6 Cross-Device Reminder (3 delivery layers)
+
+```
+A: task → alarm button → picks time → checks "Remind Them" (+ "Add to their task list")
+        │
+        ▼
+ReminderService.createReminder()
+  reminders/{id} = {forUser:'B', title, scheduledAt, addToList, locallyScheduled:false}
+        │
+        ├────────────── LAYER 1: FCM (app killed or backgrounded) ──────────────┐
+        │   onReminderCreated Cloud Function fires onCreate                     │
+        │   → reads rooms/{roomId}/fcmTokens.B → sends high-priority push       │
+        │   → B's _onBackgroundMessage → _processReminderPayload                │
+        │                                                                       │
+        ├────────────── LAYER 2: Firestore stream (app open) ───────────────────┤
+        │   pendingStream('B') emits within seconds → schedule + insert         │
+        │   → markScheduled(locallyScheduled: true)                             │
+        │                                                                       │
+        └────────────── LAYER 3: WorkManager (fallback, ≤15 min) ───────────────┘
+            background worker fetches locallyScheduled==false docs
+
+B's phone (all layers converge):
+  1. NOW:  "Reminder set — [title] today at HH:mm"   (immediate confirmation)
+  2. AT scheduledAt:  "[title]"                       (the actual reminder)
+  3. If addToList: task appears in B's list (duplicate-guarded by id)
+```
+
+### 6.7 Shared-Task Sync (edit/delete on either phone)
+
+```
+Either phone edits/completes/deletes a task with sharedId != null
+        │
+        ▼
+updateSharedTask() / deleteSharedTask()  → reminders/{sharedId} updated/deleted
+        │
+        ▼ (other phone)
+App open:   sharedTasksStream() snapshot → applySharedSnapshot()
+App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot()
+        │
+        ├─ title/done/dueDate applied to the linked local task
+        ├─ doc gone (+server-confirmed) → local copy removed
+        ├─ notifications cancelled/rescheduled (both ID variants)
+        └─ todoRefreshNotifier++ → TodoScreen reloads
 ```
 
 ---
@@ -852,7 +1162,13 @@ main()
 | R8 build warning about "split" classes | Missing ProGuard dontwarn for Play Core split classes | Already in `android/app/proguard-rules.pro` — warning is harmless |
 | Call ends immediately, no remote user | 45-second timeout fired before other user accepted | Other user must accept before timeout; check `callSignal.status` in Firestore Console |
 | `flutter test` fails after `flutter clean` | Clean removes `.dart_tool/package_config.json` | Run `flutter build apk` (or `flutter pub get`) first to regenerate |
-| Notification not received | NotificationService stub not fully wired | See Enhancement Guide §8.2 for FCM integration |
+| Call drops when app goes to background | (Fixed) ChatScreen's leave-timer popped CallScreen; `callActiveNotifier` only covers minimized calls | `CallService.inCall` (true for the whole call) added to both pop guards |
+| Reminder notification shows time 5:30 h off | (Fixed) FCM payload timestamps are UTC; formatting without `.toLocal()` printed UTC wall-clock | `parseReminderTimestamp()` converts at the single parse point |
+| Read ticks appear on just-sent messages | (Fixed) Optimistic messages use the local clock; device clock behind server time made `otherReadAt` look newer | `_isRead` returns false while `isPending` |
+| Presence flips offline during WhatsApp call overlay | Some devices fire only `inactive` for overlays | 8s debounce timer on `inactive` (`??=` so it never restarts mid-sequence) |
+| Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
+| Reminder for other person never arrives | Recipient's phone has no FCM token registered | Check `rooms/{roomId}/fcmTokens` in Firestore Console — open the app once on that phone to register |
+| Calls fail with token error | Cached token expired and `getAgoraToken` unreachable at last app open | Open the app once with network (token refreshes), or check function logs: `firebase functions:log` |
 
 ---
 
@@ -893,32 +1209,17 @@ static Future<void> sendSticker(String stickerUrl) async {
 
 ---
 
-### 8.2 Enable Push Notifications
+### 8.2 Push Notifications (already implemented for reminders)
 
-The `lib/services/notification_service.dart` stub is already called in `main()`.  
-Fill in the implementation:
+FCM is fully wired for reminder delivery — see `lib/services/fcm_service.dart`
+(§5) and the `onReminderCreated` Cloud Function (§11).
 
-```dart
-import 'package:firebase_messaging/firebase_messaging.dart';
-
-class NotificationService {
-  static Future<void> init() async {
-    final messaging = FirebaseMessaging.instance;
-    await messaging.requestPermission();
-    final token = await messaging.getToken();
-    LogService.i('FCM', 'Token: $token');
-
-    // Subscribe to room topic so both devices receive messages
-    await messaging.subscribeToTopic(chatRoomId);
-
-    FirebaseMessaging.onMessage.listen((msg) {
-      // Show in-app banner when foregrounded
-    });
-  }
-}
-```
-
-You'll also need a Cloud Function or Firebase Extension to fan out messages to the topic.
+**To extend push to chat messages:** add a second Cloud Function triggered on
+`rooms/{roomId}/messages/{messageId}` onCreate that reads the *other* user's
+token from `fcmTokens` and sends a push with the message preview. The client
+token registration and background handler already exist — only the function
+and a new `type: 'message'` branch in `_processReminderPayload`'s dispatcher
+are needed.
 
 ---
 
@@ -974,15 +1275,19 @@ The current design has exactly two slots (A and B) in `roleAssignments`. To supp
 
 ---
 
-### 8.6 Add Google Calendar Reminders (already implemented)
+### 8.6 Task Reminders (already implemented — replaced calendar intents)
 
-This feature is live. Each to-do tile has a calendar icon button. The implementation is in `lib/screens/todo_screen.dart` and uses `add_2_calendar ^3.0.1` (no OAuth — uses Android's native calendar intent).
+The original `add_2_calendar` calendar-intent approach was replaced by the
+in-app reminder system: local notifications + cross-device delivery + shared
+task sync. See §5 (NotificationService, ReminderService, FcmService),
+§6.6/§6.7 (data flows) and §11 (Cloud Function).
 
 Key points for future changes:
 - `_Todo.dueDate` (nullable `DateTime`) is persisted as ISO-8601 in SharedPreferences
+- `_Todo.sharedId` links a task to its `reminders/{id}` doc — presence of a
+  `sharedId` means every edit/delete must write through to Firestore
 - `formatDue(DateTime)` lives in `lib/utils/time_utils.dart` — test it there, not in the widget
-- Tapping the icon → `DatePicker` → `TimePicker` → `Add2Calendar.addEvent2Cal(Event(...))`
-- Overdue tasks: subtitle turns red, calendar icon turns red
+- Overdue tasks: subtitle turns red, alarm icon turns red
 
 ### 8.7 Re-Enable End-to-End Encryption
 
@@ -1019,25 +1324,50 @@ Key points for future changes:
 ```
 test/
 ├── helpers/
-│   └── fake_chat_repository.dart   ← in-memory IChatRepository, no Firebase
+│   └── fake_chat_repository.dart        ← in-memory IChatRepository, no Firebase
 ├── controllers/
-│   └── chat_controller_test.dart   ← optimistic UI, pagination, markRead, canModify,
-│                                      hideMessage, editMessage, deleteMessage, presence
+│   └── chat_controller_test.dart        ← optimistic UI, pagination, markRead, canModify,
+│                                           hideMessage, editMessage, deleteMessage, presence
 ├── models/
-│   └── message_test.dart           ← fromMap/toMap, all MessageTypes, legacy iv field
+│   └── message_test.dart                ← fromMap/toMap, all MessageTypes, legacy iv field
 ├── utils/
-│   └── time_utils_test.dart        ← formatLastSeen (issue #1 regression), formatDue
+│   └── time_utils_test.dart             ← formatLastSeen, formatDue,
+│                                           parseReminderTimestamp (UTC→local regression)
+├── services/
+│   ├── reminder_service_test.dart       ← applySharedSnapshot reconcile rules,
+│   │                                       insertTodoToPrefs sharedId link
+│   └── agora_token_service_test.dart    ← needsRefresh thresholds, cache behavior,
+│                                           fetch-failure fallback
+├── widgets/
+│   └── message_bubble_test.dart         ← tick states, pending/failed rendering
 └── screens/
-    └── todo_screen_test.dart       ← widget tests: add/complete/delete tasks, calendar button
+    ├── todo_screen_test.dart            ← add/complete/delete/search tasks, subtasks,
+    │                                       long-press edit dialog, unified reminder dialog
+    ├── calls_screen_test.dart           ← call history rendering
+    └── chat_screen_lifecycle_test.dart  ← background-leave navigation vs live calls
+                                            (uses DeviceService.testMode seam)
 integration_test/
-└── chat_screen_test.dart           ← end-to-end smoke tests (requires physical device)
+└── chat_screen_test.dart                ← end-to-end smoke tests (requires physical device)
 ```
 
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 87 tests, ~10 seconds
+flutter test                        # 157 tests, ~20 seconds
 ```
+
+**Test-mode seams** — every service that touches Firebase/platform APIs has a
+static flag or injectable, set them in `setUp()`:
+
+| Seam | Effect |
+|---|---|
+| `NotificationService.testMode` | schedule/cancel/show become no-ops |
+| `RemoteConfigService.testMode` | skips fetch, returns defaults |
+| `ReminderService.testMode` | Firestore methods no-op / return null |
+| `DeviceService.testMode` | heartbeat no-op, last-opened stream emits null |
+| `AgoraTokenService.fetchOverride` | replaces the Cloud Function call |
+| `ChatScreen(repository:, callSignalProvider:)` | constructor injection |
+| `CallsScreen(callsStream:)` | constructor injection |
 
 ### How FakeChatRepository Works
 
@@ -1230,3 +1560,58 @@ adb install -r "build\app\outputs\flutter-apk\MyTask.apk"
 ```
 
 Or transfer the APK file directly to the phone via USB/cloud and open it.
+
+---
+
+## 11. Cloud Functions
+
+Two 1st-gen Node 20 functions live in `functions/` (firebase-functions v4 —
+1st gen deliberately, to avoid the Eventarc permission delay 2nd-gen deploys
+hit on first use). Deployed to `us-central1` on project `my-chat-app-963fa`.
+
+**Requires the Blaze plan** (pay-as-you-go), but this app's usage is far
+inside the free tier: ~tens of invocations/day vs 2M/month free, and
+`getAgoraToken` performs **zero** Firestore reads/writes.
+
+### `onReminderCreated` — Firestore trigger
+
+Fires when a doc is created in `rooms/{roomId}/reminders/{reminderId}`:
+reads the recipient's token from the room doc's `fcmTokens` map and sends a
+high-priority FCM push (notification + data payload, channel
+`task_reminders`). This is what makes reminders instant when the recipient's
+app is killed. `scheduledAt` is serialized with `toISOString()` — always
+UTC, which is why the client parses with `parseReminderTimestamp()`.
+
+### `getAgoraToken` — HTTPS callable
+
+Mints a 24h wildcard (uid 0) Agora RTC token using the official
+`agora-token` npm package. Requires Firebase Auth (anonymous is fine).
+Request `{appId, channel}` → response `{token, expiresAt}`.
+
+The App Certificate is read from **Secret Manager**
+(`defineSecret('AGORA_APP_CERTIFICATE')`) — it never ships in the APK and
+should be removed from Remote Config once all devices run the new APK.
+
+### Deployment
+
+```bash
+cd functions
+npm install                        # once, or after dependency changes
+
+# One-time: store the Agora App Certificate as a secret
+firebase functions:secrets:set AGORA_APP_CERTIFICATE --project my-chat-app-963fa
+
+# Deploy both functions
+firebase deploy --only functions --project my-chat-app-963fa
+
+# Tail logs
+firebase functions:log --project my-chat-app-963fa
+```
+
+Notes:
+- `firebase.json` points the functions source at `functions/`; `.firebaserc`
+  pins the default project
+- `engines.node` in `functions/package.json` must be an exact version string
+  (`"20"`) — ranges like `">=20"` fail deploy
+- The deploy automatically grants the App Engine service account access to
+  the secret
