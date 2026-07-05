@@ -1,5 +1,63 @@
 # Claude Code Instructions for this project
 
+## What this app is
+
+A private two-person Flutter/Android app: chat + audio/video calls + a todo
+list with cross-device reminders. Both users install the same APK; each
+device claims role **A** or **B** via a Firestore transaction keyed on
+ANDROID_ID (`DeviceService`). Everything lives under one Firestore room doc
+(`rooms/{chatRoomId}`). Full reference: `docs/DEVELOPER_GUIDE.md`.
+
+## Folder map
+
+```
+lib/
+├── main.dart              ← startup order matters — see guide §5 before touching
+├── constants.dart         ← mutable globals set at startup (mySenderId, agoraToken, …)
+├── models/                ← plain Dart data classes, no Firebase imports
+├── controllers/           ← ChatController: ALL chat business logic, no Firebase imports
+├── repositories/          ← IChatRepository interface + FirebaseChatRepository adapter
+├── services/              ← static-method services (chat, device, reminder, fcm,
+│                             notification, agora_token, remote_config, log, call_log)
+├── screens/               ← todo_screen (home), chat_screen (+ part files in chat/),
+│                             calls_screen, media_viewer, log_screen
+├── widgets/               ← message_bubble (+ part files in bubbles/)
+├── features/call/         ← CallService (Agora engine), CallScreen, incoming dialog
+├── background_worker.dart ← WorkManager isolate (15-min reminder/sync fallback)
+└── utils/                 ← pure functions (time formatting) — unit-testable
+functions/                 ← Cloud Functions, Node 20 1st-gen (onReminderCreated,
+                             getAgoraToken); deploy: firebase deploy --only functions
+test/                      ← mirrors lib/; helpers/fake_chat_repository.dart
+docs/DEVELOPER_GUIDE.md    ← the deep reference (schema, data flows, module docs)
+android/.../chatapp/       ← native: MainActivity, CallForegroundService (discreet
+                             notification — do not make it louder)
+```
+
+## Conventions
+
+- Layering: UI → ChatController → IChatRepository → services. ChatController
+  must never import Firebase; screens must never contain business logic.
+- Services are static-method classes with a `testMode` flag (or injectable
+  override) — always add the seam when creating a new service.
+- Big screens split via Dart `part` files, not new widgets files.
+- Shared tasks: a todo with `sharedId != null` mirrors a Firestore reminder
+  doc — every local mutation must write through (see guide §6.7).
+- Notification IDs: reminders may be scheduled under `todo.id.hashCode` OR
+  `docId.hashCode.abs() % 0x7FFFFFFF` — cancel both when in doubt.
+- FCM payload timestamps are UTC — always parse via `parseReminderTimestamp`.
+- Discreteness is a product requirement: no notification, label, or UI text
+  may reveal chat/call activity outside the app.
+
+## Commands
+
+| Task | Command |
+|---|---|
+| Run tests (157) | `flutter test` |
+| Build APK | `.\build_release.ps1` (never raw `flutter build`) |
+| Deploy functions | `firebase deploy --only functions --project my-chat-app-963fa` |
+| Function logs | `firebase functions:log --project my-chat-app-963fa` |
+| Outdated deps | `flutter pub outdated` (migration pending — issue #53, do NOT upgrade Flutter SDK) |
+
 ## Git Workflow — MANDATORY, never skip
 
 Every change must follow this flow, no exceptions:
