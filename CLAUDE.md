@@ -126,3 +126,9 @@ Never type the flutter build command manually. The script:
 ## Security
 
 - `android/app/google-services.json` must NEVER be committed to GitHub
+
+## Workflow
+- **Start Fresh:** Run `/clear` immediately at the beginning of any brand new feature or task to prevent context bloat and ensure prior session history does not cause hallucinations.
+- **Agent Orchestration:** Do not fan out agents until I explicitly specify. Always ask if it is necessary to fan out before doing so.
+- **Look Before You Leap:** Before modifying any core files (especially main.dart or structural layers), you must use your grep/view tools to inspect the relevant sections in docs/DEVELOPER_GUIDE.md.
+- **Surgical Changes Only:** Modify exclusively the code required to complete the task or fix the bug. Do not touch adjacent working logic, reformat unrelated blocks, or clean up styling unless explicitly requested.
