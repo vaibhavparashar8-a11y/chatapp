@@ -43,3 +43,9 @@ secrets.*
 # ── Flutter tooling (auto-generated, not project code) ───────────────────────
 devtools_options.yaml
 integration_test/
+
+# ── Test coverage output ─────────────────────────────────────────────────────
+coverage/
+
+# ── Cloud Functions dependencies ─────────────────────────────────────────────
+functions/node_modules/
