@@ -95,6 +95,10 @@ class ChatController extends ChangeNotifier {
   Future<void> init() async {
     _clearedAt = await _repo.getClearedAt();
     _hiddenIds = await _repo.getHiddenIds();
+    // Restore the last message we marked read in a previous session so that
+    // re-opening this chat after an app restart (with no new messages) does not
+    // re-fire markRead and move the read time of already-read messages.
+    _lastSeenOtherMsgId = await _repo.getLastReadMsgId();
 
     _subscribeMessages();
 
@@ -149,8 +153,7 @@ class ChatController extends ChangeNotifier {
       if (otherMsgs.isNotEmpty) {
         final latestId = otherMsgs.last.id;
         if (latestId != _lastSeenOtherMsgId && !_markReadPaused) {
-          _lastSeenOtherMsgId = latestId;
-          _scheduleMarkRead();
+          _advanceReadTo(latestId);
         }
       }
       notifyListeners();
@@ -406,10 +409,19 @@ class ChatController extends ChangeNotifier {
     if (otherMsgs.isNotEmpty) {
       final latestId = otherMsgs.last.id;
       if (latestId != _lastSeenOtherMsgId) {
-        _lastSeenOtherMsgId = latestId;
-        _scheduleMarkRead();
+        _advanceReadTo(latestId);
       }
     }
+  }
+
+  /// Record [latestId] as the newest read message — in memory and persisted —
+  /// then schedule the debounced markRead. Persisting is what keeps the read
+  /// time stable across app restarts (a re-open with no new messages finds the
+  /// same id and never re-stamps readAt).
+  void _advanceReadTo(String latestId) {
+    _lastSeenOtherMsgId = latestId;
+    _repo.setLastReadMsgId(latestId);
+    _scheduleMarkRead();
   }
 
   /// Batch read-receipt writes into 500 ms windows to avoid per-message Firestore calls.

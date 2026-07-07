@@ -353,6 +353,7 @@ All Firestore and Storage operations — only static methods, no instance state.
 | `sendText(text, {replyToId, clientId, ...})` | Writes plaintext document |
 | `sendMedia(File, MessageType, {onProgress})` | Uploads to Storage, then writes Firestore doc |
 | `markRead()` | Updates `readAt.{mySenderId}` on the room doc |
+| `get/setLastReadMsgId()` | Per-room SharedPreferences guard (`lastReadMsgId_{chatRoomId}`) — newest other-message already marked read; keeps the read time stable across app restarts |
 | `setTyping(bool)` | Updates `typing.{mySenderId}` on the room doc |
 | `enterChat()` / `leaveChat()` | Sets `presence` and `lastSeen` |
 | `signalCall(type, {token})` | Writes `callSignal` map to room doc |
@@ -1179,6 +1180,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Call drops when app goes to background | (Fixed) ChatScreen's leave-timer popped CallScreen; `callActiveNotifier` only covers minimized calls | `CallService.inCall` (true for the whole call) added to both pop guards |
 | Reminder notification shows time 5:30 h off | (Fixed) FCM payload timestamps are UTC; formatting without `.toLocal()` printed UTC wall-clock | `parseReminderTimestamp()` converts at the single parse point |
 | Read ticks appear on just-sent messages | (Fixed) Optimistic messages use the local clock; device clock behind server time made `otherReadAt` look newer | `_isRead` returns false while `isPending` |
+| "Read HH:mm" time changes on already-read messages after the reader restarts the app | (Fixed) The read guard `_lastSeenOtherMsgId` was in-memory only; on restart it reset to null, so re-opening a chat with no new messages re-fired `markRead()` and re-stamped `readAt` | Persist the last-read message id per room (`ChatService.get/setLastReadMsgId`, key `lastReadMsgId_{chatRoomId}`); `ChatController.init()` restores it so an idle re-open never advances `readAt` |
 | Presence flips offline during WhatsApp call overlay | Some devices fire only `inactive` for overlays | 8s debounce timer on `inactive` (`??=` so it never restarts mid-sequence) |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
 | Reminder for other person never arrives | Recipient's phone has no FCM token registered | Check `rooms/{roomId}/fcmTokens` in Firestore Console — open the app once on that phone to register |
@@ -1368,7 +1370,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 157 tests, ~20 seconds
+flutter test                        # 158 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
