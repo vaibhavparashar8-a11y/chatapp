@@ -275,6 +275,36 @@ void main() {
       repo.close();
     });
 
+    test('markRead is NOT called after an app restart when no new messages arrive',
+        () async {
+      // Simulate a previous session having already read message 'b1'.
+      final repo = FakeChatRepository()..lastReadMsgId = 'b1';
+      final ctrl = ChatController(repo);
+      await ctrl.init();
+
+      // Fresh app launch re-opens the chat — same message re-emitted.
+      // readAt must NOT be re-stamped, or the sender's "Read HH:mm" would jump.
+      repo.emitMessages([makeMessage(id: 'b1', sender: 'B')]);
+      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 600));
+      expect(repo.markReadCount, 0,
+          reason: 'restart re-open must not overwrite readAt');
+
+      // A genuinely new message after restart still fires markRead once, and
+      // the newly-read id is persisted for the next launch.
+      repo.emitMessages([
+        makeMessage(id: 'b1', sender: 'B'),
+        makeMessage(id: 'b2', sender: 'B'),
+      ]);
+      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 600));
+      expect(repo.markReadCount, 1);
+      expect(repo.lastReadMsgId, 'b2');
+
+      ctrl.dispose();
+      repo.close();
+    });
+
     test('markRead is NOT called when only my own messages arrive', () async {
       final repo = FakeChatRepository();
       final ctrl = ChatController(repo);

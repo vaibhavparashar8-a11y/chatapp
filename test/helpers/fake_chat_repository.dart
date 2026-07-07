@@ -95,6 +95,17 @@ class FakeChatRepository implements IChatRepository {
   @override
   Future<void> markRead() async => markReadCount++;
 
+  // Simulates the per-room SharedPreferences value. Preset it before init()
+  // to emulate a chat re-opened after an app restart.
+  String? lastReadMsgId;
+
+  @override
+  Future<String?> getLastReadMsgId() async => lastReadMsgId;
+
+  @override
+  Future<void> setLastReadMsgId(String messageId) async =>
+      lastReadMsgId = messageId;
+
   @override
   Future<void> setTyping(bool isTyping) async => typingLog.add(isTyping);
 

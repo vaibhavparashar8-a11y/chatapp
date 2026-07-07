@@ -238,6 +238,23 @@ class ChatService {
     }
   }
 
+  static const _lastReadIdKey = 'lastReadMsgId';
+
+  /// ID of the newest message from the other person that this device has
+  /// already marked as read. Persisted per room so that re-opening the chat
+  /// after an app restart (with no genuinely new messages) does NOT re-stamp
+  /// `readAt` — which would otherwise move the "Read HH:mm" time on messages
+  /// the other person read long ago.
+  static Future<String?> getLastReadMsgId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('${_lastReadIdKey}_$chatRoomId');
+  }
+
+  static Future<void> setLastReadMsgId(String messageId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('${_lastReadIdKey}_$chatRoomId', messageId);
+  }
+
   /// Tell Firestore whether this user is currently typing.
   static Future<void> setTyping(bool isTyping) async {
     try {

@@ -28,6 +28,13 @@ abstract class IChatRepository {
   Future<void> enterChat();
   Future<void> leaveChat();
   Future<void> markRead();
+
+  /// ID of the newest message from the other person already marked read on this
+  /// device. Persisted so a chat re-open after an app restart does not re-stamp
+  /// `readAt` (which would change the read time of already-read messages).
+  Future<String?> getLastReadMsgId();
+  Future<void> setLastReadMsgId(String messageId);
+
   Future<void> setTyping(bool isTyping);
   Stream<bool> otherTypingStream();
   Stream<bool> otherPresenceStream();

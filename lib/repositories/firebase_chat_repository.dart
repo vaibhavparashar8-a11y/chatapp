@@ -48,6 +48,13 @@ class FirebaseChatRepository implements IChatRepository {
   Future<void> markRead() => ChatService.markRead();
 
   @override
+  Future<String?> getLastReadMsgId() => ChatService.getLastReadMsgId();
+
+  @override
+  Future<void> setLastReadMsgId(String messageId) =>
+      ChatService.setLastReadMsgId(messageId);
+
+  @override
   Future<void> setTyping(bool isTyping) => ChatService.setTyping(isTyping);
 
   @override
