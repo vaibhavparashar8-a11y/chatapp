@@ -194,18 +194,29 @@ rooms/
         └── timestamp: Timestamp
 
 rooms/{chatRoomId}/reminders/
-└── {auto-id}                            ← one doc per cross-device reminder; ALSO the
-    ├── forUser: "A" | "B"                  shared-task source of truth (addToList=true)
+└── {auto-id}                            ← one doc per reminder. EVERY reminder is stored
+    │                                       here: cross-device ("Remind them") AND local
+    │                                       "Remind me" self reminders (stored as a backup).
+    ├── forUser: "A" | "B"               ← recipient. Equals createdBy for a self reminder.
     ├── title: string
     ├── scheduledAt: Timestamp           ← when the reminder should fire
     ├── addToList: bool                  ← true = also insert into recipient's todo list
     ├── done: bool                       ← synced both ways for shared tasks
-    ├── locallyScheduled: bool           ← recipient sets true once its notification
-    │                                       is scheduled (WorkManager skip guard)
+    ├── locallyScheduled: bool           ← recipient sets true once its notification is
+    │                                       scheduled (WorkManager skip guard). Created
+    │                                       true for "Remind me" self reminders so the
+    │                                       delivery paths AND onReminderCreated skip them
+    │                                       (the creator already scheduled it locally).
     ├── createdBy: "A" | "B"
     ├── createdAt: Timestamp
     ├── updatedBy: "A" | "B"?            ← set by updateSharedTask()
     └── updatedAt: Timestamp?
+
+  Deletion: deleting a task deletes its backing reminder doc. The local _Todo links
+  the doc via `sharedId` (mirrored, addToList=true) or `reminderDocId` (stored-only:
+  self reminders and remind-them-without-list). addToList tasks can be deleted by
+  EITHER side (the mirror removes the other copy); stored-only reminders are owned by
+  their creator.
 
 rooms/{chatRoomId}/messages/
 └── {auto-id}                            ← one document per message
@@ -1184,6 +1195,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Presence flips offline during WhatsApp call overlay | Some devices fire only `inactive` for overlays | 8s debounce timer on `inactive` (`??=` so it never restarts mid-sequence) |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
 | Reminder for other person never arrives | Recipient's phone has no FCM token registered | Check `rooms/{roomId}/fcmTokens` in Firestore Console — open the app once on that phone to register |
+| Reminder docs pile up in Firestore after deleting tasks | (Fixed) Self reminders were never stored, and "remind them, no list" docs were created but not linked to the local task, so deletion never removed them | Every created doc is linked (`sharedId` or `reminderDocId`) and `_delete` deletes `backingDocId`; self reminders are stored with `locallyScheduled=true` and the Cloud Function skips them |
 | Calls fail with token error | Cached token expired and `getAgoraToken` unreachable at last app open | Open the app once with network (token refreshes), or check function logs: `firebase functions:log` |
 | "Call in progress" notification visible during background calls | Foreground service notification (required by Android) was IMPORTANCE_LOW with call-specific wording | (Fixed) IMPORTANCE_MIN channel + VISIBILITY_SECRET + neutral "MyTask — Running" text. A notification cannot be removed entirely — MIN importance is the OS maximum for discretion |
 
@@ -1370,7 +1382,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 158 tests, ~20 seconds
+flutter test                        # 160 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
@@ -1634,6 +1646,11 @@ high-priority FCM push (notification + data payload, channel
 `task_reminders`). This is what makes reminders instant when the recipient's
 app is killed. `scheduledAt` is serialized with `toISOString()` — always
 UTC, which is why the client parses with `parseReminderTimestamp()`.
+
+**Skips `locallyScheduled === true` docs.** "Remind me" self reminders are
+stored as a backup but the creator has already scheduled the local
+notification, so pushing to them (`forUser === createdBy`) would duplicate it.
+The guard at the top of the trigger returns early for these.
 
 ### `getAgoraToken` — HTTPS callable
 

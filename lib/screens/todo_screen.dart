@@ -30,9 +30,24 @@ class _Todo {
   /// person ("Add to their task list") — edits/deletes sync via that doc.
   String? sharedId;
 
+  /// Firestore reminder-doc ID for a reminder that is stored in Firestore but
+  /// NOT mirrored across devices — i.e. a "Remind me" self reminder, or a
+  /// "Remind them" reminder that was not added to their list. Used to keep the
+  /// stored doc in sync (title/time) and to delete it when this task is
+  /// deleted. Kept separate from [sharedId] so the shared-task mirror
+  /// (applySharedSnapshot) never treats these as deleted-remotely.
+  String? reminderDocId;
+
   _Todo(this.id, this.title,
-      {this.done = false, this.dueDate, List<_SubTodo>? subtasks, this.sharedId})
+      {this.done = false,
+      this.dueDate,
+      List<_SubTodo>? subtasks,
+      this.sharedId,
+      this.reminderDocId})
       : subtasks = subtasks ?? [];
+
+  /// The Firestore reminder doc backing this task, if any (mirrored or not).
+  String? get backingDocId => sharedId ?? reminderDocId;
 
   int get doneSubtasks => subtasks.where((s) => s.done).length;
 }
@@ -108,6 +123,7 @@ class _TodoScreenState extends State<TodoScreen> {
                 (id.startsWith('reminder_')
                     ? id.substring('reminder_'.length)
                     : null),
+            reminderDocId: e['reminderDocId'] as String?,
           );
         }).toList();
       });
@@ -124,6 +140,7 @@ class _TodoScreenState extends State<TodoScreen> {
                 'title': t.title,
                 'done': t.done,
                 if (t.sharedId != null) 'sharedId': t.sharedId,
+                if (t.reminderDocId != null) 'reminderDocId': t.reminderDocId,
                 if (t.dueDate != null) 'dueDate': t.dueDate!.toIso8601String(),
                 'subtasks': t.subtasks
                     .map((s) => {'id': s.id, 'title': s.title, 'done': s.done})
@@ -268,10 +285,11 @@ class _TodoScreenState extends State<TodoScreen> {
       }
     }
 
-    if (todo.sharedId != null) {
-      // Already-shared task: push the new time to the shared doc instead of
-      // creating a duplicate — the other side's mirror reschedules from it.
-      ReminderService.updateSharedTask(todo.sharedId!, scheduledAt: dueDate)
+    if (todo.backingDocId != null) {
+      // This task already has a Firestore reminder doc (shared, self, or
+      // remind-them). Push the new time to it instead of creating a duplicate —
+      // for shared tasks the other side's mirror reschedules from it.
+      ReminderService.updateSharedTask(todo.backingDocId!, scheduledAt: dueDate)
           .catchError((_) {});
     } else if (remindOther) {
       final otherId = mySenderId == 'A' ? 'B' : 'A';
@@ -282,8 +300,14 @@ class _TodoScreenState extends State<TodoScreen> {
           scheduledAt: dueDate,
           addToList: addToList,
         );
-        if (addToList && docId != null) {
-          todo.sharedId = docId; // link my copy for future edit/delete sync
+        if (docId != null) {
+          // Link my copy so future edits/deletes reach the doc. addToList tasks
+          // are mirrored (sharedId); others are stored-only (reminderDocId).
+          if (addToList) {
+            todo.sharedId = docId;
+          } else {
+            todo.reminderDocId = docId;
+          }
           await _saveTodos();
         }
         if (mounted) {
@@ -300,6 +324,23 @@ class _TodoScreenState extends State<TodoScreen> {
           ));
         }
       }
+    } else if (remindSelf) {
+      // "Remind me" only: store a private backup doc in Firestore alongside the
+      // local notification (already scheduled above). locallyScheduled=true so
+      // the delivery paths and the Cloud Function skip it — no duplicate push.
+      try {
+        final docId = await ReminderService.createReminder(
+          forUser: mySenderId,
+          title: todo.title,
+          scheduledAt: dueDate,
+          addToList: false,
+          locallyScheduled: true,
+        );
+        if (docId != null) {
+          todo.reminderDocId = docId;
+          await _saveTodos();
+        }
+      } catch (_) {/* backup is best-effort — the local reminder still fires */}
     }
   }
 
@@ -352,27 +393,30 @@ class _TodoScreenState extends State<TodoScreen> {
   void _toggleDone(_Todo todo, bool? val) {
     setState(() => todo.done = val ?? false);
     _saveTodos();
-    if (todo.sharedId != null) {
-      ReminderService.updateSharedTask(todo.sharedId!, done: todo.done)
+    if (todo.backingDocId != null) {
+      ReminderService.updateSharedTask(todo.backingDocId!, done: todo.done)
           .catchError((_) {}); // offline edit — Firestore retries when back online
     }
   }
 
   void _delete(String id) {
     final idx = _todos.indexWhere((t) => t.id == id);
-    final sharedId = idx != -1 ? _todos[idx].sharedId : null;
+    // Any Firestore reminder doc backing this task — mirrored (sharedId) or
+    // stored-only (reminderDocId, i.e. self / remind-them). Deleting the task
+    // deletes its doc so it never lingers in Firestore.
+    final docId = idx != -1 ? _todos[idx].backingDocId : null;
     if (idx != -1 && _todos[idx].dueDate != null) {
       NotificationService.cancelReminder(id.hashCode);
-      if (sharedId != null) {
-        NotificationService.cancelReminder(sharedId.hashCode.abs() % 0x7FFFFFFF);
+      if (docId != null) {
+        NotificationService.cancelReminder(docId.hashCode.abs() % 0x7FFFFFFF);
       }
     }
     _subCtrl.remove(id)?.dispose();
     _expanded.remove(id);
     setState(() => _todos.removeWhere((t) => t.id == id));
     _saveTodos();
-    if (sharedId != null) {
-      ReminderService.deleteSharedTask(sharedId).catchError((_) {});
+    if (docId != null) {
+      ReminderService.deleteSharedTask(docId).catchError((_) {});
     }
   }
 
@@ -400,8 +444,8 @@ class _TodoScreenState extends State<TodoScreen> {
         scheduledTime: todo.dueDate!,
       );
     }
-    if (todo.sharedId != null) {
-      ReminderService.updateSharedTask(todo.sharedId!, title: trimmed)
+    if (todo.backingDocId != null) {
+      ReminderService.updateSharedTask(todo.backingDocId!, title: trimmed)
           .catchError((_) {});
     }
   }

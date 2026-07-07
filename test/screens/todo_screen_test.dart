@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -118,6 +119,37 @@ void main() {
     await tester.pump();
     final textWidget = tester.widget<Text>(find.text('Done task'));
     expect(textWidget.style?.decoration, TextDecoration.lineThrough);
+  });
+
+  testWidgets('reminderDocId link survives a load → save round-trip',
+      (tester) async {
+    // A task backed by a stored-only reminder doc (self / remind-them) must
+    // keep its reminderDocId across persistence so deletion can later remove
+    // the Firestore doc.
+    SharedPreferences.setMockInitialValues({
+      'todos_v1': jsonEncode([
+        {
+          'id': 't1',
+          'title': 'Backup task',
+          'done': false,
+          'reminderDocId': 'backup-doc-1',
+          'dueDate': DateTime(2030, 1, 1, 9, 0).toIso8601String(),
+          'subtasks': <dynamic>[],
+        }
+      ]),
+    });
+    await tester.pumpWidget(wrap());
+    await tester.pumpAndSettle();
+    expect(find.text('Backup task'), findsOneWidget);
+
+    // Toggling done triggers _saveTodos() — re-serialising the task.
+    await tester.tap(find.byType(Checkbox).first);
+    await tester.pumpAndSettle();
+
+    final prefs = await SharedPreferences.getInstance();
+    final stored = jsonDecode(prefs.getString('todos_v1')!) as List;
+    expect(stored.first['reminderDocId'], 'backup-doc-1');
+    expect(stored.first['done'], isTrue);
   });
 
   // ── Deleting tasks ────────────────────────────────────────────────────────────

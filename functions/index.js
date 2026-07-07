@@ -29,6 +29,11 @@ exports.onReminderCreated = functions.firestore
     const roomId = context.params.roomId;
     const reminderId = context.params.reminderId;
 
+    // "Remind me" self reminders are stored in Firestore as a backup, but the
+    // creator has already scheduled the local notification (locallyScheduled=true
+    // at creation). Pushing to them would duplicate it, so skip these.
+    if (data.locallyScheduled === true) return null;
+
     // Look up the recipient's FCM token stored under rooms/{roomId}/fcmTokens.
     const roomDoc = await getFirestore().collection('rooms').doc(roomId).get();
     const fcmTokens = (roomDoc.data() || {}).fcmTokens || {};

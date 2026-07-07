@@ -54,11 +54,17 @@ class ReminderService {
   /// A sets a reminder for B. [forUser] is the recipient's role ('A' or 'B').
   /// Returns the new doc's ID so the caller can link its local task copy to
   /// the shared doc (enables edit/delete sync for addToList tasks).
+  ///
+  /// Pass [locallyScheduled] `true` for a "Remind me" self reminder: the
+  /// creator has already scheduled its local notification, so both the delivery
+  /// paths (pendingStream / background worker) and the onReminderCreated Cloud
+  /// Function must skip it to avoid a duplicate notification.
   static Future<String?> createReminder({
     required String forUser,
     required String title,
     required DateTime scheduledAt,
     required bool addToList,
+    bool locallyScheduled = false,
   }) async {
     if (testMode) return null;
     final doc = await _col(chatRoomId).add({
@@ -66,7 +72,7 @@ class ReminderService {
       'title': title,
       'scheduledAt': Timestamp.fromDate(scheduledAt),
       'addToList': addToList,
-      'locallyScheduled': false,
+      'locallyScheduled': locallyScheduled,
       'done': false,
       'createdBy': mySenderId,
       'createdAt': FieldValue.serverTimestamp(),

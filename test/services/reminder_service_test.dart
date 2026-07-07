@@ -24,6 +24,7 @@ void main() {
     String title = 'Task',
     bool done = false,
     String? sharedId,
+    String? reminderDocId,
     String? dueDate,
   }) =>
       {
@@ -31,6 +32,7 @@ void main() {
         'title': title,
         'done': done,
         if (sharedId != null) 'sharedId': sharedId,
+        if (reminderDocId != null) 'reminderDocId': reminderDocId,
         if (dueDate != null) 'dueDate': dueDate,
         'subtasks': <dynamic>[],
       };
@@ -140,6 +142,28 @@ void main() {
       );
       expect(changed, isTrue);
       expect(storedTasks(prefs).first['sharedId'], 'legacy123');
+    });
+
+    test('never deletes a reminderDocId-only task (self / stored-only reminder)',
+        () async {
+      // Self "Remind me" reminders and remind-them-without-list reminders are
+      // stored in Firestore but NOT mirrored (addToList=false), so their docs
+      // never appear in sharedTasksStream. The mirror must key off sharedId
+      // only and leave these tasks alone — otherwise the setter's own reminder
+      // would vanish on the next server snapshot.
+      final prefs = await prefsWith([
+        localTask('self', reminderDocId: 'backup-doc', dueDate: due.toIso8601String()),
+      ]);
+      final changed = await ReminderService.applySharedSnapshot(
+        prefs,
+        [],
+        applyDeletes: true,
+      );
+      expect(changed, isFalse);
+      final stored = storedTasks(prefs);
+      expect(stored, hasLength(1));
+      expect(stored.first['id'], 'self');
+      expect(stored.first['reminderDocId'], 'backup-doc');
     });
 
     test('leaves purely local tasks untouched and reports no change',
