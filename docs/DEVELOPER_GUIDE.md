@@ -879,7 +879,7 @@ Cross-device reminders AND two-way shared-task sync — both built on the
 The third delivery path is FCM push (see FcmService below) — so B gets the
 reminder whether the app is open, backgrounded, or killed.
 
-**Shared-task sync (tasks created with "Add to their task list"):**
+**Shared-task sync (tasks created with "Add to notify task list"):**
 
 The reminder doc is the source of truth. Both devices link their local copy
 via a `sharedId` field (legacy `reminder_*` IDs are backfilled automatically).
@@ -980,9 +980,9 @@ The home screen — a personal to-do list with cross-device features.
 ```
 Pick date/time → dialog:
   ☑ Remind me            (pre-checked — local notification on this phone)
-  ☐ Remind Them          (creates a reminder doc → FCM push to other phone)
-      ☐ Add to their task list   (only visible when Remind Them is checked;
-                                  makes it a synced shared task)
+  ☐ Notify               (creates a reminder doc → FCM push to other phone)
+      ☐ Add to notify task list   (only visible when Notify is checked;
+                                   makes it a synced shared task)
 ```
 
 Tasks persist as JSON in SharedPreferences under `todos_v1`
@@ -1148,7 +1148,7 @@ main()
 ### 6.6 Cross-Device Reminder (3 delivery layers)
 
 ```
-A: task → alarm button → picks time → checks "Remind Them" (+ "Add to their task list")
+A: task → alarm button → picks time → checks "Notify" (+ "Add to notify task list")
         │
         ▼
 ReminderService.createReminder()
