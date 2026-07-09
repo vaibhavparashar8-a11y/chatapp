@@ -788,6 +788,22 @@ for diagnosis (observability only, no behavior).
 | `CallService.inCall` | `joinCall()` → `leaveCall()` (entire call) | Blocks ChatScreen's background-leave navigation from popping CallScreen and killing the engine |
 | `callActiveNotifier` | Call is **minimized** only | Shows the mini call bar / floating video overlay in ChatScreen |
 
+The mini bar and floating overlay require **both** flags (`callActiveNotifier
+&& CallService.inCall`) — the notifier is a process-wide global that a botched
+teardown can leave stale-true, while `inCall` is tied to the actual engine
+lifetime. `leaveCall()` also resets `callActiveNotifier` itself, so every
+teardown path (error, timeout, remote hangup) hides the call UI.
+
+**Floating overlay geometry** — `CallService.overlayX/Y/W/H` hold the
+overlay's position and size, written on every drag/resize and read back in
+`_FloatingVideoOverlayState.initState()`. They live in CallService (not widget
+State) because returning from CallScreen bumps `_floatingVideoEpoch`, which
+recreates the overlay State — local fields would reset the overlay to defaults
+mid-call. `joinCall()` calls `resetOverlayGeometry()` so each NEW call starts
+at the default small size. A resize drag whose delta is fully absorbed by the
+min/max size clamps (size pinned) falls back to a move, so the overlay never
+feels "stuck" at its largest size.
+
 **Foreground service:** `CallScreen` invokes `startForeground` /
 `stopForeground` on a platform channel so Android keeps the process alive
 while a call runs in the background. Native side:
@@ -1213,6 +1229,9 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | "Read HH:mm" time changes on already-read messages after the reader restarts the app | (Fixed) The read guard `_lastSeenOtherMsgId` was in-memory only; on restart it reset to null, so re-opening a chat with no new messages re-fired `markRead()` and re-stamped `readAt` | Persist the last-read message id per room (`ChatService.get/setLastReadMsgId`, key `lastReadMsgId_{chatRoomId}`); `ChatController.init()` restores it so an idle re-open never advances `readAt` |
 | Presence flips offline during WhatsApp call overlay | Some devices fire only `inactive` for overlays | 8s debounce timer on `inactive` (`??=` so it never restarts mid-sequence) |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
+| Overlay "stuck" — won't move when enlarged | (Fixed) Resize mode latched at pan-down; at max size the clamps absorbed every delta, so the drag neither resized nor moved | Resize gesture falls back to move when the size is pinned at its clamp bounds |
+| Overlay resets to small size after returning from CallScreen | (Fixed) Geometry was widget State, wiped by the `_floatingVideoEpoch` key-bump reconstruction | Geometry hoisted to `CallService.overlayX/Y/W/H`; reset only in `joinCall()` (new call) |
+| Mini bar / video overlay appears with no live call | (Fixed) Visibility trusted `callActiveNotifier` alone, which atypical teardowns left stale-true | Gate on `callActiveNotifier && CallService.inCall`; `leaveCall()` centrally resets the notifier |
 | Reminder for other person never arrives | Recipient's phone has no FCM token registered | Check `rooms/{roomId}/fcmTokens` in Firestore Console — open the app once on that phone to register |
 | Reminder docs pile up in Firestore after deleting tasks | (Fixed) Self reminders were never stored, and "remind them, no list" docs were created but not linked to the local task, so deletion never removed them | Every created doc is linked (`sharedId` or `reminderDocId`) and `_delete` deletes `backingDocId`; self reminders are stored with `locallyScheduled=true` and the Cloud Function skips them |
 | Calls fail with token error | Cached token expired and `getAgoraToken` unreachable at last app open | Open the app once with network (token refreshes), or check function logs: `firebase functions:log` |
@@ -1396,8 +1415,10 @@ test/
     ├── todo_screen_test.dart            ← add/complete/delete/search tasks, subtasks,
     │                                       long-press edit dialog, unified reminder dialog
     ├── calls_screen_test.dart           ← call history rendering
-    └── chat_screen_lifecycle_test.dart  ← background-leave navigation vs live calls
-                                            (uses DeviceService.testMode seam)
+    ├── chat_screen_lifecycle_test.dart  ← background-leave navigation vs live calls
+    │                                       (uses DeviceService.testMode seam)
+    └── chat_screen_overlay_test.dart    ← overlay geometry persistence defaults/reset,
+                                            phantom-open guard (notifier + inCall)
 integration_test/
 └── chat_screen_test.dart                ← end-to-end smoke tests (requires physical device)
 ```
@@ -1405,7 +1426,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 170 tests, ~20 seconds
+flutter test                        # 175 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a

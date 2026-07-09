@@ -22,6 +22,27 @@ class CallService {
   static bool isCameraOff = false;
   static bool isSpeakerOn = false;
 
+  // Floating overlay geometry — persisted across minimize/restore so the
+  // overlay reopens at the last size/position the user set during THIS call.
+  // _FloatingVideoOverlay is force-reconstructed (new Key) every time the user
+  // returns from CallScreen, so its own State can't hold this. Reset by
+  // joinCall() so a new call always starts at the defaults.
+  static const double overlayDefaultX = 16;
+  static const double overlayDefaultY = 80;
+  static const double overlayDefaultW = 120;
+  static const double overlayDefaultH = 160;
+  static double overlayX = overlayDefaultX;
+  static double overlayY = overlayDefaultY;
+  static double overlayW = overlayDefaultW;
+  static double overlayH = overlayDefaultH;
+
+  static void resetOverlayGeometry() {
+    overlayX = overlayDefaultX;
+    overlayY = overlayDefaultY;
+    overlayW = overlayDefaultW;
+    overlayH = overlayDefaultH;
+  }
+
   // Called when remote user leaves, even while UI is minimized
   static VoidCallback? onCallEnded;
 
@@ -120,6 +141,7 @@ class CallService {
     required void Function() onError,
   }) async {
     inCall = true; // set before any await so a pending leave-timer can't pop us
+    resetOverlayGeometry(); // new call → overlay starts at default size/position
     final myUid = mySenderId == 'A' ? 1 : 2;
     LogService.i('Call', 'joinCall — role=$mySenderId uid=$myUid token=${token.isEmpty ? "none" : "set(${token.length})"}');
 
@@ -169,6 +191,11 @@ class CallService {
   static Future<void> leaveCall() async {
     LogService.i('Call', 'leaveCall — releasing engine');
     inCall = false;
+    // Centralized here so EVERY teardown path (error, timeout, remote hangup)
+    // hides the overlay/mini-bar. The scattered per-callback resets in
+    // CallScreen missed atypical paths, leaving the overlay to appear
+    // "mistakenly" on a later ChatScreen build with no live call.
+    callActiveNotifier.value = false;
     _onUserJoined = null;
     _onUserLeft = null;
     _onError = null;

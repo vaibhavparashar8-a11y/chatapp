@@ -13,10 +13,14 @@ class _FloatingVideoOverlay extends StatefulWidget {
 
 class _FloatingVideoOverlayState extends State<_FloatingVideoOverlay>
     with WidgetsBindingObserver {
-  double _x = 16;
-  double _y = 80;
-  double _w = 120;
-  double _h = 160;
+  // Geometry lives in CallService (reset on joinCall) because this State is
+  // destroyed by the epoch key-bump every time the user returns from
+  // CallScreen — local fields would snap the overlay back to defaults
+  // mid-call. Reading here restores the last size/position of the same call.
+  double _x = CallService.overlayX;
+  double _y = CallService.overlayY;
+  double _w = CallService.overlayW;
+  double _h = CallService.overlayH;
 
   // Whether the current pan gesture started in the resize handle corner.
   bool _resizeMode = false;
@@ -69,15 +73,33 @@ class _FloatingVideoOverlayState extends State<_FloatingVideoOverlay>
             onPanUpdate: (d) {
               setState(() {
                 if (_resizeMode) {
-                  _w = (_w + d.delta.dx).clamp(_minW, _maxW);
-                  _h = (_h + d.delta.dy).clamp(_minH, _maxH);
-                  // Keep overlay inside screen after resize
-                  _x = _x.clamp(0, size.width - _w);
-                  _y = _y.clamp(0, size.height - _h);
+                  final newW = (_w + d.delta.dx).clamp(_minW, _maxW);
+                  final newH = (_h + d.delta.dy).clamp(_minH, _maxH);
+                  if (newW == _w && newH == _h) {
+                    // Size is pinned at its clamp bounds — the delta would be
+                    // silently absorbed and the drag would feel "stuck" (the
+                    // reported hard-to-move-when-enlarged bug). Treat the rest
+                    // of the gesture as a move instead.
+                    _resizeMode = false;
+                    _x = (_x + d.delta.dx).clamp(0, size.width - _w);
+                    _y = (_y + d.delta.dy).clamp(0, size.height - _h);
+                  } else {
+                    _w = newW;
+                    _h = newH;
+                    // Keep overlay inside screen after resize
+                    _x = _x.clamp(0, size.width - _w);
+                    _y = _y.clamp(0, size.height - _h);
+                  }
                 } else {
                   _x = (_x + d.delta.dx).clamp(0, size.width - _w);
                   _y = (_y + d.delta.dy).clamp(0, size.height - _h);
                 }
+                // Persist so the next reconstruction (return from CallScreen)
+                // restores the same geometry for this call.
+                CallService.overlayX = _x;
+                CallService.overlayY = _y;
+                CallService.overlayW = _w;
+                CallService.overlayH = _h;
               });
             },
             // Only expand on a deliberate upward flick — never on position alone,
