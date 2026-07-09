@@ -707,6 +707,15 @@ Widget _buildContent(Message msg) {
 }
 ```
 
+**Tappable links** — text messages are linkified: `splitLinks()` in
+`lib/utils/link_utils.dart` (pure, unit-tested) splits the body into plain and
+URL chunks (`https?://` and bare `www.`, trailing sentence punctuation
+stripped); link chunks render as underlined `TextSpan`s with a
+`TapGestureRecognizer` that calls `url_launcher`'s `launchUrl(mode:
+externalApplication)`. Recognizers are tracked in `_linkRecognizers` and
+disposed with the state. Long-press message actions still work — recognizers
+only claim taps.
+
 **Swipe to reply** — gesture threshold:
 
 ```dart
@@ -1360,15 +1369,18 @@ test/
 ├── models/
 │   └── message_test.dart                ← fromMap/toMap, all MessageTypes, legacy iv field
 ├── utils/
-│   └── time_utils_test.dart             ← formatLastSeen, formatDue,
-│                                           parseReminderTimestamp (UTC→local regression)
+│   ├── time_utils_test.dart             ← formatLastSeen, formatDue,
+│   │                                       parseReminderTimestamp (UTC→local regression)
+│   └── link_utils_test.dart             ← splitLinks URL detection (www, punctuation,
+│                                           multiple links, plain text)
 ├── services/
 │   ├── reminder_service_test.dart       ← applySharedSnapshot reconcile rules,
 │   │                                       insertTodoToPrefs sharedId link
 │   └── agora_token_service_test.dart    ← needsRefresh thresholds, cache behavior,
 │                                           fetch-failure fallback
 ├── widgets/
-│   └── message_bubble_test.dart         ← tick states, pending/failed rendering
+│   └── message_bubble_test.dart         ← tick states, pending/failed rendering,
+│                                           tappable link spans
 └── screens/
     ├── todo_screen_test.dart            ← add/complete/delete/search tasks, subtasks,
     │                                       long-press edit dialog, unified reminder dialog
@@ -1382,7 +1394,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 160 tests, ~20 seconds
+flutter test                        # 170 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
