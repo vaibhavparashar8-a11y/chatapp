@@ -600,6 +600,104 @@ void main() {
       presenceCtrl.close();
       repo.close();
     });
+
+    test('online flips to offline when the heartbeat goes stale', () async {
+      final repo = FakeChatRepository();
+      final presenceCtrl = StreamController<bool>.broadcast();
+      repo.overridePresenceStream = presenceCtrl.stream;
+      final ctrl = ChatController(
+        repo,
+        presenceRefreshInterval: const Duration(milliseconds: 40),
+        presenceStaleAfter: const Duration(milliseconds: 100),
+      );
+      await ctrl.init();
+
+      // Other side comes online WITH a heartbeat.
+      presenceCtrl.add(true);
+      repo.emitPresenceAt(DateTime(2030, 1, 1, 12, 0, 0));
+      await Future.delayed(Duration.zero);
+      expect(ctrl.otherOnline, true);
+
+      // No further heartbeats arrive (simulated force-kill: presence bool
+      // stays true in Firestore, but presenceAt stops changing). After the
+      // stale window the periodic re-check must flip online to false.
+      await Future.delayed(const Duration(milliseconds: 250));
+      expect(ctrl.otherOnline, false,
+          reason: 'stale heartbeat must not keep showing online');
+
+      // A fresh heartbeat (new value) restores online.
+      repo.emitPresenceAt(DateTime(2030, 1, 1, 12, 0, 20));
+      await Future.delayed(Duration.zero);
+      expect(ctrl.otherOnline, true);
+
+      ctrl.dispose();
+      presenceCtrl.close();
+      repo.close();
+    });
+
+    test('legacy peer with no heartbeat is trusted on the raw boolean', () async {
+      final repo = FakeChatRepository();
+      final presenceCtrl = StreamController<bool>.broadcast();
+      repo.overridePresenceStream = presenceCtrl.stream;
+      final ctrl = ChatController(
+        repo,
+        presenceRefreshInterval: const Duration(milliseconds: 40),
+        presenceStaleAfter: const Duration(milliseconds: 100),
+      );
+      await ctrl.init();
+
+      // Old app version never writes presenceAt — bool must be trusted
+      // indefinitely (pre-heartbeat behavior preserved).
+      presenceCtrl.add(true);
+      await Future.delayed(Duration.zero);
+      expect(ctrl.otherOnline, true);
+      await Future.delayed(const Duration(milliseconds: 250));
+      expect(ctrl.otherOnline, true,
+          reason: 'no heartbeat data → no staleness check');
+
+      ctrl.dispose();
+      presenceCtrl.close();
+      repo.close();
+    });
+
+    test('own heartbeat is re-affirmed periodically while entered', () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(
+        repo,
+        presenceRefreshInterval: const Duration(milliseconds: 40),
+        presenceStaleAfter: const Duration(milliseconds: 100),
+      );
+      await ctrl.init();
+
+      await Future.delayed(const Duration(milliseconds: 150));
+      expect(repo.refreshPresenceCount, greaterThan(0),
+          reason: 'heartbeat writes while chat open');
+
+      // After leave() the heartbeat must stop.
+      await ctrl.leave();
+      final countAtLeave = repo.refreshPresenceCount;
+      await Future.delayed(const Duration(milliseconds: 150));
+      expect(repo.refreshPresenceCount, countAtLeave,
+          reason: 'no heartbeat after leaving');
+
+      ctrl.dispose();
+      repo.close();
+    });
+
+    test('dispose() without leave() still clears presence (defense-in-depth)',
+        () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(repo);
+      await ctrl.init();
+
+      expect(repo.leaveCount, 0);
+      ctrl.dispose(); // no explicit leave() — e.g. an unexpected dispose path
+      await Future.delayed(Duration.zero);
+      expect(repo.leaveCount, 1,
+          reason: 'dispose must clear presence if leave() was skipped');
+
+      repo.close();
+    });
   });
 
   group('ChatController — reply', () {

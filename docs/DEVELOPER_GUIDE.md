@@ -168,6 +168,12 @@ rooms/
     ├── presence/
     │   ├── A: bool                      ← true = user A has chat screen open
     │   └── B: bool
+    ├── presenceAt/
+    │   ├── A: Timestamp                 ← presence heartbeat — re-stamped every 20s
+    │   └── B: Timestamp                    while the chat is open; reader shows
+    │                                       "online" only while beats keep arriving
+    │                                       (≤45s stale window), so a force-killed
+    │                                       app can't stay "online" forever
     ├── typing/
     │   ├── A: bool                      ← true = user A is currently typing
     │   └── B: bool
@@ -366,7 +372,8 @@ All Firestore and Storage operations — only static methods, no instance state.
 | `markRead()` | Updates `readAt.{mySenderId}` on the room doc |
 | `get/setLastReadMsgId()` | Per-room SharedPreferences guard (`lastReadMsgId_{chatRoomId}`) — newest other-message already marked read; keeps the read time stable across app restarts |
 | `setTyping(bool)` | Updates `typing.{mySenderId}` on the room doc |
-| `enterChat()` / `leaveChat()` | Sets `presence` and `lastSeen` |
+| `enterChat()` / `leaveChat()` | Sets `presence`, `presenceAt` heartbeat, and `lastSeen` |
+| `refreshPresence()` | Re-stamps `presence`+`presenceAt` — called every 20s by ChatController's presence timer while the chat is open |
 | `signalCall(type, {token})` | Writes `callSignal` map to room doc |
 | `updateCallStatus(status)` | Updates `callSignal.status` |
 | `editMessage(id, newText)` | Updates `text` and sets `edited: true` |
@@ -566,7 +573,10 @@ class FakeChatRepository implements IChatRepository {
 
 ### `lib/controllers/chat_controller.dart`
 
-All chat business logic. Owns five stream subscriptions and the message list.
+All chat business logic. Owns six stream subscriptions and the message list,
+plus the presence heartbeat timer (20s: re-affirms own `presenceAt` and
+re-checks the other side's staleness — a stale heartbeat can't be observed by
+a stream listener alone since no new snapshot arrives).
 
 **State managed:**
 
@@ -1193,6 +1203,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Read ticks appear on just-sent messages | (Fixed) Optimistic messages use the local clock; device clock behind server time made `otherReadAt` look newer | `_isRead` returns false while `isPending` |
 | "Read HH:mm" time changes on already-read messages after the reader restarts the app | (Fixed) The read guard `_lastSeenOtherMsgId` was in-memory only; on restart it reset to null, so re-opening a chat with no new messages re-fired `markRead()` and re-stamped `readAt` | Persist the last-read message id per room (`ChatService.get/setLastReadMsgId`, key `lastReadMsgId_{chatRoomId}`); `ChatController.init()` restores it so an idle re-open never advances `readAt` |
 | Presence flips offline during WhatsApp call overlay | Some devices fire only `inactive` for overlays | 8s debounce timer on `inactive` (`??=` so it never restarts mid-sequence) |
+| "online" stuck forever after force-kill / crash | (Fixed) `presence` boolean was only cleared by in-memory debounce timers; a killed process never runs them, and Firestore has no onDisconnect | `presenceAt` heartbeat re-stamped every 20s while chat open; reader shows "online" only while heartbeats keep arriving (45s stale window, measured by local receive time — clock-skew immune). `ChatController.dispose()` also leaves as defense-in-depth |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
 | Reminder for other person never arrives | Recipient's phone has no FCM token registered | Check `rooms/{roomId}/fcmTokens` in Firestore Console — open the app once on that phone to register |
 | Reminder docs pile up in Firestore after deleting tasks | (Fixed) Self reminders were never stored, and "remind them, no list" docs were created but not linked to the local task, so deletion never removed them | Every created doc is linked (`sharedId` or `reminderDocId`) and `_delete` deletes `backingDocId`; self reminders are stored with `locallyScheduled=true` and the Cloud Function skips them |
@@ -1357,6 +1368,7 @@ test/
 ├── controllers/
 │   └── chat_controller_test.dart        ← optimistic UI, pagination, markRead, canModify,
 │                                           hideMessage, editMessage, deleteMessage, presence
+│                                           (heartbeat staleness, legacy peer, dispose guard)
 ├── models/
 │   └── message_test.dart                ← fromMap/toMap, all MessageTypes, legacy iv field
 ├── utils/
@@ -1382,7 +1394,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 160 tests, ~20 seconds
+flutter test                        # 164 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a

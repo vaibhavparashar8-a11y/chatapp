@@ -18,7 +18,18 @@ class ChatController extends ChangeNotifier {
   final IChatRepository _repo;
   final void Function(String message)? onUploadError;
 
-  ChatController(this._repo, {this.onUploadError});
+  /// How often this device re-affirms its own presence heartbeat while the
+  /// chat is open, and how old the OTHER side's heartbeat may get before
+  /// their "online" is treated as stale. Injectable for tests.
+  final Duration presenceRefreshInterval;
+  final Duration presenceStaleAfter;
+
+  ChatController(
+    this._repo, {
+    this.onUploadError,
+    this.presenceRefreshInterval = const Duration(seconds: 20),
+    this.presenceStaleAfter = const Duration(seconds: 45),
+  });
 
   // ── Private state ────────────────────────────────────────────────────────
 
@@ -34,6 +45,17 @@ class ChatController extends ChangeNotifier {
   DateTime? _otherLastSeen;
   double? _uploadProgress;
 
+  // Presence staleness state. Firestore has no onDisconnect, so a force-killed
+  // app leaves `presence=true` behind forever. The writer re-stamps
+  // `presenceAt` every [presenceRefreshInterval]; the reader only shows
+  // "online" while those heartbeats keep ARRIVING. Freshness is measured by
+  // the local receive time of a CHANGED presenceAt value — never by comparing
+  // server timestamps to the device clock, so clock skew can't break it.
+  bool _otherPresenceRaw = false;
+  DateTime? _otherPresenceAtValue;   // last heartbeat value seen (server time)
+  DateTime? _otherBeatReceivedAt;    // local time that value last CHANGED
+  Timer? _presenceTimer;
+
   bool _hasMoreMessages = true;
   bool _loadingMore = false;
 
@@ -48,6 +70,7 @@ class ChatController extends ChangeNotifier {
   StreamSubscription<DateTime?>? _readAtSub;
   StreamSubscription<bool>? _typingSub;
   StreamSubscription<bool>? _presenceSub;
+  StreamSubscription<DateTime?>? _presenceAtSub;
   StreamSubscription<DateTime?>? _lastSeenSub;
 
   // UI-only state that belongs here because it drives notifyListeners()
@@ -117,11 +140,19 @@ class ChatController extends ChangeNotifier {
     });
 
     _presenceSub = _repo.otherPresenceStream().listen((online) {
-      if (online != _otherOnline) {
-        _otherOnline = online;
-        notifyListeners();
-      }
+      _otherPresenceRaw = online;
+      _recomputeOnline();
     });
+
+    _presenceAtSub = _repo.otherPresenceAtStream().listen((ts) {
+      if (ts != _otherPresenceAtValue) {
+        _otherPresenceAtValue = ts;
+        _otherBeatReceivedAt = DateTime.now();
+      }
+      _recomputeOnline();
+    });
+
+    _startPresenceTimer();
 
     _lastSeenSub = _repo.otherLastSeenStream().listen((ts) {
       if (ts != _otherLastSeen) {
@@ -163,6 +194,7 @@ class ChatController extends ChangeNotifier {
   Future<void> enter() async {
     _didLeave = false;
     _leaveVersion++;          // abort any leave() suspended at an await point
+    _startPresenceTimer();
     await _repo.enterChat();
     // Stream re-emits on reconnect; _subscribeMessages will handle mark-read
     // only if there is a genuinely new message (latestId != _lastSeenOtherMsgId).
@@ -173,10 +205,43 @@ class ChatController extends ChangeNotifier {
     _didLeave = true;
     _typingTimer?.cancel();
     _markReadTimer?.cancel();
+    _presenceTimer?.cancel();
+    _presenceTimer = null;
     final version = _leaveVersion;
     await _repo.setTyping(false);
     if (_leaveVersion != version) return;  // enter() was called while we awaited
     await _repo.leaveChat();
+  }
+
+  // ── Presence heartbeat / staleness ───────────────────────────────────────
+
+  /// While the chat is open: re-affirm our own heartbeat AND re-check whether
+  /// the other side's heartbeat has gone stale (staleness flips without a new
+  /// Firestore snapshot, so a stream listener alone can never observe it).
+  void _startPresenceTimer() {
+    _presenceTimer?.cancel();
+    _presenceTimer = Timer.periodic(presenceRefreshInterval, (_) {
+      if (!_didLeave) {
+        _repo.refreshPresence();
+      }
+      _recomputeOnline();
+    });
+  }
+
+  void _recomputeOnline() {
+    // Legacy compatibility: the other phone's app predates the heartbeat
+    // (never wrote presenceAt) → trust the raw boolean, exactly as before.
+    bool fresh = true;
+    if (_otherPresenceAtValue != null) {
+      final beat = _otherBeatReceivedAt;
+      fresh = beat != null &&
+          DateTime.now().difference(beat) <= presenceStaleAfter;
+    }
+    final online = _otherPresenceRaw && fresh;
+    if (online != _otherOnline) {
+      _otherOnline = online;
+      notifyListeners();
+    }
   }
 
   // ── Pagination ───────────────────────────────────────────────────────────
@@ -445,12 +510,19 @@ class ChatController extends ChangeNotifier {
 
   @override
   void dispose() {
+    // Defense-in-depth: any dispose path that skipped the normal back-button/
+    // PopScope handlers would otherwise leave presence=true in Firestore.
+    // Guarded by _didLeave, so the normal path is a no-op. Fire-and-forget —
+    // dispose() is synchronous.
+    if (!_didLeave) leave();
     _typingTimer?.cancel();
     _markReadTimer?.cancel();
+    _presenceTimer?.cancel();
     _messagesSub?.cancel();
     _readAtSub?.cancel();
     _typingSub?.cancel();
     _presenceSub?.cancel();
+    _presenceAtSub?.cancel();
     _lastSeenSub?.cancel();
     super.dispose();
   }
