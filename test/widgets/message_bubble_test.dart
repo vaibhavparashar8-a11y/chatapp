@@ -214,4 +214,58 @@ void main() {
       expect(icon.color, const Color(0xAAFF6B6B));
     });
   });
+
+  group('MessageBubble — tappable links', () {
+    TextSpan rootSpan(WidgetTester tester) {
+      final rich = tester.widget<Text>(
+        find.byWidgetPredicate(
+          (w) => w is Text && w.textSpan != null,
+        ),
+      );
+      return rich.textSpan! as TextSpan;
+    }
+
+    testWidgets('URL in message renders as an underlined tappable span',
+        (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(
+        message: msg(text: 'see https://example.com now'),
+      )));
+
+      final span = rootSpan(tester);
+      final children = span.children!.cast<TextSpan>();
+      expect(children.map((s) => s.text).toList(),
+          ['see ', 'https://example.com', ' now']);
+
+      final link = children[1];
+      expect(link.recognizer, isNotNull, reason: 'link span must be tappable');
+      expect(link.style?.decoration, TextDecoration.underline);
+      // Non-link chunks have no recognizer.
+      expect(children[0].recognizer, isNull);
+      expect(children[2].recognizer, isNull);
+    });
+
+    testWidgets('plain text message renders as a normal Text with no spans',
+        (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(
+        message: msg(text: 'no links here'),
+      )));
+      expect(find.text('no links here'), findsOneWidget);
+      expect(
+        find.byWidgetPredicate((w) => w is Text && w.textSpan != null),
+        findsNothing,
+      );
+    });
+
+    testWidgets('long-press on a link message still triggers onLongPress',
+        (tester) async {
+      var longPressed = false;
+      await tester.pumpWidget(wrap(MessageBubble(
+        message: msg(text: 'check https://example.com'),
+        onLongPress: () => longPressed = true,
+      )));
+      await tester.longPress(find.byType(MessageBubble));
+      expect(longPressed, isTrue,
+          reason: 'link recognizers must not swallow long-presses');
+    });
+  });
 }

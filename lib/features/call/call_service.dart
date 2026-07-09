@@ -59,6 +59,21 @@ class CallService {
         LogService.e('Call', 'Agora error — code=$err msg=$msg');
         _onError?.call();
       },
+      // Observability only — no behavior change. Logs encoder overload /
+      // frozen-stream states so low-end-device video problems show up in
+      // app_logs instead of being invisible.
+      onLocalVideoStateChanged: (source, state, reason) {
+        if (state == LocalVideoStreamState.localVideoStreamStateFailed) {
+          LogService.w('Call', 'Local video FAILED — reason=$reason');
+        }
+      },
+      onRemoteVideoStateChanged: (connection, remoteUid, state, reason, elapsed) {
+        if (state == RemoteVideoState.remoteVideoStateFrozen ||
+            state == RemoteVideoState.remoteVideoStateFailed) {
+          LogService.w('Call',
+              'Remote video $state — uid=$remoteUid reason=$reason');
+        }
+      },
       // Fires when the token has already expired at join time, or expires mid-call.
       // onError does NOT fire for this case in Agora SDK 4.x.
       onRequestToken: (connection) {
@@ -116,6 +131,20 @@ class CallService {
     await _engine!.muteAllRemoteAudioStreams(true);
     if (videoEnabled) {
       await _engine!.enableVideo();
+      // Explicit modest profile instead of the SDK default. The critical part
+      // is maintainFramerate: the default (maintainQuality) keeps resolution
+      // and drops frames when a weak encoder chip can't keep up, which froze
+      // video on the lower-capability phone. maintainFramerate lowers
+      // resolution under load instead, keeping motion smooth.
+      await _engine!.setVideoEncoderConfiguration(
+        const VideoEncoderConfiguration(
+          dimensions: VideoDimensions(width: 640, height: 360),
+          frameRate: 15,
+          bitrate: standardBitrate,
+          orientationMode: OrientationMode.orientationModeAdaptive,
+          degradationPreference: DegradationPreference.maintainFramerate,
+        ),
+      );
       await _engine!.startPreview();
     }
     LogService.i('Call', 'Audio/video configured');
