@@ -61,7 +61,14 @@ class FirebaseChatRepository implements IChatRepository {
   Stream<bool> otherTypingStream() => ChatService.otherTypingStream();
 
   @override
+  Future<void> refreshPresence() => ChatService.refreshPresence();
+
+  @override
   Stream<bool> otherPresenceStream() => ChatService.otherPresenceStream();
+
+  @override
+  Stream<DateTime?> otherPresenceAtStream() =>
+      ChatService.otherPresenceAtStream();
 
   @override
   Stream<DateTime?> otherLastSeenStream() => ChatService.otherLastSeenStream();

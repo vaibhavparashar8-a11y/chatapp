@@ -184,19 +184,42 @@ class ChatService {
   /// Call when entering the chat screen — marks this user as present and
   /// clears the lastSeen timestamp so the other side never shows "last seen
   /// just now" while we are actively in the chat.
+  ///
+  /// Also stamps `presenceAt` — the presence heartbeat. Firestore has no
+  /// onDisconnect hook, so if the app process dies before leaveChat() runs
+  /// (force-kill, OEM battery manager) the `presence` boolean stays true
+  /// forever. The reader treats presence as stale when the heartbeat stops
+  /// (see ChatController), so "online" self-heals after a process death.
   static Future<void> enterChat() async {
     try {
       await _room.update({
         'presence.$mySenderId': true,
+        'presenceAt.$mySenderId': FieldValue.serverTimestamp(),
         'lastSeen.$mySenderId': FieldValue.delete(),
       });
     } catch (_) {
       try {
         await _room.set(
-          {'presence': {mySenderId: true}},
+          {
+            'presence': {mySenderId: true},
+            'presenceAt': {mySenderId: FieldValue.serverTimestamp()},
+          },
           SetOptions(merge: true),
         );
       } catch (_) {}
+    }
+  }
+
+  /// Re-affirm presence while the chat is open. Called periodically by
+  /// ChatController so the other side's staleness check keeps passing.
+  static Future<void> refreshPresence() async {
+    try {
+      await _room.update({
+        'presence.$mySenderId': true,
+        'presenceAt.$mySenderId': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      LogService.e('ChatService', 'refreshPresence failed: $e');
     }
   }
 
@@ -272,10 +295,22 @@ class ChatService {
   }
 
   /// Emits true while the other user has the chat screen open.
+  /// Raw boolean — staleness handling lives in ChatController, which
+  /// cross-checks [otherPresenceAtStream].
   static Stream<bool> otherPresenceStream() {
     final otherId = mySenderId == 'A' ? 'B' : 'A';
     return _sharedRoomData().map((data) =>
         (data['presence'] as Map<String, dynamic>? ?? {})[otherId] == true);
+  }
+
+  /// Emits the other user's presence heartbeat timestamp (null if their app
+  /// predates the heartbeat — the reader then trusts the raw boolean).
+  static Stream<DateTime?> otherPresenceAtStream() {
+    final otherId = mySenderId == 'A' ? 'B' : 'A';
+    return _sharedRoomData().map((data) {
+      final ts = (data['presenceAt'] as Map<String, dynamic>? ?? {})[otherId];
+      return ts != null ? (ts as dynamic).toDate() as DateTime : null;
+    });
   }
 
   /// Emits true whenever the other user is actively typing.

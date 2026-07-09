@@ -36,8 +36,18 @@ abstract class IChatRepository {
   Future<void> setLastReadMsgId(String messageId);
 
   Future<void> setTyping(bool isTyping);
+
+  /// Re-affirm presence (presence=true + presenceAt heartbeat). Called
+  /// periodically while the chat is open so the other side's staleness
+  /// check keeps passing.
+  Future<void> refreshPresence();
+
   Stream<bool> otherTypingStream();
   Stream<bool> otherPresenceStream();
+
+  /// The other user's presence heartbeat timestamp; null when their app
+  /// version predates the heartbeat (reader then trusts the raw boolean).
+  Stream<DateTime?> otherPresenceAtStream();
   Stream<DateTime?> otherLastSeenStream();
   Stream<DateTime?> otherReadAtStream();
   Future<void> clearMyView();
