@@ -1,5 +1,7 @@
+import 'package:flutter/gestures.dart' show TapGestureRecognizer;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
+import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
@@ -10,6 +12,7 @@ import '../constants.dart';
 import '../models/message.dart';
 import '../screens/media_viewer_screen.dart';
 import '../services/log_service.dart';
+import '../utils/link_utils.dart';
 
 part 'bubbles/shared.dart';
 part 'bubbles/encrypted_image.dart';
@@ -59,6 +62,9 @@ class _MessageBubbleState extends State<MessageBubble>
   double _slideOffset = 0;
   bool _triggerFired = false;
 
+  // Tap recognizers for link spans — recreated per build, disposed with the state.
+  final List<TapGestureRecognizer> _linkRecognizers = [];
+
   @override
   void initState() {
     super.initState();
@@ -77,7 +83,15 @@ class _MessageBubbleState extends State<MessageBubble>
   @override
   void dispose() {
     _snapCtrl.dispose();
+    _disposeLinkRecognizers();
     super.dispose();
+  }
+
+  void _disposeLinkRecognizers() {
+    for (final r in _linkRecognizers) {
+      r.dispose();
+    }
+    _linkRecognizers.clear();
   }
 
   void _onDragUpdate(DragUpdateDetails d) {
@@ -376,13 +390,54 @@ class _MessageBubbleState extends State<MessageBubble>
     );
   }
 
+  /// Text with http(s)/www URLs rendered as tappable, underlined spans that
+  /// open in the external browser. Long-press still bubbles up to the message
+  /// actions sheet — recognizers only claim taps.
+  Widget _buildLinkifiedText(String text, Color textColor) {
+    final chunks = splitLinks(text);
+    final baseStyle = TextStyle(fontSize: 15, color: textColor);
+    if (chunks.length == 1 && !chunks.first.isLink) {
+      return Text(text, style: baseStyle);
+    }
+    _disposeLinkRecognizers();
+    return Text.rich(
+      TextSpan(
+        children: chunks.map((c) {
+          if (!c.isLink) return TextSpan(text: c.text, style: baseStyle);
+          final recognizer = TapGestureRecognizer()
+            ..onTap = () => _openLink(c.url);
+          _linkRecognizers.add(recognizer);
+          return TextSpan(
+            text: c.text,
+            recognizer: recognizer,
+            style: baseStyle.copyWith(
+              color: const Color(0xFF8AB4F8),
+              decoration: TextDecoration.underline,
+              decorationColor: const Color(0xFF8AB4F8),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Future<void> _openLink(String url) async {
+    try {
+      final ok = await launchUrl(Uri.parse(url),
+          mode: LaunchMode.externalApplication);
+      if (!ok) LogService.w('Link', 'launchUrl returned false: $url');
+    } catch (e) {
+      LogService.w('Link', 'Could not open $url: $e');
+    }
+  }
+
   Widget _buildContent(BuildContext context, Color textColor) {
     final msg = widget.message;
     switch (msg.type) {
       case MessageType.text:
         return Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
-          child: Text(msg.text, style: TextStyle(fontSize: 15, color: textColor)),
+          child: _buildLinkifiedText(msg.text, textColor),
         );
 
       case MessageType.image:
