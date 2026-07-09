@@ -456,7 +456,12 @@ class _ChatScreenState extends State<ChatScreen>
     return ValueListenableBuilder<bool>(
       valueListenable: callActiveNotifier,
       builder: (_, active, __) {
-        if (!active || isCallVideo) return const SizedBox.shrink();
+        // Cross-check CallService.inCall: the notifier is a process-wide global
+        // that can be left stale-true by an atypical teardown; inCall is tied
+        // to the actual engine lifetime, so require both (phantom-bar guard).
+        if (!active || !CallService.inCall || isCallVideo) {
+          return const SizedBox.shrink();
+        }
         return GestureDetector(
           onTap: _returnToCall,
           child: Container(
@@ -820,7 +825,10 @@ class _ChatScreenState extends State<ChatScreen>
     return ValueListenableBuilder<bool>(
       valueListenable: callActiveNotifier,
       builder: (_, active, __) {
-        if (!active || !isCallVideo) return const SizedBox.shrink();
+        // Same phantom guard as the mini bar: only show over a live engine.
+        if (!active || !CallService.inCall || !isCallVideo) {
+          return const SizedBox.shrink();
+        }
         return _FloatingVideoOverlay(
           key: ValueKey(_floatingVideoEpoch),
           onTap: _returnToCall,

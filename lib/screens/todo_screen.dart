@@ -232,7 +232,7 @@ class _TodoScreenState extends State<TodoScreen> {
                       if (!remindOther) addToList = false;
                     }),
                   ),
-                  Expanded(child: Text('Remind $otherDisplayName')),
+                  const Expanded(child: Text('Notify')),
                 ],
               ),
               if (remindOther)
@@ -244,7 +244,7 @@ class _TodoScreenState extends State<TodoScreen> {
                       onChanged: (v) =>
                           setLocal(() => addToList = v ?? false),
                     ),
-                    const Expanded(child: Text('Add to their task list')),
+                    const Expanded(child: Text('Add to notify task list')),
                   ],
                 ),
             ],

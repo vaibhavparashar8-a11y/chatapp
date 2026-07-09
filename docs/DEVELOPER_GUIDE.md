@@ -717,6 +717,15 @@ Widget _buildContent(Message msg) {
 }
 ```
 
+**Tappable links** — text messages are linkified: `splitLinks()` in
+`lib/utils/link_utils.dart` (pure, unit-tested) splits the body into plain and
+URL chunks (`https?://` and bare `www.`, trailing sentence punctuation
+stripped); link chunks render as underlined `TextSpan`s with a
+`TapGestureRecognizer` that calls `url_launcher`'s `launchUrl(mode:
+externalApplication)`. Recognizers are tracked in `_linkRecognizers` and
+disposed with the state. Long-press message actions still work — recognizers
+only claim taps.
+
 **Swipe to reply** — gesture threshold:
 
 ```dart
@@ -760,6 +769,16 @@ bool get _isRead {
 | `incoming_call_dialog.dart` | Bottom-sheet shown when `callSignal.status == 'ringing'` |
 | `agora_token_builder.dart` | Client-side HMAC-SHA256 token builder (Test Mode fallback) |
 
+**Video encoder profile** — set explicitly in `CallService.joinCall()` (video
+calls only): 640×360 @ 15 fps, `standardBitrate`, adaptive orientation, and
+`DegradationPreference.maintainFramerate`. The last one is the load-bearing
+choice: the SDK default (`maintainQuality`) keeps resolution and drops frames
+when a weak encoder chip can't keep up, which froze video on the
+lower-capability phone; `maintainFramerate` lowers resolution under load
+instead so motion stays smooth. `onLocalVideoStateChanged` /
+`onRemoteVideoStateChanged` handlers log failed/frozen states to `app_logs`
+for diagnosis (observability only, no behavior).
+
 **Token priority chain** (in `CallScreen._startCall()`):
 
 ```
@@ -778,6 +797,22 @@ bool get _isRead {
 |---|---|---|
 | `CallService.inCall` | `joinCall()` → `leaveCall()` (entire call) | Blocks ChatScreen's background-leave navigation from popping CallScreen and killing the engine |
 | `callActiveNotifier` | Call is **minimized** only | Shows the mini call bar / floating video overlay in ChatScreen |
+
+The mini bar and floating overlay require **both** flags (`callActiveNotifier
+&& CallService.inCall`) — the notifier is a process-wide global that a botched
+teardown can leave stale-true, while `inCall` is tied to the actual engine
+lifetime. `leaveCall()` also resets `callActiveNotifier` itself, so every
+teardown path (error, timeout, remote hangup) hides the call UI.
+
+**Floating overlay geometry** — `CallService.overlayX/Y/W/H` hold the
+overlay's position and size, written on every drag/resize and read back in
+`_FloatingVideoOverlayState.initState()`. They live in CallService (not widget
+State) because returning from CallScreen bumps `_floatingVideoEpoch`, which
+recreates the overlay State — local fields would reset the overlay to defaults
+mid-call. `joinCall()` calls `resetOverlayGeometry()` so each NEW call starts
+at the default small size. A resize drag whose delta is fully absorbed by the
+min/max size clamps (size pinned) falls back to a move, so the overlay never
+feels "stuck" at its largest size.
 
 **Foreground service:** `CallScreen` invokes `startForeground` /
 `stopForeground` on a platform channel so Android keeps the process alive
@@ -870,7 +905,7 @@ Cross-device reminders AND two-way shared-task sync — both built on the
 The third delivery path is FCM push (see FcmService below) — so B gets the
 reminder whether the app is open, backgrounded, or killed.
 
-**Shared-task sync (tasks created with "Add to their task list"):**
+**Shared-task sync (tasks created with "Add to notify task list"):**
 
 The reminder doc is the source of truth. Both devices link their local copy
 via a `sharedId` field (legacy `reminder_*` IDs are backfilled automatically).
@@ -971,9 +1006,9 @@ The home screen — a personal to-do list with cross-device features.
 ```
 Pick date/time → dialog:
   ☑ Remind me            (pre-checked — local notification on this phone)
-  ☐ Remind Them          (creates a reminder doc → FCM push to other phone)
-      ☐ Add to their task list   (only visible when Remind Them is checked;
-                                  makes it a synced shared task)
+  ☐ Notify               (creates a reminder doc → FCM push to other phone)
+      ☐ Add to notify task list   (only visible when Notify is checked;
+                                   makes it a synced shared task)
 ```
 
 Tasks persist as JSON in SharedPreferences under `todos_v1`
@@ -1139,7 +1174,7 @@ main()
 ### 6.6 Cross-Device Reminder (3 delivery layers)
 
 ```
-A: task → alarm button → picks time → checks "Remind Them" (+ "Add to their task list")
+A: task → alarm button → picks time → checks "Notify" (+ "Add to notify task list")
         │
         ▼
 ReminderService.createReminder()
@@ -1205,9 +1240,13 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Presence flips offline during WhatsApp call overlay | Some devices fire only `inactive` for overlays | 8s debounce timer on `inactive` (`??=` so it never restarts mid-sequence) |
 | "online" stuck forever after force-kill / crash | (Fixed) `presence` boolean was only cleared by in-memory debounce timers; a killed process never runs them, and Firestore has no onDisconnect | `presenceAt` heartbeat re-stamped every 20s while chat open; reader shows "online" only while heartbeats keep arriving (45s stale window, measured by local receive time — clock-skew immune). `ChatController.dispose()` also leaves as defense-in-depth |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
+| Overlay "stuck" — won't move when enlarged | (Fixed) Resize mode latched at pan-down; at max size the clamps absorbed every delta, so the drag neither resized nor moved | Resize gesture falls back to move when the size is pinned at its clamp bounds |
+| Overlay resets to small size after returning from CallScreen | (Fixed) Geometry was widget State, wiped by the `_floatingVideoEpoch` key-bump reconstruction | Geometry hoisted to `CallService.overlayX/Y/W/H`; reset only in `joinCall()` (new call) |
+| Mini bar / video overlay appears with no live call | (Fixed) Visibility trusted `callActiveNotifier` alone, which atypical teardowns left stale-true | Gate on `callActiveNotifier && CallService.inCall`; `leaveCall()` centrally resets the notifier |
 | Reminder for other person never arrives | Recipient's phone has no FCM token registered | Check `rooms/{roomId}/fcmTokens` in Firestore Console — open the app once on that phone to register |
 | Reminder docs pile up in Firestore after deleting tasks | (Fixed) Self reminders were never stored, and "remind them, no list" docs were created but not linked to the local task, so deletion never removed them | Every created doc is linked (`sharedId` or `reminderDocId`) and `_delete` deletes `backingDocId`; self reminders are stored with `locallyScheduled=true` and the Cloud Function skips them |
 | Calls fail with token error | Cached token expired and `getAgoraToken` unreachable at last app open | Open the app once with network (token refreshes), or check function logs: `firebase functions:log` |
+| Video freezes/stutters on the lower-capability phone | (Fixed) No encoder config — Agora default `maintainQuality` kept resolution and dropped frames when the weak encoder couldn't keep up | Explicit 640×360@15fps profile with `DegradationPreference.maintainFramerate` in `joinCall()`; freeze/fail states now logged to `app_logs` |
 | "Call in progress" notification visible during background calls | Foreground service notification (required by Android) was IMPORTANCE_LOW with call-specific wording | (Fixed) IMPORTANCE_MIN channel + VISIBILITY_SECRET + neutral "MyTask — Running" text. A notification cannot be removed entirely — MIN importance is the OS maximum for discretion |
 
 ---
@@ -1372,21 +1411,26 @@ test/
 ├── models/
 │   └── message_test.dart                ← fromMap/toMap, all MessageTypes, legacy iv field
 ├── utils/
-│   └── time_utils_test.dart             ← formatLastSeen, formatDue,
-│                                           parseReminderTimestamp (UTC→local regression)
+│   ├── time_utils_test.dart             ← formatLastSeen, formatDue,
+│   │                                       parseReminderTimestamp (UTC→local regression)
+│   └── link_utils_test.dart             ← splitLinks URL detection (www, punctuation,
+│                                           multiple links, plain text)
 ├── services/
 │   ├── reminder_service_test.dart       ← applySharedSnapshot reconcile rules,
 │   │                                       insertTodoToPrefs sharedId link
 │   └── agora_token_service_test.dart    ← needsRefresh thresholds, cache behavior,
 │                                           fetch-failure fallback
 ├── widgets/
-│   └── message_bubble_test.dart         ← tick states, pending/failed rendering
+│   └── message_bubble_test.dart         ← tick states, pending/failed rendering,
+│                                           tappable link spans
 └── screens/
     ├── todo_screen_test.dart            ← add/complete/delete/search tasks, subtasks,
     │                                       long-press edit dialog, unified reminder dialog
     ├── calls_screen_test.dart           ← call history rendering
-    └── chat_screen_lifecycle_test.dart  ← background-leave navigation vs live calls
-                                            (uses DeviceService.testMode seam)
+    ├── chat_screen_lifecycle_test.dart  ← background-leave navigation vs live calls
+    │                                       (uses DeviceService.testMode seam)
+    └── chat_screen_overlay_test.dart    ← overlay geometry persistence defaults/reset,
+                                            phantom-open guard (notifier + inCall)
 integration_test/
 └── chat_screen_test.dart                ← end-to-end smoke tests (requires physical device)
 ```
@@ -1394,7 +1438,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 164 tests, ~20 seconds
+flutter test                        # 179 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a

@@ -22,6 +22,27 @@ class CallService {
   static bool isCameraOff = false;
   static bool isSpeakerOn = false;
 
+  // Floating overlay geometry — persisted across minimize/restore so the
+  // overlay reopens at the last size/position the user set during THIS call.
+  // _FloatingVideoOverlay is force-reconstructed (new Key) every time the user
+  // returns from CallScreen, so its own State can't hold this. Reset by
+  // joinCall() so a new call always starts at the defaults.
+  static const double overlayDefaultX = 16;
+  static const double overlayDefaultY = 80;
+  static const double overlayDefaultW = 120;
+  static const double overlayDefaultH = 160;
+  static double overlayX = overlayDefaultX;
+  static double overlayY = overlayDefaultY;
+  static double overlayW = overlayDefaultW;
+  static double overlayH = overlayDefaultH;
+
+  static void resetOverlayGeometry() {
+    overlayX = overlayDefaultX;
+    overlayY = overlayDefaultY;
+    overlayW = overlayDefaultW;
+    overlayH = overlayDefaultH;
+  }
+
   // Called when remote user leaves, even while UI is minimized
   static VoidCallback? onCallEnded;
 
@@ -58,6 +79,21 @@ class CallService {
       onError: (err, msg) {
         LogService.e('Call', 'Agora error — code=$err msg=$msg');
         _onError?.call();
+      },
+      // Observability only — no behavior change. Logs encoder overload /
+      // frozen-stream states so low-end-device video problems show up in
+      // app_logs instead of being invisible.
+      onLocalVideoStateChanged: (source, state, reason) {
+        if (state == LocalVideoStreamState.localVideoStreamStateFailed) {
+          LogService.w('Call', 'Local video FAILED — reason=$reason');
+        }
+      },
+      onRemoteVideoStateChanged: (connection, remoteUid, state, reason, elapsed) {
+        if (state == RemoteVideoState.remoteVideoStateFrozen ||
+            state == RemoteVideoState.remoteVideoStateFailed) {
+          LogService.w('Call',
+              'Remote video $state — uid=$remoteUid reason=$reason');
+        }
       },
       // Fires when the token has already expired at join time, or expires mid-call.
       // onError does NOT fire for this case in Agora SDK 4.x.
@@ -105,6 +141,7 @@ class CallService {
     required void Function() onError,
   }) async {
     inCall = true; // set before any await so a pending leave-timer can't pop us
+    resetOverlayGeometry(); // new call → overlay starts at default size/position
     final myUid = mySenderId == 'A' ? 1 : 2;
     LogService.i('Call', 'joinCall — role=$mySenderId uid=$myUid token=${token.isEmpty ? "none" : "set(${token.length})"}');
 
@@ -116,6 +153,20 @@ class CallService {
     await _engine!.muteAllRemoteAudioStreams(true);
     if (videoEnabled) {
       await _engine!.enableVideo();
+      // Explicit modest profile instead of the SDK default. The critical part
+      // is maintainFramerate: the default (maintainQuality) keeps resolution
+      // and drops frames when a weak encoder chip can't keep up, which froze
+      // video on the lower-capability phone. maintainFramerate lowers
+      // resolution under load instead, keeping motion smooth.
+      await _engine!.setVideoEncoderConfiguration(
+        const VideoEncoderConfiguration(
+          dimensions: VideoDimensions(width: 640, height: 360),
+          frameRate: 15,
+          bitrate: standardBitrate,
+          orientationMode: OrientationMode.orientationModeAdaptive,
+          degradationPreference: DegradationPreference.maintainFramerate,
+        ),
+      );
       await _engine!.startPreview();
     }
     LogService.i('Call', 'Audio/video configured');
@@ -140,6 +191,11 @@ class CallService {
   static Future<void> leaveCall() async {
     LogService.i('Call', 'leaveCall — releasing engine');
     inCall = false;
+    // Centralized here so EVERY teardown path (error, timeout, remote hangup)
+    // hides the overlay/mini-bar. The scattered per-callback resets in
+    // CallScreen missed atypical paths, leaving the overlay to appear
+    // "mistakenly" on a later ChatScreen build with no live call.
+    callActiveNotifier.value = false;
     _onUserJoined = null;
     _onUserLeft = null;
     _onError = null;
