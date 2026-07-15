@@ -1,4 +1,5 @@
 import 'dart:developer' as dev;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
@@ -12,6 +13,18 @@ class NotificationService {
 
   // Set to true in widget/unit tests to skip all platform-channel calls.
   static bool testMode = false;
+
+  /// Records the arguments of every [scheduleReminder] call made while
+  /// [testMode] is on, so tests can assert what got (re)armed. Tests should
+  /// clear it in setUp; it is unused in production.
+  @visibleForTesting
+  static final List<
+      ({
+        int id,
+        String title,
+        DateTime time,
+        Recurrence recurrence,
+      })> debugScheduled = [];
 
   static const _channelId = 'task_reminders';
   static const _channelName = 'Task Reminders';
@@ -71,7 +84,15 @@ class NotificationService {
     required DateTime scheduledTime,
     Recurrence recurrence = Recurrence.none,
   }) async {
-    if (testMode) return true;
+    if (testMode) {
+      debugScheduled.add((
+        id: id,
+        title: title,
+        time: scheduledTime,
+        recurrence: recurrence,
+      ));
+      return true;
+    }
 
     if (!_initialized) {
       try {

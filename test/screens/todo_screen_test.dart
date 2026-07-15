@@ -10,6 +10,7 @@ import 'package:chatapp/services/remote_config_service.dart';
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    NotificationService.debugScheduled.clear();
     NotificationService.testMode = true;
     RemoteConfigService.testMode = true;
     ReminderService.testMode = true;
@@ -533,5 +534,40 @@ void main() {
 
     // ReminderService.testMode skips Firestore; snackbar still shows
     expect(find.text('Notified'), findsOneWidget);
+  });
+
+  // ── Re-arm on launch (survives APK update) ───────────────────────────────────
+
+  testWidgets('re-arms pending reminders on launch, skipping elapsed/done',
+      (tester) async {
+    final future = DateTime.now().add(const Duration(days: 1));
+    final past = DateTime.now().subtract(const Duration(days: 1));
+    SharedPreferences.setMockInitialValues({
+      'todos_v1': jsonEncode([
+        {'id': 'a', 'title': 'Future one-shot', 'done': false,
+          'dueDate': future.toIso8601String(), 'subtasks': []},
+        {'id': 'b', 'title': 'Past one-shot', 'done': false,
+          'dueDate': past.toIso8601String(), 'subtasks': []},
+        {'id': 'c', 'title': 'Daily recurring', 'done': false,
+          'dueDate': past.toIso8601String(), 'recurrence': 'daily',
+          'subtasks': []},
+        {'id': 'd', 'title': 'Done task', 'done': true,
+          'dueDate': future.toIso8601String(), 'subtasks': []},
+        {'id': 'e', 'title': 'No reminder', 'done': false, 'subtasks': []},
+      ]),
+    });
+    NotificationService.debugScheduled.clear();
+
+    await tester.pumpWidget(wrap());
+    await tester.pumpAndSettle();
+
+    final titles =
+        NotificationService.debugScheduled.map((s) => s.title).toSet();
+    // Future one-shot and (past-due) recurring are re-armed.
+    expect(titles, containsAll(<String>{'Future one-shot', 'Daily recurring'}));
+    // Elapsed one-shot, done task, and reminder-less task are left alone.
+    expect(titles, isNot(contains('Past one-shot')));
+    expect(titles, isNot(contains('Done task')));
+    expect(titles, isNot(contains('No reminder')));
   });
 }
