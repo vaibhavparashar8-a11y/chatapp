@@ -1009,6 +1009,14 @@ through SharedPreferences and Firestore.
 
 The home screen — a personal to-do list with cross-device features.
 
+Split into `part` files under `screens/todo/` to stay approachable:
+`todo_models.dart` (`_Todo`/`_SubTodo`), `todo_tile.dart` (the `_TodoTile`
+card + sub-task rows), `todo_widgets.dart` (header stats, empty/no-results/
+section-header, input bar, `_EditTaskDialog`), and `todo_dialogs.dart` (the
+`setState`-free `_showWhatsAppSettings` / `_pickDateTime` as an extension).
+`_TodoScreenState` keeps all state and orchestration; the tile widgets route
+mutations back through callbacks (they can't call `setState` directly).
+
 | Feature | How |
 |---|---|
 | Add task | Bottom input bar → "Set a reminder?" prompt → unified Set Reminder dialog |

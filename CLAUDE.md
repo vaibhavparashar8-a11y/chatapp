@@ -19,7 +19,8 @@ lib/
 ├── repositories/          ← IChatRepository interface + FirebaseChatRepository adapter
 ├── services/              ← static-method services (chat, device, reminder, fcm,
 │                             notification, agora_token, remote_config, log, call_log)
-├── screens/               ← todo_screen (home), chat_screen (+ part files in chat/),
+├── screens/               ← todo_screen (home, + part files in todo/),
+│                             chat_screen (+ part files in chat/),
 │                             calls_screen, media_viewer, log_screen
 ├── widgets/               ← message_bubble (+ part files in bubbles/)
 ├── features/call/         ← CallService (Agora engine), CallScreen, incoming dialog
@@ -94,12 +95,14 @@ report **no issues** before you commit.
   single Dart file. A file a new developer can't skim in a few minutes is too
   big — split it before adding more.
 - Split screens into `part` files grouped in a subfolder (see the good
-  examples: `screens/chat/` for `chat_screen.dart`, `widgets/bubbles/` for
-  `message_bubble.dart`). Extract reusable widgets into `widgets/`, and push
-  business logic down into controllers/services so the screen stays thin.
-- Known outlier to split when next touched: `screens/todo_screen.dart`
-  (~1200 lines, no `part` files yet) — carve out models, the reminder dialog,
-  and the tile/list widgets rather than growing it further.
+  examples: `screens/chat/` for `chat_screen.dart`, `screens/todo/` for
+  `todo_screen.dart`, `widgets/bubbles/` for `message_bubble.dart`). Extract
+  presentational pieces into stateless widgets that take callbacks; for async
+  helpers that don't call `setState`, an `extension on _State` in a part file
+  works too. Push business logic down into controllers/services so the screen
+  stays thin. Note: `setState` cannot be called from an extension (it trips
+  `invalid_use_of_protected_member`) — keep `setState`-owning methods in the
+  State class and route mutations from widgets back through callbacks.
 - The same spirit applies to services and Cloud Functions: group related
   helpers, and prefer a new focused file over piling onto an existing one.
 
