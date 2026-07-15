@@ -1010,12 +1010,17 @@ through SharedPreferences and Firestore.
 The home screen — a personal to-do list with cross-device features.
 
 Split into `part` files under `screens/todo/` to stay approachable:
-`todo_models.dart` (`_Todo`/`_SubTodo`), `todo_tile.dart` (the `_TodoTile`
-card + sub-task rows), `todo_widgets.dart` (header stats, empty/no-results/
-section-header, input bar, `_EditTaskDialog`), and `todo_dialogs.dart` (the
-`setState`-free `_showWhatsAppSettings` / `_pickDateTime` as an extension).
-`_TodoScreenState` keeps all state and orchestration; the tile widgets route
-mutations back through callbacks (they can't call `setState` directly).
+`todo_theme.dart` (the dark-violet palette + dialog/picker helpers, mirrored
+from the chat screen so both halves feel like one product), `todo_models.dart`
+(`_Todo`/`_SubTodo`), `todo_tile.dart` (the `_TodoTile` card + sub-task rows),
+`todo_widgets.dart` (header stats, empty/no-results/section-header, input bar,
+`_EditTaskDialog`), and `todo_dialogs.dart` (the `setState`-free
+`_showWhatsAppSettings` / `_pickDateTime` as an extension). `_TodoScreenState`
+keeps all state and orchestration; the tile widgets route mutations back
+through callbacks (they can't call `setState` directly). The screen renders a
+dark theme (gradient app bar, `_kTodoBg` scaffold, `_kTodoCard` tiles) with all
+dialogs/pickers themed dark explicitly, independent of the system light/dark
+setting.
 
 | Feature | How |
 |---|---|

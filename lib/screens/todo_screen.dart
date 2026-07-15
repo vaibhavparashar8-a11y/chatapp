@@ -15,6 +15,7 @@ import '../utils/time_utils.dart';
 // Split into `part` files to keep this screen approachable (see CLAUDE.md
 // file-size guideline). Models and all presentational widgets live alongside;
 // _TodoScreenState below owns the state and orchestration.
+part 'todo/todo_theme.dart';
 part 'todo/todo_models.dart';
 part 'todo/todo_widgets.dart';
 part 'todo/todo_tile.dart';
@@ -147,14 +148,19 @@ class _TodoScreenState extends State<TodoScreen> {
     final want = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        backgroundColor: _kTodoCard,
+        titleTextStyle: _kTodoDialogTitle,
+        contentTextStyle: _kTodoDialogContent,
         title: const Text('Set a reminder?'),
         content: Text('Add a reminder for "$text"?'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
+              style: TextButton.styleFrom(foregroundColor: _kTodoTextDim),
               child: const Text('Skip')),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(backgroundColor: _kTodoAccentDeep),
               child: const Text('Set')),
         ],
       ),
@@ -178,6 +184,8 @@ class _TodoScreenState extends State<TodoScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
+          backgroundColor: _kTodoCard,
+          titleTextStyle: _kTodoDialogTitle,
           title: const Text('Set Reminder'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -187,8 +195,12 @@ class _TodoScreenState extends State<TodoScreen> {
                   Checkbox(
                     value: remindSelf,
                     onChanged: (v) => setLocal(() => remindSelf = v ?? true),
+                    activeColor: _kTodoAccent,
+                    side: const BorderSide(color: Colors.white38, width: 1.5),
                   ),
-                  const Expanded(child: Text('Remind me')),
+                  const Expanded(
+                      child: Text('Remind me',
+                          style: TextStyle(color: _kTodoText))),
                 ],
               ),
               Row(
@@ -199,8 +211,12 @@ class _TodoScreenState extends State<TodoScreen> {
                       remindOther = v ?? false;
                       if (!remindOther) addToList = false;
                     }),
+                    activeColor: _kTodoAccent,
+                    side: const BorderSide(color: Colors.white38, width: 1.5),
                   ),
-                  const Expanded(child: Text('Notify')),
+                  const Expanded(
+                      child:
+                          Text('Notify', style: TextStyle(color: _kTodoText))),
                 ],
               ),
               if (remindOther)
@@ -211,8 +227,12 @@ class _TodoScreenState extends State<TodoScreen> {
                       value: addToList,
                       onChanged: (v) =>
                           setLocal(() => addToList = v ?? false),
+                      activeColor: _kTodoAccent,
+                      side: const BorderSide(color: Colors.white38, width: 1.5),
                     ),
-                    const Expanded(child: Text('Add to notify task list')),
+                    const Expanded(
+                        child: Text('Add to notify task list',
+                            style: TextStyle(color: _kTodoText))),
                   ],
                 ),
             ],
@@ -220,10 +240,12 @@ class _TodoScreenState extends State<TodoScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
+              style: TextButton.styleFrom(foregroundColor: _kTodoTextDim),
               child: const Text('Cancel'),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(backgroundColor: _kTodoAccentDeep),
               child: const Text('Set'),
             ),
           ],
@@ -408,6 +430,9 @@ class _TodoScreenState extends State<TodoScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        backgroundColor: _kTodoCard,
+        titleTextStyle: _kTodoDialogTitle,
+        contentTextStyle: _kTodoDialogContent,
         title: const Text('Reset Role Assignment?'),
         content: const Text(
           'Clears A/B roles for this device and wipes Firestore assignment. '
@@ -416,6 +441,7 @@ class _TodoScreenState extends State<TodoScreen> {
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
+              style: TextButton.styleFrom(foregroundColor: _kTodoTextDim),
               child: const Text('Cancel')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -466,14 +492,14 @@ class _TodoScreenState extends State<TodoScreen> {
     final done = filtered.where((t) => t.done).toList();
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF0F2F5),
+      backgroundColor: _kTodoBg,
       appBar: AppBar(
         title: _searching
             ? TextField(
                 controller: _searchCtrl,
                 autofocus: true,
                 style: const TextStyle(color: Colors.white, fontSize: 18),
-                cursorColor: Colors.white,
+                cursorColor: _kTodoAccentLight,
                 decoration: const InputDecoration(
                   hintText: 'Search tasks...',
                   hintStyle: TextStyle(color: Colors.white54),
@@ -488,9 +514,18 @@ class _TodoScreenState extends State<TodoScreen> {
                         TextStyle(fontWeight: FontWeight.w700, fontSize: 20)),
               ),
         centerTitle: false,
-        backgroundColor: Colors.indigo,
+        backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         elevation: 0,
+        flexibleSpace: const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [_kTodoAppBar1, _kTodoAppBar2],
+            ),
+          ),
+        ),
         actions: [
           if (_searching)
             IconButton(

@@ -13,22 +13,22 @@ class _HeaderStats extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: Colors.indigo.shade700,
+      color: _kTodoHeaderBar,
       padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
       child: Row(
         children: [
-          Icon(Icons.pending_actions_rounded,
-              size: 13, color: Colors.indigo.shade200),
+          const Icon(Icons.pending_actions_rounded,
+              size: 13, color: _kTodoAccentLight),
           const SizedBox(width: 4),
           Text('$pending pending',
-              style: TextStyle(color: Colors.indigo.shade200, fontSize: 12)),
+              style: const TextStyle(color: _kTodoAccentLight, fontSize: 12)),
           if (done > 0) ...[
             const SizedBox(width: 14),
-            Icon(Icons.check_circle_outline,
-                size: 13, color: Colors.indigo.shade200),
+            const Icon(Icons.check_circle_outline,
+                size: 13, color: _kTodoAccentLight),
             const SizedBox(width: 4),
             Text('$done done',
-                style: TextStyle(color: Colors.indigo.shade200, fontSize: 12)),
+                style: const TextStyle(color: _kTodoAccentLight, fontSize: 12)),
           ],
         ],
       ),
@@ -42,20 +42,20 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 80),
+    return const Padding(
+      padding: EdgeInsets.only(top: 80),
       child: Column(
         children: [
-          Icon(Icons.checklist_rounded, size: 72, color: Colors.indigo.shade100),
-          const SizedBox(height: 16),
-          const Text('No tasks yet',
+          Icon(Icons.checklist_rounded, size: 72, color: _kTodoAccent),
+          SizedBox(height: 16),
+          Text('No tasks yet',
               style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w600,
-                  color: Colors.black38)),
-          const SizedBox(height: 6),
-          const Text('Add a task below to get started',
-              style: TextStyle(fontSize: 13, color: Colors.black26)),
+                  color: _kTodoTextDim)),
+          SizedBox(height: 6),
+          Text('Add a task below to get started',
+              style: TextStyle(fontSize: 13, color: _kTodoTextFaint)),
         ],
       ),
     );
@@ -73,16 +73,16 @@ class _NoResults extends StatelessWidget {
       padding: const EdgeInsets.only(top: 80),
       child: Column(
         children: [
-          Icon(Icons.search_off_rounded, size: 72, color: Colors.indigo.shade100),
+          const Icon(Icons.search_off_rounded, size: 72, color: _kTodoAccent),
           const SizedBox(height: 16),
           const Text('No matching tasks',
               style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w600,
-                  color: Colors.black38)),
+                  color: _kTodoTextDim)),
           const SizedBox(height: 6),
           Text('No tasks match "$query"',
-              style: const TextStyle(fontSize: 13, color: Colors.black26)),
+              style: const TextStyle(fontSize: 13, color: _kTodoTextFaint)),
         ],
       ),
     );
@@ -103,15 +103,15 @@ class _SectionHeader extends StatelessWidget {
         children: [
           Text(
             '${label.toUpperCase()} ($count)',
-            style: TextStyle(
+            style: const TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w700,
-              color: Colors.grey.shade500,
+              color: _kTodoAccentLight,
               letterSpacing: 0.8,
             ),
           ),
           const SizedBox(width: 8),
-          Expanded(child: Divider(color: Colors.grey.shade300, height: 1)),
+          const Expanded(child: Divider(color: _kTodoDivider, height: 1)),
         ],
       ),
     );
@@ -137,13 +137,13 @@ class _TaskInputBar extends StatelessWidget {
     return Container(
       padding: EdgeInsets.fromLTRB(
           16, 10, 16, MediaQuery.of(context).padding.bottom + 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
+      decoration: const BoxDecoration(
+        color: _kTodoHeaderBar,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
+            color: Colors.black26,
             blurRadius: 12,
-            offset: const Offset(0, -3),
+            offset: Offset(0, -3),
           ),
         ],
       ),
@@ -160,9 +160,10 @@ class _TaskInputBar extends StatelessWidget {
               onSubmitted: (_) => onSubmit(),
               decoration: InputDecoration(
                 hintText: 'Add a task...',
-                hintStyle: TextStyle(color: Colors.grey.shade400),
+                hintStyle:
+                    TextStyle(color: Colors.white.withValues(alpha: 0.35)),
                 filled: true,
-                fillColor: const Color(0xFFF5F5F7),
+                fillColor: _kTodoField,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(26),
                   borderSide: BorderSide.none,
@@ -175,7 +176,7 @@ class _TaskInputBar extends StatelessWidget {
           const SizedBox(width: 10),
           FloatingActionButton(
             onPressed: onSubmit,
-            backgroundColor: Colors.indigo,
+            backgroundColor: _kTodoAccentDeep,
             foregroundColor: Colors.white,
             elevation: 2,
             mini: true,
@@ -215,21 +216,34 @@ class _EditTaskDialogState extends State<_EditTaskDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      backgroundColor: _kTodoCard,
+      titleTextStyle: _kTodoDialogTitle,
       title: const Text('Edit Task'),
       content: TextField(
         controller: _ctrl,
         autofocus: true,
         textCapitalization: TextCapitalization.sentences,
-        decoration: const InputDecoration(hintText: 'Task title'),
+        style: const TextStyle(color: _kTodoText),
+        cursorColor: _kTodoAccentLight,
+        decoration: InputDecoration(
+          hintText: 'Task title',
+          hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.35)),
+          enabledBorder: const UnderlineInputBorder(
+              borderSide: BorderSide(color: _kTodoDivider)),
+          focusedBorder: const UnderlineInputBorder(
+              borderSide: BorderSide(color: _kTodoAccentLight)),
+        ),
         onSubmitted: (v) => Navigator.pop(context, v),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
+          style: TextButton.styleFrom(foregroundColor: _kTodoTextDim),
           child: const Text('Cancel'),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(context, _ctrl.text),
+          style: FilledButton.styleFrom(backgroundColor: _kTodoAccentDeep),
           child: const Text('Save'),
         ),
       ],

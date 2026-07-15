@@ -21,6 +21,8 @@ extension _TodoDialogs on _TodoScreenState {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
+          backgroundColor: _kTodoCard,
+          titleTextStyle: _kTodoDialogTitle,
           title: const Text('Daily task summary'),
           content: SingleChildScrollView(
             child: Column(
@@ -29,23 +31,30 @@ extension _TodoDialogs on _TodoScreenState {
               children: [
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('Send to WhatsApp'),
+                  activeThumbColor: _kTodoAccentLight,
+                  title: const Text('Send to WhatsApp',
+                      style: TextStyle(color: _kTodoText)),
                   subtitle: const Text(
-                      'A morning checklist of the day’s tasks, plus a ping when each timed task is due.'),
+                      'A morning checklist of the day’s tasks, plus a ping when each timed task is due.',
+                      style: TextStyle(color: _kTodoTextDim)),
                   value: enabled,
                   onChanged: (v) => setLocal(() => enabled = v),
                 ),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   enabled: enabled,
-                  leading: const Icon(Icons.schedule),
-                  title: const Text('Summary time'),
+                  leading: const Icon(Icons.schedule, color: _kTodoAccentLight),
+                  title: const Text('Summary time',
+                      style: TextStyle(color: _kTodoText)),
                   trailing: Text(time.format(ctx),
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                      style: const TextStyle(
+                          color: _kTodoText, fontWeight: FontWeight.w600)),
                   onTap: enabled
                       ? () async {
                           final picked = await showTimePicker(
-                              context: ctx, initialTime: time);
+                              context: ctx,
+                              initialTime: time,
+                              builder: _todoPickerTheme);
                           if (picked != null) setLocal(() => time = picked);
                         }
                       : null,
@@ -54,17 +63,27 @@ extension _TodoDialogs on _TodoScreenState {
                   controller: phoneCtrl,
                   enabled: enabled,
                   keyboardType: TextInputType.phone,
-                  decoration: const InputDecoration(
+                  style: const TextStyle(color: _kTodoText),
+                  cursorColor: _kTodoAccentLight,
+                  decoration: InputDecoration(
                     labelText: 'Your WhatsApp number',
+                    labelStyle: const TextStyle(color: _kTodoAccentLight),
                     hintText: 'Country code + number, e.g. 919812345678',
+                    hintStyle:
+                        TextStyle(color: Colors.white.withValues(alpha: 0.35)),
                     prefixText: '+',
+                    prefixStyle: const TextStyle(color: _kTodoText),
+                    enabledBorder: const UnderlineInputBorder(
+                        borderSide: BorderSide(color: _kTodoDivider)),
+                    focusedBorder: const UnderlineInputBorder(
+                        borderSide: BorderSide(color: _kTodoAccentLight)),
                   ),
                 ),
                 const SizedBox(height: 8),
                 const Text(
                   'One-time setup: save +34 644 66 32 62 on WhatsApp and send it '
                   '“I allow callmebot to send me messages” to activate.',
-                  style: TextStyle(fontSize: 12, color: Colors.black54),
+                  style: TextStyle(fontSize: 12, color: _kTodoTextFaint),
                 ),
               ],
             ),
@@ -72,10 +91,12 @@ extension _TodoDialogs on _TodoScreenState {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
+              style: TextButton.styleFrom(foregroundColor: _kTodoTextDim),
               child: const Text('Cancel'),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(backgroundColor: _kTodoAccentDeep),
               child: const Text('Save'),
             ),
           ],
@@ -139,12 +160,14 @@ extension _TodoDialogs on _TodoScreenState {
       firstDate: now,
       lastDate: now.add(const Duration(days: 365)),
       helpText: 'Pick reminder date',
+      builder: _todoPickerTheme,
     );
     if (date == null || !mounted) return null;
     final time = await showTimePicker(
       context: context,
       initialTime: TimeOfDay.fromDateTime(initial ?? init),
       helpText: 'Pick reminder time',
+      builder: _todoPickerTheme,
     );
     if (time == null) return null;
     return DateTime(date.year, date.month, date.day, time.hour, time.minute);
