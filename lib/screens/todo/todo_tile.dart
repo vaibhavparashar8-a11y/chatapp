@@ -43,13 +43,13 @@ class _TodoTile extends StatelessWidget {
 
     Color accent;
     if (todo.done) {
-      accent = Colors.grey.shade300;
+      accent = Colors.white24;
     } else if (isOverdue) {
       accent = Colors.red.shade400;
     } else if (hasReminder) {
-      accent = Colors.indigo.shade400;
+      accent = _kTodoAccent;
     } else {
-      accent = Colors.indigo.shade100;
+      accent = _kTodoAppBar2;
     }
 
     return Dismissible(
@@ -68,13 +68,13 @@ class _TodoTile extends StatelessWidget {
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: _kTodoCard,
           borderRadius: BorderRadius.circular(14),
-          boxShadow: [
+          boxShadow: const [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
+              color: Colors.black26,
               blurRadius: 8,
-              offset: const Offset(0, 2),
+              offset: Offset(0, 2),
             ),
           ],
         ),
@@ -108,12 +108,12 @@ class _TodoTile extends StatelessWidget {
                                   child: Checkbox(
                                     value: todo.done,
                                     onChanged: onToggleDone,
-                                    activeColor: Colors.indigo,
+                                    activeColor: _kTodoAccent,
                                     shape: const CircleBorder(),
                                     side: BorderSide(
                                       color: todo.done
-                                          ? Colors.indigo
-                                          : Colors.grey.shade400,
+                                          ? _kTodoAccent
+                                          : Colors.white24,
                                       width: 1.5,
                                     ),
                                     materialTapTargetSize:
@@ -136,8 +136,8 @@ class _TodoTile extends StatelessWidget {
                                               ? TextDecoration.lineThrough
                                               : null,
                                           color: todo.done
-                                              ? Colors.grey.shade400
-                                              : Colors.black87,
+                                              ? _kTodoTextFaint
+                                              : _kTodoText,
                                         ),
                                       ),
                                       if (hasReminder) ...[
@@ -147,7 +147,7 @@ class _TodoTile extends StatelessWidget {
                                               size: 11,
                                               color: isOverdue
                                                   ? Colors.red.shade400
-                                                  : Colors.indigo.shade300),
+                                                  : _kTodoAccentLight),
                                           const SizedBox(width: 3),
                                           Text(
                                             formatDue(todo.dueDate!),
@@ -155,7 +155,7 @@ class _TodoTile extends StatelessWidget {
                                               fontSize: 11,
                                               color: isOverdue
                                                   ? Colors.red.shade400
-                                                  : Colors.indigo.shade300,
+                                                  : _kTodoAccentLight,
                                               fontWeight: isOverdue
                                                   ? FontWeight.w600
                                                   : FontWeight.normal,
@@ -175,11 +175,11 @@ class _TodoTile extends StatelessWidget {
                                                 value: todo.doneSubtasks /
                                                     todo.subtasks.length,
                                                 backgroundColor:
-                                                    Colors.grey.shade200,
+                                                    Colors.white12,
                                                 color: todo.doneSubtasks ==
                                                         todo.subtasks.length
-                                                    ? Colors.green.shade400
-                                                    : Colors.indigo.shade300,
+                                                    ? _kTodoEmerald
+                                                    : _kTodoAccentLight,
                                                 minHeight: 3,
                                               ),
                                             ),
@@ -187,9 +187,9 @@ class _TodoTile extends StatelessWidget {
                                           const SizedBox(width: 6),
                                           Text(
                                             '${todo.doneSubtasks}/${todo.subtasks.length}',
-                                            style: TextStyle(
+                                            style: const TextStyle(
                                                 fontSize: 11,
-                                                color: Colors.grey.shade500),
+                                                color: _kTodoTextDim),
                                           ),
                                         ]),
                                       ],
@@ -206,8 +206,8 @@ class _TodoTile extends StatelessWidget {
                                     color: isOverdue
                                         ? Colors.red.shade400
                                         : hasReminder
-                                            ? Colors.indigo.shade400
-                                            : Colors.grey.shade400,
+                                            ? _kTodoAccent
+                                            : Colors.white38,
                                   ),
                                   onPressed: onSetReminder,
                                   padding: const EdgeInsets.all(6),
@@ -218,9 +218,9 @@ class _TodoTile extends StatelessWidget {
                                 AnimatedRotation(
                                   turns: isExpanded ? 0.5 : 0,
                                   duration: const Duration(milliseconds: 200),
-                                  child: Icon(
+                                  child: const Icon(
                                     Icons.keyboard_arrow_down_rounded,
-                                    color: Colors.grey.shade400,
+                                    color: Colors.white38,
                                     size: 22,
                                   ),
                                 ),
@@ -236,9 +236,9 @@ class _TodoTile extends StatelessWidget {
                         child: isExpanded
                             ? Column(
                                 children: [
-                                  Divider(
+                                  const Divider(
                                       height: 1,
-                                      color: Colors.grey.shade100,
+                                      color: _kTodoDivider,
                                       indent: 16),
                                   ...todo.subtasks.map(_subtaskRow),
                                   _subtaskInput(),
@@ -268,9 +268,9 @@ class _TodoTile extends StatelessWidget {
             child: Checkbox(
               value: sub.done,
               onChanged: (v) => onToggleSubtask(sub, v),
-              activeColor: Colors.indigo.shade300,
+              activeColor: _kTodoAccent,
               shape: const CircleBorder(),
-              side: BorderSide(color: Colors.grey.shade300, width: 1.5),
+              side: const BorderSide(color: Colors.white24, width: 1.5),
               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
           ),
@@ -280,14 +280,14 @@ class _TodoTile extends StatelessWidget {
               sub.title,
               style: TextStyle(
                 fontSize: 13,
-                color: sub.done ? Colors.grey.shade400 : Colors.black54,
+                color: sub.done ? _kTodoTextFaint : _kTodoTextDim,
                 decoration: sub.done ? TextDecoration.lineThrough : null,
               ),
             ),
           ),
           IconButton(
-            icon: Icon(Icons.close_rounded,
-                size: 16, color: Colors.grey.shade300),
+            icon: const Icon(Icons.close_rounded,
+                size: 16, color: Colors.white38),
             onPressed: () => onDeleteSubtask(sub.id),
             padding: const EdgeInsets.all(6),
             constraints: const BoxConstraints(),
@@ -302,16 +302,17 @@ class _TodoTile extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 6, 12, 10),
       child: Row(
         children: [
-          Icon(Icons.add, size: 15, color: Colors.grey.shade400),
+          const Icon(Icons.add, size: 15, color: Colors.white38),
           const SizedBox(width: 8),
           Expanded(
             child: TextField(
               controller: subCtrl,
-              style: const TextStyle(fontSize: 13, color: Colors.black87),
+              style: const TextStyle(fontSize: 13, color: _kTodoText),
+              cursorColor: _kTodoAccentLight,
               decoration: InputDecoration(
                 hintText: 'Add sub-task...',
-                hintStyle:
-                    TextStyle(color: Colors.grey.shade400, fontSize: 13),
+                hintStyle: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.35), fontSize: 13),
                 border: InputBorder.none,
                 isDense: true,
                 contentPadding: EdgeInsets.zero,
@@ -322,8 +323,8 @@ class _TodoTile extends StatelessWidget {
           ),
           GestureDetector(
             onTap: onAddSubtask,
-            child: Icon(Icons.send_rounded,
-                size: 17, color: Colors.indigo.shade300),
+            child: const Icon(Icons.send_rounded,
+                size: 17, color: _kTodoAccentLight),
           ),
         ],
       ),
