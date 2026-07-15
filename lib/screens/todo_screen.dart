@@ -9,6 +9,7 @@ import '../services/notification_service.dart';
 import '../services/reminder_service.dart';
 import '../services/log_service.dart';
 import '../services/digest_service.dart';
+import '../models/recurrence.dart';
 import '../constants.dart' show mySenderId, todoRefreshNotifier;
 import '../utils/time_utils.dart';
 
@@ -93,6 +94,7 @@ class _TodoScreenState extends State<TodoScreen> {
                     ? id.substring('reminder_'.length)
                     : null),
             reminderDocId: e['reminderDocId'] as String?,
+            recurrence: Recurrence.fromStorage(e['recurrence'] as String?),
           );
         }).toList();
       });
@@ -111,6 +113,8 @@ class _TodoScreenState extends State<TodoScreen> {
                 if (t.sharedId != null) 'sharedId': t.sharedId,
                 if (t.reminderDocId != null) 'reminderDocId': t.reminderDocId,
                 if (t.dueDate != null) 'dueDate': t.dueDate!.toIso8601String(),
+                if (t.recurrence != Recurrence.none)
+                  'recurrence': t.recurrence.storage,
                 'subtasks': t.subtasks
                     .map((s) => {'id': s.id, 'title': s.title, 'done': s.done})
                     .toList(),
@@ -179,6 +183,7 @@ class _TodoScreenState extends State<TodoScreen> {
     bool remindSelf = true;
     bool remindOther = false;
     bool addToList = false;
+    Recurrence recurrence = todo.recurrence;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -235,6 +240,27 @@ class _TodoScreenState extends State<TodoScreen> {
                             style: TextStyle(color: _kTodoText))),
                   ],
                 ),
+              const Divider(color: _kTodoDivider, height: 20),
+              Row(
+                children: const [
+                  Icon(Icons.repeat, size: 18, color: _kTodoAccentLight),
+                  SizedBox(width: 10),
+                  Text('Repeat', style: TextStyle(color: _kTodoText)),
+                ],
+              ),
+              DropdownButton<Recurrence>(
+                value: recurrence,
+                isExpanded: true,
+                dropdownColor: _kTodoCard,
+                style: const TextStyle(color: _kTodoText),
+                iconEnabledColor: _kTodoAccentLight,
+                onChanged: (v) =>
+                    setLocal(() => recurrence = v ?? Recurrence.none),
+                items: [
+                  for (final r in Recurrence.values)
+                    DropdownMenuItem(value: r, child: Text(r.label)),
+                ],
+              ),
             ],
           ),
           actions: [
@@ -256,19 +282,26 @@ class _TodoScreenState extends State<TodoScreen> {
 
     if (remindSelf) {
       if (todo.dueDate != null) {
-        await NotificationService.cancelReminder(todo.id.hashCode);
+        await NotificationService.cancelReminderGroup(todo.id.hashCode);
       }
-      setState(() => todo.dueDate = dueDate);
+      setState(() {
+        todo.dueDate = dueDate;
+        todo.recurrence = recurrence;
+      });
       await _saveTodos();
       final ok = await NotificationService.scheduleReminder(
         id: todo.id.hashCode,
         title: todo.title,
         scheduledTime: dueDate,
+        recurrence: recurrence,
       );
       if (mounted) {
+        final repeat = recurrence == Recurrence.none
+            ? ''
+            : ' · ${recurrence.shortLabel(dueDate)}';
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(ok
-              ? 'Reminder set for ${formatDue(dueDate)}'
+              ? 'Reminder set for ${formatDue(dueDate)}$repeat'
               : 'Could not set reminder. Please try again.'),
           behavior: SnackBarBehavior.floating,
         ));
@@ -379,7 +412,9 @@ class _TodoScreenState extends State<TodoScreen> {
     // deletes its doc so it never lingers in Firestore.
     final docId = idx != -1 ? _todos[idx].backingDocId : null;
     if (idx != -1 && _todos[idx].dueDate != null) {
-      NotificationService.cancelReminder(id.hashCode);
+      // Group cancel in case this reminder was recurring (weekdays/weekends
+      // schedule several notifications under derived ids).
+      NotificationService.cancelReminderGroup(id.hashCode);
       if (docId != null) {
         NotificationService.cancelReminder(docId.hashCode.abs() % 0x7FFFFFFF);
       }
@@ -406,15 +441,19 @@ class _TodoScreenState extends State<TodoScreen> {
     }
     setState(() => todo.title = trimmed);
     await _saveTodos();
-    // Re-schedule so the pending notification carries the new title.
+    // Re-schedule so the pending notification carries the new title. Recurring
+    // reminders reschedule even when the original due date has passed (future
+    // occurrences still fire).
     if (todo.dueDate != null &&
         !todo.done &&
-        todo.dueDate!.isAfter(DateTime.now())) {
-      await NotificationService.cancelReminder(todo.id.hashCode);
+        (todo.recurrence != Recurrence.none ||
+            todo.dueDate!.isAfter(DateTime.now()))) {
+      await NotificationService.cancelReminderGroup(todo.id.hashCode);
       await NotificationService.scheduleReminder(
         id: todo.id.hashCode,
         title: trimmed,
         scheduledTime: todo.dueDate!,
+        recurrence: todo.recurrence,
       );
     }
     if (todo.backingDocId != null) {
