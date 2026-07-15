@@ -8,7 +8,7 @@ import '../services/remote_config_service.dart';
 import '../services/notification_service.dart';
 import '../services/reminder_service.dart';
 import '../services/log_service.dart';
-import '../services/whatsapp_settings_service.dart';
+import '../services/digest_service.dart';
 import '../constants.dart' show mySenderId, otherDisplayName, todoRefreshNotifier;
 import '../utils/time_utils.dart';
 
@@ -332,9 +332,8 @@ class _TodoScreenState extends State<TodoScreen> {
         }
       } catch (e) {
         // Backup is best-effort — the local reminder still fires. But surface
-        // the failure: a rejected write here means the self reminder never
-        // reaches Firestore, so the WhatsApp digest/ping (driven off the
-        // reminders collection) would silently miss this task.
+        // the failure rather than swallow it: a rejected write here means the
+        // self reminder never reaches Firestore (its cross-device backup).
         LogService.e('todo', 'self reminder Firestore write failed: $e');
       }
     }
@@ -536,7 +535,7 @@ class _TodoScreenState extends State<TodoScreen> {
             IconButton(
               icon: const Icon(Icons.notifications_active_outlined),
               tooltip: 'Daily summary',
-              onPressed: _showWhatsAppSettings,
+              onPressed: _showDigestSettings,
             ),
             IconButton(
               icon: const Icon(Icons.search),

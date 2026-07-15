@@ -181,6 +181,41 @@ class NotificationService {
     }
   }
 
+  /// Show the daily task digest now — a single notification whose body is a
+  /// multi-line ☐ checklist (BigText so it expands). Called by the background
+  /// worker at the user's chosen time; see [DigestService].
+  static Future<void> showDigest({
+    required int id,
+    required String title,
+    required String body,
+  }) async {
+    if (testMode) return;
+    if (!_initialized) {
+      try {
+        await init();
+      } catch (_) {
+        return;
+      }
+    }
+    final details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        _channelId,
+        _channelName,
+        channelDescription: 'Reminders for your to-do tasks',
+        importance: Importance.high,
+        priority: Priority.high,
+        styleInformation: BigTextStyleInformation(body, contentTitle: title),
+      ),
+    );
+    try {
+      await _plugin.show(id, title, body, details);
+      dev.log('showDigest: id=$id', name: _tag);
+    } catch (e) {
+      dev.log('showDigest: FAILED — $e', name: _tag);
+      LogService.e(_tag, 'showDigest failed: $e');
+    }
+  }
+
   /// Show an immediate (non-scheduled) notification — used when an FCM
   /// push arrives to alert the user right away regardless of app state.
   static Future<void> showNow({
