@@ -48,6 +48,51 @@ android/.../chatapp/       ← native: MainActivity, CallForegroundService (disc
 - Discreteness is a product requirement: no notification, label, or UI text
   may reveal chat/call activity outside the app.
 
+## Coding Standards & Best Practices — follow on every change
+
+There is no lint tooling wired in; these rules are the quality bar instead.
+Apply them to **all** code (chat and todo sides alike). `flutter analyze` must
+report **no issues** before you commit.
+
+**Dart/Flutter idioms**
+- Prefer `const` constructors and `const` literals wherever the analyzer allows;
+  they cut rebuilds.
+- Use `final` for locals that never reassign; only use `var` when the type is
+  obvious from the right-hand side. Avoid `dynamic` unless deserializing.
+- Use `SizedBox` for fixed spacing, not `Container`.
+- Prefer collection-if / spreads / `map`/`where` over manual index loops when it
+  reads more clearly.
+- Name things descriptively and match the surrounding file's naming + comment
+  density. Private members get a leading underscore.
+
+**Null-safety & async**
+- Don't use `!` unless non-null is provable at that line; prefer `?.` / `??` /
+  early returns.
+- After every `await` in a `State`, guard UI/`BuildContext` use with
+  `if (!mounted) return;` before `setState` or navigation.
+- Mark intentional fire-and-forget futures with `unawaited(...)`; never leave a
+  future dangling silently.
+
+**Error handling (learned the hard way)**
+- Never write a bare `catch (_) {}` that hides a failure. If a failure is
+  non-fatal, still log it via `LogService.e/w`. Silent catches have masked real
+  bugs here (e.g. reminder writes that never reached Firestore).
+- Surface user-facing failures with a `SnackBar`; log the technical detail.
+
+**Structure (reinforces Conventions above)**
+- Business logic lives in controllers/services, never in widget build methods.
+- Controllers and models must not import Firebase — only repositories/services
+  touch Firebase.
+- New services are static-method classes with a `testMode` seam.
+- Dispose every `TextEditingController`, `FocusNode`, `StreamSubscription`, and
+  `AnimationController` in `dispose()`.
+- Keep functions small and single-purpose; split large screens with `part`
+  files rather than sprawling build methods.
+
+**Before every commit**
+- `flutter analyze` clean, `flutter test` green, and (per the mandatory
+  sections below) tests + `docs/DEVELOPER_GUIDE.md` updated in the same PR.
+
 ## Commands
 
 | Task | Command |
