@@ -9,7 +9,7 @@ import '../services/notification_service.dart';
 import '../services/reminder_service.dart';
 import '../services/log_service.dart';
 import '../services/digest_service.dart';
-import '../constants.dart' show mySenderId, otherDisplayName, todoRefreshNotifier;
+import '../constants.dart' show mySenderId, todoRefreshNotifier;
 import '../utils/time_utils.dart';
 
 // Split into `part` files to keep this screen approachable (see CLAUDE.md
@@ -301,15 +301,15 @@ class _TodoScreenState extends State<TodoScreen> {
           await _saveTodos();
         }
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Reminder sent to $otherDisplayName'),
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Notified'),
             behavior: SnackBarBehavior.floating,
           ));
         }
       } catch (_) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Could not send reminder. Please try again.'),
+            content: Text('Could not notify. Please try again.'),
             behavior: SnackBarBehavior.floating,
           ));
         }

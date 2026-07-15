@@ -504,10 +504,10 @@ void main() {
 
     // NotificationService.testMode returns true — snackbar shows formatted date
     expect(find.textContaining('Reminder set for'), findsOneWidget);
-    expect(find.text('Reminder sent to Them'), findsNothing);
+    expect(find.text('Notified'), findsNothing);
   });
 
-  testWidgets('Set with Notify checked shows Reminder sent snackbar',
+  testWidgets('Set with Notify checked shows Notified snackbar',
       (tester) async {
     await tester.pumpWidget(wrap());
     await tester.pump();
@@ -532,6 +532,6 @@ void main() {
     await tester.pumpAndSettle();
 
     // ReminderService.testMode skips Firestore; snackbar still shows
-    expect(find.text('Reminder sent to Them'), findsOneWidget);
+    expect(find.text('Notified'), findsOneWidget);
   });
 }
