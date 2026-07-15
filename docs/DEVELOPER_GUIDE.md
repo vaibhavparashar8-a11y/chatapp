@@ -890,6 +890,16 @@ become several `dayOfWeekAndTime` weekly notifications — hence `cancelReminder
 Recurrence is a **local** reminder property (stored in the SharedPreferences
 todo list, not Firestore); the cross-device "Notify" push stays one-shot.
 
+**Re-arm on launch** (`screens/todo/todo_reminders.dart`): Android clears an
+app's scheduled AlarmManager alarms when the APK is **updated** (the boot
+receiver only restores them on reboot). So `_TodoScreenState.initState` calls
+`_rearmReminders()` once after the todo list loads — it re-schedules every
+still-pending local reminder (future one-shots + all recurring; elapsed
+one-shots and done tasks are skipped so nothing re-fires). Without it, updating
+the app would silently drop pending reminders until each was re-set. Tests
+assert this via `NotificationService.debugScheduled` (a `@visibleForTesting`
+record of `scheduleReminder` calls made while `testMode` is on).
+
 **Notification ID convention:** a reminder may be scheduled under either
 `todo.id.hashCode` (self-set via the alarm button) or
 `reminderDocId.hashCode.abs() % 0x7FFFFFFF` (FCM/WorkManager delivery path).
@@ -1487,7 +1497,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 193 tests, ~20 seconds
+flutter test                        # 194 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a

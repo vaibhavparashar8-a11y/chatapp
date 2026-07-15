@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
@@ -21,6 +22,7 @@ part 'todo/todo_models.dart';
 part 'todo/todo_widgets.dart';
 part 'todo/todo_tile.dart';
 part 'todo/todo_dialogs.dart';
+part 'todo/todo_reminders.dart';
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
@@ -45,7 +47,10 @@ class _TodoScreenState extends State<TodoScreen> {
   @override
   void initState() {
     super.initState();
-    _loadTodos();
+    // Load, then re-arm any pending reminders the OS dropped on an APK update.
+    unawaited(_loadTodos().then((_) {
+      if (mounted) return _rearmReminders();
+    }));
     todoRefreshNotifier.addListener(_onRemoteTaskArrived);
   }
 
