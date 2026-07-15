@@ -216,7 +216,9 @@ rooms/{chatRoomId}/reminders/
     ├── createdBy: "A" | "B"
     ├── createdAt: Timestamp
     ├── updatedBy: "A" | "B"?            ← set by updateSharedTask()
-    └── updatedAt: Timestamp?
+    ├── updatedAt: Timestamp?
+    └── whatsappSentAt: Timestamp?       ← set by sendWhatsappPings once a WhatsApp
+                                            "task due" ping has been sent (dedupe guard)
 
   Deletion: deleting a task deletes its backing reminder doc. The local _Todo links
   the doc via `sharedId` (mirrored, addToList=true) or `reminderDocId` (stored-only:
@@ -242,6 +244,23 @@ rooms/{chatRoomId}/messages/
     └── iv: string?                      ← LEGACY ONLY — presence means the message
                                             was sent by the old encrypted app.
                                             New app never writes this field.
+
+rooms/{chatRoomId}/settings/
+└── whatsapp_{role}                       ← one doc per role (whatsapp_A, whatsapp_B).
+    │                                       Each device writes ONLY its own role's doc
+    │                                       (WhatsAppSettingsService). Read by the
+    │                                       WhatsApp Cloud Functions.
+    ├── enabled: bool                     ← master on/off for WhatsApp reminders
+    ├── hour: int                         ← digest send time, local wall clock (0–23)
+    ├── minute: int                       ← digest send time (0–59)
+    ├── utcOffsetMinutes: int             ← device UTC offset captured on save; lets the
+    │                                       function compute local time with no tz DB
+    │                                       (India has no DST, so the offset stays valid)
+    ├── phone: string                     ← destination WhatsApp number, country code +
+    │                                       digits, no '+'. The CallMeBot API key is NOT
+    │                                       here — it lives in Secret Manager.
+    └── lastDigestSentDate: string?       ← "YYYY-MM-DD" (local) written by
+                                            sendWhatsappDigest; guarantees one digest/day
 
 app_logs/
 └── {auto-id}
@@ -1245,6 +1264,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Mini bar / video overlay appears with no live call | (Fixed) Visibility trusted `callActiveNotifier` alone, which atypical teardowns left stale-true | Gate on `callActiveNotifier && CallService.inCall`; `leaveCall()` centrally resets the notifier |
 | Reminder for other person never arrives | Recipient's phone has no FCM token registered | Check `rooms/{roomId}/fcmTokens` in Firestore Console — open the app once on that phone to register |
 | Reminder docs pile up in Firestore after deleting tasks | (Fixed) Self reminders were never stored, and "remind them, no list" docs were created but not linked to the local task, so deletion never removed them | Every created doc is linked (`sharedId` or `reminderDocId`) and `_delete` deletes `backingDocId`; self reminders are stored with `locallyScheduled=true` and the Cloud Function skips them |
+| WhatsApp digest/ping never arrives, or a self reminder is missing from Firestore | The self-reminder write is best-effort; a Firestore rule that rejects `forUser == createdBy` writes was previously swallowed silently, so the reminder doc never landed and the WhatsApp functions (driven off `reminders`) had nothing to send | The write failure is now logged (`LogService.e('todo', 'self reminder Firestore write failed…')` in `_setReminder`) — check `app_logs`. If present, allow self-writes in the Firestore rules. Also confirm `settings/whatsapp_{role}.enabled` + `phone` are set in-app and the role's `CALLMEBOT_APIKEY_*` secret exists |
 | Calls fail with token error | Cached token expired and `getAgoraToken` unreachable at last app open | Open the app once with network (token refreshes), or check function logs: `firebase functions:log` |
 | Video freezes/stutters on the lower-capability phone | (Fixed) No encoder config — Agora default `maintainQuality` kept resolution and dropped frames when the weak encoder couldn't keep up | Explicit 640×360@15fps profile with `DegradationPreference.maintainFramerate` in `joinCall()`; freeze/fail states now logged to `app_logs` |
 | "Call in progress" notification visible during background calls | Foreground service notification (required by Android) was IMPORTANCE_LOW with call-specific wording | (Fixed) IMPORTANCE_MIN channel + VISIBILITY_SECRET + neutral "MyTask — Running" text. A notification cannot be removed entirely — MIN importance is the OS maximum for discretion |
@@ -1418,8 +1438,10 @@ test/
 ├── services/
 │   ├── reminder_service_test.dart       ← applySharedSnapshot reconcile rules,
 │   │                                       insertTodoToPrefs sharedId link
-│   └── agora_token_service_test.dart    ← needsRefresh thresholds, cache behavior,
-│                                           fetch-failure fallback
+│   ├── agora_token_service_test.dart    ← needsRefresh thresholds, cache behavior,
+│   │                                       fetch-failure fallback
+│   └── whatsapp_settings_service_test.dart ← WhatsAppSettings defaults/toMap/fromMap
+│                                           round-trip, copyWith, testMode load/save
 ├── widgets/
 │   └── message_bubble_test.dart         ← tick states, pending/failed rendering,
 │                                           tappable link spans
@@ -1438,7 +1460,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 179 tests, ~20 seconds
+flutter test                        # 185 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
@@ -1686,13 +1708,17 @@ Or transfer the APK file directly to the phone via USB/cloud and open it.
 
 ## 11. Cloud Functions
 
-Two 1st-gen Node 20 functions live in `functions/` (firebase-functions v4 —
+Four 1st-gen Node 20 functions live in `functions/` (firebase-functions v4 —
 1st gen deliberately, to avoid the Eventarc permission delay 2nd-gen deploys
-hit on first use). Deployed to `us-central1` on project `my-chat-app-963fa`.
+hit on first use). Deployed to `us-central1` on project `my-chat-app-963fa`:
+`onReminderCreated` (Firestore trigger), `getAgoraToken` (HTTPS callable), and
+the two WhatsApp schedulers `sendWhatsappPings` and `sendWhatsappDigest`.
 
 **Requires the Blaze plan** (pay-as-you-go), but this app's usage is far
 inside the free tier: ~tens of invocations/day vs 2M/month free, and
-`getAgoraToken` performs **zero** Firestore reads/writes.
+`getAgoraToken` performs **zero** Firestore reads/writes. The two WhatsApp
+schedulers use Cloud Scheduler (also Blaze) and read the small
+`settings/whatsapp_{role}` docs plus the day's reminders.
 
 ### `onReminderCreated` — Firestore trigger
 
@@ -1718,6 +1744,35 @@ The App Certificate is read from **Secret Manager**
 (`defineSecret('AGORA_APP_CERTIFICATE')`) — it never ships in the APK and
 should be removed from Remote Config once all devices run the new APK.
 
+### `sendWhatsappPings` — scheduled (every 2 min)
+
+Delivers a WhatsApp "task due" message when a reminder's `scheduledAt` time
+arrives. Iterates every room, queries `reminders` with `scheduledAt` in
+`(now − 6h, now]`, and for each doc that lacks `whatsappSentAt` and isn't
+`done`, sends via CallMeBot to the **`forUser`**'s number (from
+`settings/whatsapp_{role}`) using that role's key from Secret Manager. Stamps
+`whatsappSentAt` afterwards — **always**, even on send failure, so a broken
+config can't loop every 2 minutes. The 6h cutoff stops a first deploy or any
+downtime from flooding old tasks.
+
+### `sendWhatsappDigest` — scheduled (every 5 min)
+
+Once per day, at or after each person's configured local time, sends a
+checklist of that person's tasks scheduled for today. For each role it reads
+`settings/whatsapp_{role}`, computes local time via `utcOffsetMinutes`, and
+skips if disabled, if `lastDigestSentDate` already equals today's local date,
+or if the local time hasn't reached `hour:minute` yet (a missed slot catches
+up later the same day). Tasks = `reminders` where `forUser == role`,
+`scheduledAt` inside the local day, not `done`. Message uses unicode `☐`
+boxes (CallMeBot is text-only — no interactive checkboxes). Records
+`lastDigestSentDate` only on a successful send.
+
+**CallMeBot** is a free relay: the message is delivered to the number in
+`phone` but appears in the chat with the CallMeBot contact. Each phone
+activates it once (WhatsApp "I allow callmebot to send me messages" to
++34 644 66 32 62) to obtain a per-number API key. Keys live only in Secret
+Manager (`CALLMEBOT_APIKEY_A`, `CALLMEBOT_APIKEY_B`) — never in the APK.
+
 ### Deployment
 
 ```bash
@@ -1727,7 +1782,11 @@ npm install                        # once, or after dependency changes
 # One-time: store the Agora App Certificate as a secret
 firebase functions:secrets:set AGORA_APP_CERTIFICATE --project my-chat-app-963fa
 
-# Deploy both functions
+# One-time: store each role's CallMeBot WhatsApp API key
+firebase functions:secrets:set CALLMEBOT_APIKEY_A --project my-chat-app-963fa
+firebase functions:secrets:set CALLMEBOT_APIKEY_B --project my-chat-app-963fa
+
+# Deploy all functions
 firebase deploy --only functions --project my-chat-app-963fa
 
 # Tail logs

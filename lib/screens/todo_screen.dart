@@ -7,6 +7,8 @@ import '../services/device_service.dart';
 import '../services/remote_config_service.dart';
 import '../services/notification_service.dart';
 import '../services/reminder_service.dart';
+import '../services/log_service.dart';
+import '../services/whatsapp_settings_service.dart';
 import '../constants.dart' show mySenderId, otherDisplayName, todoRefreshNotifier;
 import '../utils/time_utils.dart';
 
@@ -340,7 +342,135 @@ class _TodoScreenState extends State<TodoScreen> {
           todo.reminderDocId = docId;
           await _saveTodos();
         }
-      } catch (_) {/* backup is best-effort — the local reminder still fires */}
+      } catch (e) {
+        // Backup is best-effort — the local reminder still fires. But surface
+        // the failure: a rejected write here means the self reminder never
+        // reaches Firestore, so the WhatsApp digest/ping (driven off the
+        // reminders collection) would silently miss this task.
+        LogService.e('todo', 'self reminder Firestore write failed: $e');
+      }
+    }
+  }
+
+  /// Configure the daily WhatsApp task summary + per-task WhatsApp pings.
+  /// Writes this device's own role settings; the Cloud Functions read them and
+  /// message this phone's WhatsApp number via CallMeBot.
+  Future<void> _showWhatsAppSettings() async {
+    final settings = await WhatsAppSettingsService.load();
+    if (!mounted) return;
+
+    bool enabled = settings.enabled;
+    var time = TimeOfDay(hour: settings.hour, minute: settings.minute);
+    final phoneCtrl = TextEditingController(text: settings.phone);
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('Daily task summary'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Send to WhatsApp'),
+                  subtitle: const Text(
+                      'A morning checklist of the day’s tasks, plus a ping when each timed task is due.'),
+                  value: enabled,
+                  onChanged: (v) => setLocal(() => enabled = v),
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  enabled: enabled,
+                  leading: const Icon(Icons.schedule),
+                  title: const Text('Summary time'),
+                  trailing: Text(time.format(ctx),
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  onTap: enabled
+                      ? () async {
+                          final picked = await showTimePicker(
+                              context: ctx, initialTime: time);
+                          if (picked != null) setLocal(() => time = picked);
+                        }
+                      : null,
+                ),
+                TextField(
+                  controller: phoneCtrl,
+                  enabled: enabled,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(
+                    labelText: 'Your WhatsApp number',
+                    hintText: 'Country code + number, e.g. 919812345678',
+                    prefixText: '+',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'One-time setup: save +34 644 66 32 62 on WhatsApp and send it '
+                  '“I allow callmebot to send me messages” to activate.',
+                  style: TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved != true) {
+      phoneCtrl.dispose();
+      return;
+    }
+
+    // Keep only digits — CallMeBot wants a bare country-code+number.
+    final phone = phoneCtrl.text.replaceAll(RegExp(r'[^0-9]'), '');
+    phoneCtrl.dispose();
+
+    if (enabled && phone.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Enter your WhatsApp number to enable the summary.'),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+      return;
+    }
+
+    try {
+      await WhatsAppSettingsService.save(settings.copyWith(
+        enabled: enabled,
+        hour: time.hour,
+        minute: time.minute,
+        phone: phone,
+      ));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(enabled
+              ? 'Daily summary on — ${time.format(context)}'
+              : 'Daily summary off'),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      LogService.e('todo', 'save WhatsApp settings failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Could not save. Please try again.'),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
     }
   }
 
@@ -545,11 +675,17 @@ class _TodoScreenState extends State<TodoScreen> {
               icon: const Icon(Icons.close),
               onPressed: _closeSearch,
             )
-          else
+          else ...[
+            IconButton(
+              icon: const Icon(Icons.notifications_active_outlined),
+              tooltip: 'Daily summary',
+              onPressed: _showWhatsAppSettings,
+            ),
             IconButton(
               icon: const Icon(Icons.search),
               onPressed: _openSearch,
             ),
+          ],
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(34),
