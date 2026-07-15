@@ -18,7 +18,8 @@ lib/
 ├── controllers/           ← ChatController: ALL chat business logic, no Firebase imports
 ├── repositories/          ← IChatRepository interface + FirebaseChatRepository adapter
 ├── services/              ← static-method services (chat, device, reminder, fcm,
-│                             notification, agora_token, remote_config, log, call_log)
+│                             notification, digest, agora_token, remote_config,
+│                             log, call_log)
 ├── screens/               ← todo_screen (home, + part files in todo/),
 │                             chat_screen (+ part files in chat/),
 │                             calls_screen, media_viewer, log_screen

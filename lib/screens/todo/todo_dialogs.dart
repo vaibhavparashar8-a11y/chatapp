@@ -6,16 +6,15 @@ part of '../todo_screen.dart';
 // is analyzer-clean.
 
 extension _TodoDialogs on _TodoScreenState {
-  /// Configure the daily WhatsApp task summary + per-task WhatsApp pings.
-  /// Writes this device's own role settings; the Cloud Functions read them and
-  /// message this phone's WhatsApp number via CallMeBot.
-  Future<void> _showWhatsAppSettings() async {
-    final settings = await WhatsAppSettingsService.load();
+  /// Configure the daily task summary — a single on-device notification each
+  /// morning listing the day's tasks as a ☐ checklist. Fully local (see
+  /// [DigestService]); no account or network needed.
+  Future<void> _showDigestSettings() async {
+    final settings = await DigestService.load();
     if (!mounted) return;
 
     bool enabled = settings.enabled;
     var time = TimeOfDay(hour: settings.hour, minute: settings.minute);
-    final phoneCtrl = TextEditingController(text: settings.phone);
 
     final saved = await showDialog<bool>(
       context: context,
@@ -24,69 +23,41 @@ extension _TodoDialogs on _TodoScreenState {
           backgroundColor: _kTodoCard,
           titleTextStyle: _kTodoDialogTitle,
           title: const Text('Daily task summary'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  activeThumbColor: _kTodoAccentLight,
-                  title: const Text('Send to WhatsApp',
-                      style: TextStyle(color: _kTodoText)),
-                  subtitle: const Text(
-                      'A morning checklist of the day’s tasks, plus a ping when each timed task is due.',
-                      style: TextStyle(color: _kTodoTextDim)),
-                  value: enabled,
-                  onChanged: (v) => setLocal(() => enabled = v),
-                ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  enabled: enabled,
-                  leading: const Icon(Icons.schedule, color: _kTodoAccentLight),
-                  title: const Text('Summary time',
-                      style: TextStyle(color: _kTodoText)),
-                  trailing: Text(time.format(ctx),
-                      style: const TextStyle(
-                          color: _kTodoText, fontWeight: FontWeight.w600)),
-                  onTap: enabled
-                      ? () async {
-                          final picked = await showTimePicker(
-                              context: ctx,
-                              initialTime: time,
-                              builder: _todoPickerTheme);
-                          if (picked != null) setLocal(() => time = picked);
-                        }
-                      : null,
-                ),
-                TextField(
-                  controller: phoneCtrl,
-                  enabled: enabled,
-                  keyboardType: TextInputType.phone,
-                  style: const TextStyle(color: _kTodoText),
-                  cursorColor: _kTodoAccentLight,
-                  decoration: InputDecoration(
-                    labelText: 'Your WhatsApp number',
-                    labelStyle: const TextStyle(color: _kTodoAccentLight),
-                    hintText: 'Country code + number, e.g. 919812345678',
-                    hintStyle:
-                        TextStyle(color: Colors.white.withValues(alpha: 0.35)),
-                    prefixText: '+',
-                    prefixStyle: const TextStyle(color: _kTodoText),
-                    enabledBorder: const UnderlineInputBorder(
-                        borderSide: BorderSide(color: _kTodoDivider)),
-                    focusedBorder: const UnderlineInputBorder(
-                        borderSide: BorderSide(color: _kTodoAccentLight)),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'One-time setup: save +34 644 66 32 62 on WhatsApp and send it '
-                  '“I allow callmebot to send me messages” to activate.',
-                  style: TextStyle(fontSize: 12, color: _kTodoTextFaint),
-                ),
-              ],
-            ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                activeThumbColor: _kTodoAccentLight,
+                title: const Text('Morning summary notification',
+                    style: TextStyle(color: _kTodoText)),
+                subtitle: const Text(
+                    'A daily notification listing the tasks due that day.',
+                    style: TextStyle(color: _kTodoTextDim)),
+                value: enabled,
+                onChanged: (v) => setLocal(() => enabled = v),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                enabled: enabled,
+                leading: const Icon(Icons.schedule, color: _kTodoAccentLight),
+                title: const Text('Summary time',
+                    style: TextStyle(color: _kTodoText)),
+                trailing: Text(time.format(ctx),
+                    style: const TextStyle(
+                        color: _kTodoText, fontWeight: FontWeight.w600)),
+                onTap: enabled
+                    ? () async {
+                        final picked = await showTimePicker(
+                            context: ctx,
+                            initialTime: time,
+                            builder: _todoPickerTheme);
+                        if (picked != null) setLocal(() => time = picked);
+                      }
+                    : null,
+              ),
+            ],
           ),
           actions: [
             TextButton(
@@ -104,31 +75,13 @@ extension _TodoDialogs on _TodoScreenState {
       ),
     );
 
-    if (saved != true) {
-      phoneCtrl.dispose();
-      return;
-    }
-
-    // Keep only digits — CallMeBot wants a bare country-code+number.
-    final phone = phoneCtrl.text.replaceAll(RegExp(r'[^0-9]'), '');
-    phoneCtrl.dispose();
-
-    if (enabled && phone.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Enter your WhatsApp number to enable the summary.'),
-          behavior: SnackBarBehavior.floating,
-        ));
-      }
-      return;
-    }
+    if (saved != true) return;
 
     try {
-      await WhatsAppSettingsService.save(settings.copyWith(
+      await DigestService.save(DigestPrefs(
         enabled: enabled,
         hour: time.hour,
         minute: time.minute,
-        phone: phone,
       ));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -139,7 +92,7 @@ extension _TodoDialogs on _TodoScreenState {
         ));
       }
     } catch (e) {
-      LogService.e('todo', 'save WhatsApp settings failed: $e');
+      LogService.e('todo', 'save digest settings failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Could not save. Please try again.'),

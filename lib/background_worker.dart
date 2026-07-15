@@ -5,6 +5,8 @@ import 'package:workmanager/workmanager.dart';
 import 'constants.dart';
 import 'services/notification_service.dart';
 import 'services/reminder_service.dart';
+import 'services/digest_service.dart';
+import 'services/log_service.dart';
 
 const kReminderTaskName = 'checkReminders';
 const _roleKey = 'sender_role';
@@ -98,6 +100,14 @@ void callbackDispatcher() {
           applyDeletes: true);
     } catch (_) {
       // Server unreachable — retry next interval.
+    }
+
+    // ── Daily task digest ──────────────────────────────────────────────────
+    // Fully on-device: show the day's checklist once, at/after the user's time.
+    try {
+      await DigestService.maybeShowDigest(prefs);
+    } catch (e) {
+      LogService.w('background', 'digest check failed: $e');
     }
 
     return true;
