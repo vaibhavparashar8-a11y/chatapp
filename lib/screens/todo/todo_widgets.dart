@@ -1,0 +1,238 @@
+part of '../todo_screen.dart';
+
+// ── Small presentational widgets ────────────────────────────────────────────
+// Pure, state-free pieces of the todo screen. State lives in _TodoScreenState;
+// these receive data + callbacks so the screen stays thin.
+
+/// The pending/done counters shown under the app bar.
+class _HeaderStats extends StatelessWidget {
+  final int pending;
+  final int done;
+  const _HeaderStats({required this.pending, required this.done});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.indigo.shade700,
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
+      child: Row(
+        children: [
+          Icon(Icons.pending_actions_rounded,
+              size: 13, color: Colors.indigo.shade200),
+          const SizedBox(width: 4),
+          Text('$pending pending',
+              style: TextStyle(color: Colors.indigo.shade200, fontSize: 12)),
+          if (done > 0) ...[
+            const SizedBox(width: 14),
+            Icon(Icons.check_circle_outline,
+                size: 13, color: Colors.indigo.shade200),
+            const SizedBox(width: 4),
+            Text('$done done',
+                style: TextStyle(color: Colors.indigo.shade200, fontSize: 12)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Shown when there are no tasks at all.
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 80),
+      child: Column(
+        children: [
+          Icon(Icons.checklist_rounded, size: 72, color: Colors.indigo.shade100),
+          const SizedBox(height: 16),
+          const Text('No tasks yet',
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black38)),
+          const SizedBox(height: 6),
+          const Text('Add a task below to get started',
+              style: TextStyle(fontSize: 13, color: Colors.black26)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Shown when a search yields no matching tasks.
+class _NoResults extends StatelessWidget {
+  final String query;
+  const _NoResults({required this.query});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 80),
+      child: Column(
+        children: [
+          Icon(Icons.search_off_rounded, size: 72, color: Colors.indigo.shade100),
+          const SizedBox(height: 16),
+          const Text('No matching tasks',
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black38)),
+          const SizedBox(height: 6),
+          Text('No tasks match "$query"',
+              style: const TextStyle(fontSize: 13, color: Colors.black26)),
+        ],
+      ),
+    );
+  }
+}
+
+/// A "COMPLETED (n)" style divider heading between task groups.
+class _SectionHeader extends StatelessWidget {
+  final String label;
+  final int count;
+  const _SectionHeader({required this.label, required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+      child: Row(
+        children: [
+          Text(
+            '${label.toUpperCase()} ($count)',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: Colors.grey.shade500,
+              letterSpacing: 0.8,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: Divider(color: Colors.grey.shade300, height: 1)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Bottom "Add a task…" bar. Typing "flutter" opens the chat (via [onChanged]);
+/// submit/FAB add the task (via [onSubmit]).
+class _TaskInputBar extends StatelessWidget {
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onSubmit;
+  const _TaskInputBar({
+    required this.controller,
+    required this.focusNode,
+    required this.onChanged,
+    required this.onSubmit,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.fromLTRB(
+          16, 10, 16, MediaQuery.of(context).padding.bottom + 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 12,
+            offset: const Offset(0, -3),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: controller,
+              focusNode: focusNode,
+              textInputAction: TextInputAction.done,
+              style: TextStyle(
+                  fontSize: 15, color: RemoteConfigService.todoInputTextColor),
+              onChanged: onChanged,
+              onSubmitted: (_) => onSubmit(),
+              decoration: InputDecoration(
+                hintText: 'Add a task...',
+                hintStyle: TextStyle(color: Colors.grey.shade400),
+                filled: true,
+                fillColor: const Color(0xFFF5F5F7),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(26),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          FloatingActionButton(
+            onPressed: onSubmit,
+            backgroundColor: Colors.indigo,
+            foregroundColor: Colors.white,
+            elevation: 2,
+            mini: true,
+            child: const Icon(Icons.add),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Rename dialog — owns its TextEditingController so it is disposed with the
+/// route (disposing in the caller crashes the still-animating dialog exit).
+class _EditTaskDialog extends StatefulWidget {
+  final String initial;
+  const _EditTaskDialog({required this.initial});
+
+  @override
+  State<_EditTaskDialog> createState() => _EditTaskDialogState();
+}
+
+class _EditTaskDialogState extends State<_EditTaskDialog> {
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initial);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Edit Task'),
+      content: TextField(
+        controller: _ctrl,
+        autofocus: true,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: const InputDecoration(hintText: 'Task title'),
+        onSubmitted: (v) => Navigator.pop(context, v),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _ctrl.text),
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
