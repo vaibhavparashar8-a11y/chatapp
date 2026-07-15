@@ -89,6 +89,20 @@ report **no issues** before you commit.
 - Keep functions small and single-purpose; split large screens with `part`
   files rather than sprawling build methods.
 
+**File size — keep files small enough for a newcomer to grasp**
+- Treat **~400 lines** as a soft ceiling and **~500** as a hard smell for any
+  single Dart file. A file a new developer can't skim in a few minutes is too
+  big — split it before adding more.
+- Split screens into `part` files grouped in a subfolder (see the good
+  examples: `screens/chat/` for `chat_screen.dart`, `widgets/bubbles/` for
+  `message_bubble.dart`). Extract reusable widgets into `widgets/`, and push
+  business logic down into controllers/services so the screen stays thin.
+- Known outlier to split when next touched: `screens/todo_screen.dart`
+  (~1200 lines, no `part` files yet) — carve out models, the reminder dialog,
+  and the tile/list widgets rather than growing it further.
+- The same spirit applies to services and Cloud Functions: group related
+  helpers, and prefer a new focused file over piling onto an existing one.
+
 **Before every commit**
 - `flutter analyze` clean, `flutter test` green, and (per the mandatory
   sections below) tests + `docs/DEVELOPER_GUIDE.md` updated in the same PR.
