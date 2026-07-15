@@ -161,6 +161,21 @@ class _TodoTile extends StatelessWidget {
                                                   : FontWeight.normal,
                                             ),
                                           ),
+                                          if (todo.recurrence !=
+                                              Recurrence.none) ...[
+                                            const SizedBox(width: 6),
+                                            const Icon(Icons.repeat,
+                                                size: 10,
+                                                color: _kTodoAccentLight),
+                                            const SizedBox(width: 2),
+                                            Text(
+                                              todo.recurrence
+                                                  .shortLabel(todo.dueDate!),
+                                              style: const TextStyle(
+                                                  fontSize: 11,
+                                                  color: _kTodoAccentLight),
+                                            ),
+                                          ],
                                         ]),
                                       ],
                                       if (todo.subtasks.isNotEmpty) ...[

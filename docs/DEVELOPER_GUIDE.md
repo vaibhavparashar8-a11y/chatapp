@@ -875,11 +875,20 @@ Local notifications via `flutter_local_notifications` (channel `task_reminders`)
 | Method | What it does |
 |---|---|
 | `init()` | Creates the channel, requests permission, sets up timezone data |
-| `scheduleReminder({id, title, scheduledTime})` | Exact-time scheduled notification; returns `false` if permission/alarm unavailable |
-| `cancelReminder(int id)` | Cancels a scheduled notification |
+| `scheduleReminder({id, title, scheduledTime, recurrence})` | Scheduled notification. `recurrence: Recurrence.none` (default) = one-shot; `daily`/`weekly` repeat natively via `matchDateTimeComponents`; `weekdays`/`weekends` schedule one weekly notification per day under ids derived from `id`. Returns `false` if any schedule fails |
+| `cancelReminder(int id)` | Cancels a single scheduled notification |
+| `cancelReminderGroup(int baseId)` | Cancels `baseId` + all 7 weekday-derived ids — use for reminders that may be recurring |
+| `showDigest({id, title, body})` | BigText checklist notification for the daily digest ([DigestService]) |
 | `showNow({id, title, body})` | Immediate notification — used by the FCM handler for the "Reminder set" confirmation |
 
 `NotificationService.testMode = true` makes everything a no-op in tests.
+
+**Recurrence** (`lib/models/recurrence.dart`): the repeat is owned by the OS
+(AlarmManager), so it survives app-kill and reboot. The day/time come from the
+task's picked due date. Weekdays/weekends have no native equivalent, so they
+become several `dayOfWeekAndTime` weekly notifications — hence `cancelReminderGroup`.
+Recurrence is a **local** reminder property (stored in the SharedPreferences
+todo list, not Firestore); the cross-device "Notify" push stays one-shot.
 
 **Notification ID convention:** a reminder may be scheduled under either
 `todo.id.hashCode` (self-set via the alarm button) or
@@ -1031,7 +1040,8 @@ setting.
 | Complete / delete | Checkbox / swipe-left — both write through to Firestore for shared tasks |
 | Sub-tasks | Expand a tile → add/check/delete; progress bar on the tile |
 | Search | AppBar search icon — filters by title and subtask text |
-| Reminders | One alarm button per task → date/time picker → unified dialog |
+| Reminders | One alarm button per task → date/time picker → unified dialog (incl. a Repeat picker) |
+| Recurring reminders | Repeat = Every day / Every week / Weekdays / Weekends (`Recurrence`); tile shows the repeat label. No "every N days" (needs fragile reschedule-on-fire). Local-only; "done" keeps repeating until Repeat = None or the task is deleted |
 | Open chat | Type `flutter` in the add-task field (hidden trigger) |
 | Role reset | Debug builds: double-tap the AppBar title |
 
@@ -1445,7 +1455,8 @@ test/
 │                                           hideMessage, editMessage, deleteMessage, presence
 │                                           (heartbeat staleness, legacy peer, dispose guard)
 ├── models/
-│   └── message_test.dart                ← fromMap/toMap, all MessageTypes, legacy iv field
+│   ├── message_test.dart                ← fromMap/toMap, all MessageTypes, legacy iv field
+│   └── recurrence_test.dart             ← storage round-trip, fireDays, shortLabel, abbrev
 ├── utils/
 │   ├── time_utils_test.dart             ← formatLastSeen, formatDue,
 │   │                                       parseReminderTimestamp (UTC→local regression)
@@ -1476,7 +1487,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 186 tests, ~20 seconds
+flutter test                        # 193 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a

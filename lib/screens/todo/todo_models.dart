@@ -16,6 +16,10 @@ class _Todo {
   DateTime? dueDate;
   List<_SubTodo> subtasks;
 
+  /// How the local reminder repeats (none = one-shot). Drives native
+  /// repeating notifications; see [Recurrence] and NotificationService.
+  Recurrence recurrence;
+
   /// Firestore reminder-doc ID when this task is shared with the other
   /// person ("Add to their task list") — edits/deletes sync via that doc.
   String? sharedId;
@@ -33,7 +37,8 @@ class _Todo {
       this.dueDate,
       List<_SubTodo>? subtasks,
       this.sharedId,
-      this.reminderDocId})
+      this.reminderDocId,
+      this.recurrence = Recurrence.none})
       : subtasks = subtasks ?? [];
 
   /// The Firestore reminder doc backing this task, if any (mirrored or not).
