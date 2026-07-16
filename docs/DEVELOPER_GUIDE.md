@@ -611,7 +611,13 @@ void _scheduleMarkRead() {
 }
 ```
 
-Called on every stream emission where the other person has messages. At most one Firestore write per 500 ms regardless of how many messages arrive.
+Called on every stream emission where the other person has messages **and the
+chat is actually in the foreground** (`!_markReadPaused && !_didLeave`). The
+message stream stays live while the app is backgrounded, so without the
+`_didLeave` gate an incoming message would mark itself read and advance the
+sender's "Read HH:mm" even though this user left and never saw it. `enter()`
+calls `_markReadLatestIfNew()` to mark the missed message read on return. At
+most one Firestore write per 500 ms regardless of how many messages arrive.
 
 **Pagination trigger** (from `ChatScreen`'s scroll controller):
 
@@ -1294,6 +1300,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Reminder notification shows time 5:30 h off | (Fixed) FCM payload timestamps are UTC; formatting without `.toLocal()` printed UTC wall-clock | `parseReminderTimestamp()` converts at the single parse point |
 | Read ticks appear on just-sent messages | (Fixed) Optimistic messages use the local clock; device clock behind server time made `otherReadAt` look newer | `_isRead` returns false while `isPending` |
 | "Read HH:mm" time changes on already-read messages after the reader restarts the app | (Fixed) The read guard `_lastSeenOtherMsgId` was in-memory only; on restart it reset to null, so re-opening a chat with no new messages re-fired `markRead()` and re-stamped `readAt` | Persist the last-read message id per room (`ChatService.get/setLastReadMsgId`, key `lastReadMsgId_{chatRoomId}`); `ChatController.init()` restores it so an idle re-open never advances `readAt` |
+| Sender sees "Read HH:mm" advance while the reader is away (offline) | (Fixed) `leave()` (app backgrounded) cleared presence but did not pause read receipts, and the message stream stays live — so an incoming message hit `_subscribeMessages` and advanced `readAt` even though the reader had left | Gate auto-mark-read on `!_didLeave` too; `enter()` calls `_markReadLatestIfNew()` to mark the missed message read on return |
 | Presence flips offline during WhatsApp call overlay | Some devices fire only `inactive` for overlays | 8s debounce timer on `inactive` (`??=` so it never restarts mid-sequence) |
 | "online" stuck forever after force-kill / crash | (Fixed) `presence` boolean was only cleared by in-memory debounce timers; a killed process never runs them, and Firestore has no onDisconnect | `presenceAt` heartbeat re-stamped every 20s while chat open; reader shows "online" only while heartbeats keep arriving (45s stale window, measured by local receive time — clock-skew immune). `ChatController.dispose()` also leaves as defense-in-depth |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
@@ -1500,7 +1507,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 198 tests, ~20 seconds
+flutter test                        # 199 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a

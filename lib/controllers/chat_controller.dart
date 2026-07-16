@@ -179,11 +179,16 @@ class ChatController extends ChangeNotifier {
       // Only mark read when a genuinely new message from the other person arrives.
       // Comparing the latest message ID prevents re-writing readAt on every
       // Firestore stream re-emission (e.g. on chat re-open with no new messages).
+      // `!_didLeave` gates it on actually being in the chat: the message stream
+      // stays live while the app is backgrounded, and without this an incoming
+      // message would mark itself read (advancing the sender's "Read HH:mm")
+      // even though this user has left and never saw it. enter() marks read on
+      // return.
       final otherId = mySenderId == 'A' ? 'B' : 'A';
       final otherMsgs = msgs.where((m) => m.sender == otherId).toList();
       if (otherMsgs.isNotEmpty) {
         final latestId = otherMsgs.last.id;
-        if (latestId != _lastSeenOtherMsgId && !_markReadPaused) {
+        if (latestId != _lastSeenOtherMsgId && !_markReadPaused && !_didLeave) {
           _advanceReadTo(latestId);
         }
       }
@@ -195,6 +200,9 @@ class ChatController extends ChangeNotifier {
     _didLeave = false;
     _leaveVersion++;          // abort any leave() suspended at an await point
     _startPresenceTimer();
+    // Back in the foreground chat: mark read any message that arrived while we
+    // were away (the stream stayed live but _subscribeMessages skipped it).
+    _markReadLatestIfNew();
     await _repo.enterChat();
     // Stream re-emits on reconnect; _subscribeMessages will handle mark-read
     // only if there is a genuinely new message (latestId != _lastSeenOtherMsgId).
@@ -469,13 +477,18 @@ class ChatController extends ChangeNotifier {
   /// (i.e. the stream advanced beyond _lastSeenOtherMsgId during the call).
   void resumeMarkRead() {
     _markReadPaused = false;
+    _markReadLatestIfNew();
+  }
+
+  /// Mark read the newest message from the other person, if it's one we haven't
+  /// marked yet. No-op while receipts are paused (call/media overlay) or while
+  /// we've left the chat. Used by both [resumeMarkRead] and [enter].
+  void _markReadLatestIfNew() {
+    if (_markReadPaused || _didLeave) return;
     final otherId = mySenderId == 'A' ? 'B' : 'A';
     final otherMsgs = _streamMessages.where((m) => m.sender == otherId).toList();
-    if (otherMsgs.isNotEmpty) {
-      final latestId = otherMsgs.last.id;
-      if (latestId != _lastSeenOtherMsgId) {
-        _advanceReadTo(latestId);
-      }
+    if (otherMsgs.isNotEmpty && otherMsgs.last.id != _lastSeenOtherMsgId) {
+      _advanceReadTo(otherMsgs.last.id);
     }
   }
 
