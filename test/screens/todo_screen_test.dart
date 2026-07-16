@@ -596,12 +596,12 @@ void main() {
     delivery.add({'doc1': false});
     await tester.pumpAndSettle();
     expect(find.text('Sent — waiting for their phone'), findsOneWidget);
-    expect(find.text('Delivered to their phone'), findsNothing);
+    expect(find.text('Delivered'), findsNothing);
 
     // Their phone received and scheduled it.
     delivery.add({'doc1': true});
     await tester.pumpAndSettle();
-    expect(find.text('Delivered to their phone'), findsOneWidget);
+    expect(find.text('Delivered'), findsOneWidget);
     expect(find.text('Sent — waiting for their phone'), findsNothing);
   });
 
@@ -615,6 +615,6 @@ void main() {
     await tester.pumpWidget(wrap());
     await tester.pumpAndSettle();
     expect(find.text('Sent — waiting for their phone'), findsNothing);
-    expect(find.text('Delivered to their phone'), findsNothing);
+    expect(find.text('Delivered'), findsNothing);
   });
 }
