@@ -26,11 +26,16 @@ class SharedTask {
   final DateTime scheduledAt;
   /// null on docs created before done-sync existed — means "unknown, don't sync".
   final bool? done;
+
+  /// Sub-tasks as stored on the doc: `[{id, title, done}, …]`. null on docs
+  /// that predate subtask-sync — means "unknown, don't touch the local copy".
+  final List<Map<String, dynamic>>? subtasks;
   const SharedTask({
     required this.id,
     required this.title,
     required this.scheduledAt,
     this.done,
+    this.subtasks,
   });
 }
 
@@ -65,6 +70,7 @@ class ReminderService {
     required DateTime scheduledAt,
     required bool addToList,
     bool locallyScheduled = false,
+    List<Map<String, dynamic>>? subtasks,
   }) async {
     if (testMode) return null;
     final doc = await _col(chatRoomId).add({
@@ -74,6 +80,7 @@ class ReminderService {
       'addToList': addToList,
       'locallyScheduled': locallyScheduled,
       'done': false,
+      if (subtasks != null && subtasks.isNotEmpty) 'subtasks': subtasks,
       'createdBy': mySenderId,
       'createdAt': FieldValue.serverTimestamp(),
     });
@@ -92,12 +99,14 @@ class ReminderService {
     String? title,
     DateTime? scheduledAt,
     bool? done,
+    List<Map<String, dynamic>>? subtasks,
   }) async {
     if (testMode) return;
     final data = <String, dynamic>{
       if (title != null) 'title': title,
       if (scheduledAt != null) 'scheduledAt': Timestamp.fromDate(scheduledAt),
       if (done != null) 'done': done,
+      if (subtasks != null) 'subtasks': subtasks,
       'updatedBy': mySenderId,
       'updatedAt': FieldValue.serverTimestamp(),
     };
@@ -119,6 +128,13 @@ class ReminderService {
           : 'Reminder',
       scheduledAt: (data['scheduledAt'] as Timestamp).toDate(),
       done: data['done'] as bool?,
+      subtasks: (data['subtasks'] as List?)
+          ?.map((s) => {
+                'id': (s as Map)['id'] as String,
+                'title': s['title'] as String,
+                'done': s['done'] as bool? ?? false,
+              })
+          .toList(),
     );
   }
 
@@ -195,6 +211,13 @@ class ReminderService {
         m['done'] = doc.done;
         changed = true;
       }
+      // Sub-tasks: last-write-wins on the whole list. null means the doc
+      // predates subtask-sync — leave the local copy untouched.
+      if (doc.subtasks != null &&
+          !_subtasksEqual(m['subtasks'] as List?, doc.subtasks!)) {
+        m['subtasks'] = doc.subtasks;
+        changed = true;
+      }
       // Due date: only synced onto tasks that already track one. The creator
       // may have declined "Remind me" — their copy has no dueDate and must
       // not start firing notifications because the other side changed the time.
@@ -223,6 +246,24 @@ class ReminderService {
 
     if (changed) await prefs.setString(_todosKey, jsonEncode(list));
     return changed;
+  }
+
+  /// Value-compare a local subtask list (raw prefs maps) against a doc's, by
+  /// id/title/done in order — so an identical set never triggers a needless
+  /// rewrite (which would loop the two devices).
+  static bool _subtasksEqual(List? local, List<Map<String, dynamic>> doc) {
+    final a = local ?? const [];
+    if (a.length != doc.length) return false;
+    for (var i = 0; i < doc.length; i++) {
+      final l = a[i] as Map;
+      final r = doc[i];
+      if (l['id'] != r['id'] ||
+          l['title'] != r['title'] ||
+          (l['done'] as bool? ?? false) != (r['done'] as bool? ?? false)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /// A shared task may have a notification scheduled under either the local
