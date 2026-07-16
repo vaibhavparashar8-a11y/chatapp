@@ -218,7 +218,7 @@ rooms/{chatRoomId}/reminders/
     │                                       (the creator already scheduled it locally).
     │                                       ALSO the sender's delivery signal: the
     │                                       creator watches this flip true to show
-    │                                       "Delivered to their phone" (§6.7).
+    │                                       "Delivered" (§6.7).
     ├── createdBy: "A" | "B"
     ├── createdAt: Timestamp
     ├── updatedBy: "A" | "B"?            ← set by updateSharedTask()
@@ -945,7 +945,7 @@ via a `sharedId` field (legacy `reminder_*` IDs are backfilled automatically).
 |---|---|
 | `updateSharedTask(docId, {title, scheduledAt, done, subtasks})` | Local edits write through to the doc. Adding/toggling/deleting a sub-task on a `sharedId` task pushes the whole subtask list (last-write-wins) |
 | `deleteSharedTask(docId)` | Deleting on either phone deletes for both |
-| `outgoingDeliveryStream()` | Live `{docId: locallyScheduled}` for reminders THIS phone sent (`createdBy==me`, `forUser!=me`) — the todo tile shows "Delivered to their phone" once the value flips true. Index-free (single `createdBy` filter; `deliveryMapFromDocs` splits `forUser` in memory) |
+| `outgoingDeliveryStream()` | Live `{docId: locallyScheduled}` for reminders THIS phone sent (`createdBy==me`, `forUser!=me`) — the todo tile shows "Delivered" once the value flips true. Index-free (single `createdBy` filter; `deliveryMapFromDocs` splits `forUser` in memory) |
 | `sharedTasksStream()` | Live mirror — main.dart listener applies remote changes within seconds |
 | `fetchSharedTasks(roomId)` | Server-forced one-shot for the background worker (offline throws instead of returning a partial cache) |
 | `applySharedSnapshot(prefs, docs, {applyDeletes})` | The reconcile: applies title/done/dueDate/subtasks changes, removes deleted tasks, reschedules notifications |
@@ -1064,7 +1064,7 @@ setting.
 | Sub-tasks | Expand a tile → add/check/delete; progress bar on the tile |
 | Search | AppBar search icon — filters by title and subtask text |
 | Reminders | One alarm button per task → date/time picker → unified dialog (incl. a Repeat picker) |
-| Delivery confirmation | A reminder you send the other person shows "Sent — waiting for their phone" → "Delivered to their phone" once their device receives and arms it (`locallyScheduled` flips true). "Actually fired" isn't tracked — Android has no reliable background "notification shown" callback |
+| Delivery confirmation | A reminder you send the other person shows "Sent — waiting for their phone" → "Delivered" once their device receives and arms it (`locallyScheduled` flips true). "Actually fired" isn't tracked — Android has no reliable background "notification shown" callback |
 | Recurring reminders | Repeat = Every day / Every week / Weekdays / Weekends (`Recurrence`); tile shows the repeat label. No "every N days" (needs fragile reschedule-on-fire). Local-only; "done" keeps repeating until Repeat = None or the task is deleted |
 | Open chat | Type `flutter` in the add-task field (hidden trigger) |
 | Role reset | Debug builds: double-tap the AppBar title |

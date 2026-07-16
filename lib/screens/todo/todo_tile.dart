@@ -198,7 +198,7 @@ class _TodoTile extends StatelessWidget {
                                           const SizedBox(width: 3),
                                           Text(
                                             outgoingDelivered!
-                                                ? 'Delivered to their phone'
+                                                ? 'Delivered'
                                                 : 'Sent — waiting for their phone',
                                             style: TextStyle(
                                               fontSize: 11,
