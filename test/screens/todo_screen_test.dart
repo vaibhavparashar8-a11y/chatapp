@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -569,5 +570,51 @@ void main() {
     expect(titles, isNot(contains('Past one-shot')));
     expect(titles, isNot(contains('Done task')));
     expect(titles, isNot(contains('No reminder')));
+  });
+
+  // ── Delivery confirmation ────────────────────────────────────────────────────
+
+  testWidgets('shows Sent then Delivered for a reminder sent to the other phone',
+      (tester) async {
+    final delivery = StreamController<Map<String, bool>>.broadcast();
+    ReminderService.debugDeliveryStream = delivery.stream;
+    addTearDown(() {
+      ReminderService.debugDeliveryStream = null;
+      delivery.close();
+    });
+    SharedPreferences.setMockInitialValues({
+      'todos_v1': jsonEncode([
+        {'id': 't1', 'title': 'Call plumber', 'done': false,
+          'sharedId': 'doc1', 'subtasks': []},
+      ]),
+    });
+
+    await tester.pumpWidget(wrap());
+    await tester.pumpAndSettle();
+
+    // Their phone hasn't armed it yet.
+    delivery.add({'doc1': false});
+    await tester.pumpAndSettle();
+    expect(find.text('Sent — waiting for their phone'), findsOneWidget);
+    expect(find.text('Delivered to their phone'), findsNothing);
+
+    // Their phone received and scheduled it.
+    delivery.add({'doc1': true});
+    await tester.pumpAndSettle();
+    expect(find.text('Delivered to their phone'), findsOneWidget);
+    expect(find.text('Sent — waiting for their phone'), findsNothing);
+  });
+
+  testWidgets('no delivery badge for a task with no outgoing reminder',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'todos_v1': jsonEncode([
+        {'id': 't1', 'title': 'Personal task', 'done': false, 'subtasks': []},
+      ]),
+    });
+    await tester.pumpWidget(wrap());
+    await tester.pumpAndSettle();
+    expect(find.text('Sent — waiting for their phone'), findsNothing);
+    expect(find.text('Delivered to their phone'), findsNothing);
   });
 }

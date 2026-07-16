@@ -44,6 +44,11 @@ class _TodoScreenState extends State<TodoScreen> {
   String _searchQuery = '';
   bool _searching = false;
 
+  /// Delivery status of reminders this phone sent to the other person, keyed by
+  /// reminder-doc id. `true` = their phone has received and armed it.
+  Map<String, bool> _deliveryByDoc = {};
+  StreamSubscription<Map<String, bool>>? _deliverySub;
+
   @override
   void initState() {
     super.initState();
@@ -51,12 +56,17 @@ class _TodoScreenState extends State<TodoScreen> {
     unawaited(_loadTodos().then((_) {
       if (mounted) return _rearmReminders();
     }));
+    // Watch delivery confirmations for reminders we sent to the other person.
+    _deliverySub = ReminderService.outgoingDeliveryStream().listen((map) {
+      if (mounted) setState(() => _deliveryByDoc = map);
+    });
     todoRefreshNotifier.addListener(_onRemoteTaskArrived);
   }
 
   @override
   void dispose() {
     todoRefreshNotifier.removeListener(_onRemoteTaskArrived);
+    _deliverySub?.cancel();
     _addCtrl.dispose();
     _addFocus.dispose();
     _searchCtrl.dispose();
@@ -647,9 +657,14 @@ class _TodoScreenState extends State<TodoScreen> {
   Widget _tileFor(_Todo todo) {
     final subCtrl =
         _subCtrl.putIfAbsent(todo.id, () => TextEditingController());
+    final docId = todo.sharedId ?? todo.reminderDocId;
     return _TodoTile(
       todo: todo,
       isExpanded: _expanded.contains(todo.id),
+      // Only reminders THIS phone sent to the other person appear in the map;
+      // absent → not an outgoing reminder → no delivery badge.
+      outgoingDelivered:
+          docId != null ? _deliveryByDoc[docId] : null,
       subCtrl: subCtrl,
       onExpandToggle: () => setState(() => _expanded.contains(todo.id)
           ? _expanded.remove(todo.id)

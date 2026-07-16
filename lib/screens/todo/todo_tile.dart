@@ -9,6 +9,11 @@ class _TodoTile extends StatelessWidget {
   final _Todo todo;
   final bool isExpanded;
 
+  /// Delivery status of a reminder THIS phone sent to the other person:
+  /// null = not an outgoing reminder (no badge), false = sent but their phone
+  /// hasn't armed it yet, true = delivered & scheduled on their phone.
+  final bool? outgoingDelivered;
+
   /// Controller for this task's "add sub-task" field, owned by the screen.
   final TextEditingController subCtrl;
 
@@ -24,6 +29,7 @@ class _TodoTile extends StatelessWidget {
   const _TodoTile({
     required this.todo,
     required this.isExpanded,
+    required this.outgoingDelivered,
     required this.subCtrl,
     required this.onExpandToggle,
     required this.onEdit,
@@ -176,6 +182,31 @@ class _TodoTile extends StatelessWidget {
                                                   color: _kTodoAccentLight),
                                             ),
                                           ],
+                                        ]),
+                                      ],
+                                      if (outgoingDelivered != null) ...[
+                                        const SizedBox(height: 3),
+                                        Row(children: [
+                                          Icon(
+                                              outgoingDelivered!
+                                                  ? Icons.done_all_rounded
+                                                  : Icons.done_rounded,
+                                              size: 12,
+                                              color: outgoingDelivered!
+                                                  ? _kTodoEmerald
+                                                  : _kTodoTextDim),
+                                          const SizedBox(width: 3),
+                                          Text(
+                                            outgoingDelivered!
+                                                ? 'Delivered to their phone'
+                                                : 'Sent — waiting for their phone',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: outgoingDelivered!
+                                                  ? _kTodoEmerald
+                                                  : _kTodoTextDim,
+                                            ),
+                                          ),
                                         ]),
                                       ],
                                       if (todo.subtasks.isNotEmpty) ...[

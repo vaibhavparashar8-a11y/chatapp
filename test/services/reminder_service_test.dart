@@ -275,6 +275,43 @@ void main() {
     });
   });
 
+  group('deliveryMapFromDocs', () {
+    ({String id, String? createdBy, String? forUser, bool locallyScheduled}) doc(
+      String id, {
+      String? createdBy,
+      String? forUser,
+      bool scheduled = false,
+    }) =>
+        (
+          id: id,
+          createdBy: createdBy,
+          forUser: forUser,
+          locallyScheduled: scheduled
+        );
+
+    test('keeps only reminders this device sent to the other person', () {
+      final map = ReminderService.deliveryMapFromDocs([
+        doc('sent1', createdBy: 'A', forUser: 'B', scheduled: false),
+        doc('sent2', createdBy: 'A', forUser: 'B', scheduled: true),
+        doc('self', createdBy: 'A', forUser: 'A'), // my own self reminder
+        doc('incoming', createdBy: 'B', forUser: 'A'), // peer → me
+        doc('peerSelf', createdBy: 'B', forUser: 'B'), // peer's self reminder
+      ], 'A');
+
+      expect(map.keys.toSet(), {'sent1', 'sent2'});
+      expect(map['sent1'], isFalse, reason: 'not armed on their phone yet');
+      expect(map['sent2'], isTrue, reason: 'delivered & armed');
+    });
+
+    test('empty when nothing was sent to the other person', () {
+      final map = ReminderService.deliveryMapFromDocs([
+        doc('self', createdBy: 'A', forUser: 'A'),
+        doc('incoming', createdBy: 'B', forUser: 'A'),
+      ], 'A');
+      expect(map, isEmpty);
+    });
+  });
+
   group('insertTodoToPrefs', () {
     test('stores the sharedId link on inserted tasks', () async {
       final prefs = await prefsWith([]);

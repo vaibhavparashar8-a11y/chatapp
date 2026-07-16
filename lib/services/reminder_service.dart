@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
 import 'notification_service.dart';
@@ -117,6 +118,66 @@ class ReminderService {
   static Future<void> deleteSharedTask(String docId) async {
     if (testMode) return;
     await _col(chatRoomId).doc(docId).delete();
+  }
+
+  // ── Delivery confirmation ──────────────────────────────────────────────────
+  // A reminder THIS phone sent to the other person carries `locallyScheduled`,
+  // which the recipient's phone flips to true the moment it receives and arms
+  // the notification. Watching it lets the sender show "Delivered to their
+  // phone" — the reliable signal that the reminder actually reached them.
+
+  /// Reduce reminder docs to the delivery status of the ones [me] SENT to the
+  /// other person: `{docId: locallyScheduled}`. A doc is outgoing when this
+  /// device created it (`createdBy == me`) for the other user (`forUser != me`)
+  /// — so self reminders and the peer's own reminders are excluded.
+  @visibleForTesting
+  static Map<String, bool> deliveryMapFromDocs(
+    Iterable<
+            ({
+              String id,
+              String? createdBy,
+              String? forUser,
+              bool locallyScheduled
+            })>
+        docs,
+    String me,
+  ) {
+    final out = <String, bool>{};
+    for (final d in docs) {
+      if (d.createdBy == me && d.forUser != me) {
+        out[d.id] = d.locallyScheduled;
+      }
+    }
+    return out;
+  }
+
+  /// Test seam: when set, [outgoingDeliveryStream] returns this instead of a
+  /// live Firestore query.
+  @visibleForTesting
+  static Stream<Map<String, bool>>? debugDeliveryStream;
+
+  /// Live delivery status of reminders this device sent to the other person,
+  /// as `{docId: locallyScheduled}`. Index-free: filters on the single
+  /// `createdBy` equality and splits `forUser` in memory via [deliveryMapFromDocs].
+  static Stream<Map<String, bool>> outgoingDeliveryStream() {
+    if (debugDeliveryStream != null) return debugDeliveryStream!;
+    if (testMode) return const Stream.empty();
+    return _col(chatRoomId)
+        .where('createdBy', isEqualTo: mySenderId)
+        .snapshots()
+        .map((snap) => deliveryMapFromDocs(
+              snap.docs.map((d) {
+                final data = d.data() as Map<String, dynamic>;
+                return (
+                  id: d.id,
+                  createdBy: data['createdBy'] as String?,
+                  forUser: data['forUser'] as String?,
+                  locallyScheduled:
+                      (data['locallyScheduled'] as bool?) ?? false,
+                );
+              }),
+              mySenderId,
+            ));
   }
 
   static SharedTask _sharedTaskFromDoc(
