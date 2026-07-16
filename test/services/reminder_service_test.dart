@@ -26,6 +26,7 @@ void main() {
     String? sharedId,
     String? reminderDocId,
     String? dueDate,
+    List<Map<String, dynamic>>? subtasks,
   }) =>
       {
         'id': id,
@@ -34,7 +35,7 @@ void main() {
         if (sharedId != null) 'sharedId': sharedId,
         if (reminderDocId != null) 'reminderDocId': reminderDocId,
         if (dueDate != null) 'dueDate': dueDate,
-        'subtasks': <dynamic>[],
+        'subtasks': subtasks ?? <dynamic>[],
       };
 
   Future<SharedPreferences> prefsWith(List<Map<String, dynamic>> tasks) async {
@@ -191,6 +192,83 @@ void main() {
       final changed = await ReminderService.applySharedSnapshot(
         prefs,
         [SharedTask(id: 'doc1', title: 'Same', scheduledAt: due, done: false)],
+        applyDeletes: true,
+      );
+      expect(changed, isFalse);
+    });
+  });
+
+  group('applySharedSnapshot — subtasks', () {
+    test('applies a remote subtask list onto the linked local task', () async {
+      final prefs = await prefsWith([
+        localTask('a', sharedId: 'doc1'),
+      ]);
+      final changed = await ReminderService.applySharedSnapshot(
+        prefs,
+        [
+          SharedTask(id: 'doc1', title: 'Task', scheduledAt: due, subtasks: [
+            {'id': 's1', 'title': 'Step one', 'done': false},
+            {'id': 's2', 'title': 'Step two', 'done': true},
+          ]),
+        ],
+        applyDeletes: true,
+      );
+      expect(changed, isTrue);
+      final subs = storedTasks(prefs).first['subtasks'] as List;
+      expect(subs, hasLength(2));
+      expect(subs[0]['title'], 'Step one');
+      expect(subs[1]['done'], isTrue);
+    });
+
+    test('a done-toggle on a remote subtask reaches the local copy', () async {
+      final prefs = await prefsWith([
+        localTask('a', sharedId: 'doc1', subtasks: [
+          {'id': 's1', 'title': 'Step', 'done': false},
+        ]),
+      ]);
+      await ReminderService.applySharedSnapshot(
+        prefs,
+        [
+          SharedTask(id: 'doc1', title: 'Task', scheduledAt: due, subtasks: [
+            {'id': 's1', 'title': 'Step', 'done': true},
+          ]),
+        ],
+        applyDeletes: true,
+      );
+      final subs = storedTasks(prefs).first['subtasks'] as List;
+      expect(subs.single['done'], isTrue);
+    });
+
+    test('a null subtasks list (legacy doc) leaves the local copy untouched',
+        () async {
+      final prefs = await prefsWith([
+        localTask('a', sharedId: 'doc1', subtasks: [
+          {'id': 's1', 'title': 'Keep me', 'done': false},
+        ]),
+      ]);
+      final changed = await ReminderService.applySharedSnapshot(
+        prefs,
+        [SharedTask(id: 'doc1', title: 'Task', scheduledAt: due)],
+        applyDeletes: true,
+      );
+      expect(changed, isFalse);
+      final subs = storedTasks(prefs).first['subtasks'] as List;
+      expect(subs.single['title'], 'Keep me');
+    });
+
+    test('an identical subtask list is not rewritten (no sync loop)', () async {
+      final prefs = await prefsWith([
+        localTask('a', sharedId: 'doc1', subtasks: [
+          {'id': 's1', 'title': 'Step', 'done': false},
+        ]),
+      ]);
+      final changed = await ReminderService.applySharedSnapshot(
+        prefs,
+        [
+          SharedTask(id: 'doc1', title: 'Task', scheduledAt: due, subtasks: [
+            {'id': 's1', 'title': 'Step', 'done': false},
+          ]),
+        ],
         applyDeletes: true,
       );
       expect(changed, isFalse);

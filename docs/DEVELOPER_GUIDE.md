@@ -208,6 +208,9 @@ rooms/{chatRoomId}/reminders/
     ├── scheduledAt: Timestamp           ← when the reminder should fire
     ├── addToList: bool                  ← true = also insert into recipient's todo list
     ├── done: bool                       ← synced both ways for shared tasks
+    ├── subtasks: [{id,title,done}]?     ← sub-tasks, synced both ways for shared
+    │                                       (addToList) tasks. Absent on docs that
+    │                                       predate subtask-sync → "don't touch".
     ├── locallyScheduled: bool           ← recipient sets true once its notification is
     │                                       scheduled (WorkManager skip guard). Created
     │                                       true for "Remind me" self reminders so the
@@ -937,11 +940,11 @@ via a `sharedId` field (legacy `reminder_*` IDs are backfilled automatically).
 
 | Method | Role |
 |---|---|
-| `updateSharedTask(docId, {title, scheduledAt, done})` | Local edits write through to the doc |
+| `updateSharedTask(docId, {title, scheduledAt, done, subtasks})` | Local edits write through to the doc. Adding/toggling/deleting a sub-task on a `sharedId` task pushes the whole subtask list (last-write-wins) |
 | `deleteSharedTask(docId)` | Deleting on either phone deletes for both |
 | `sharedTasksStream()` | Live mirror — main.dart listener applies remote changes within seconds |
 | `fetchSharedTasks(roomId)` | Server-forced one-shot for the background worker (offline throws instead of returning a partial cache) |
-| `applySharedSnapshot(prefs, docs, {applyDeletes})` | The reconcile: applies title/done/dueDate changes, removes deleted tasks, reschedules notifications |
+| `applySharedSnapshot(prefs, docs, {applyDeletes})` | The reconcile: applies title/done/dueDate/subtasks changes, removes deleted tasks, reschedules notifications |
 
 **Reconcile safety rules:**
 - Deletions apply only from **server-confirmed** snapshots (`applyDeletes` =
@@ -1270,7 +1273,7 @@ updateSharedTask() / deleteSharedTask()  → reminders/{sharedId} updated/delete
 App open:   sharedTasksStream() snapshot → applySharedSnapshot()
 App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot()
         │
-        ├─ title/done/dueDate applied to the linked local task
+        ├─ title/done/dueDate/subtasks applied to the linked local task
         ├─ doc gone (+server-confirmed) → local copy removed
         ├─ notifications cancelled/rescheduled (both ID variants)
         └─ todoRefreshNotifier++ → TodoScreen reloads
@@ -1480,8 +1483,8 @@ test/
 │   └── link_utils_test.dart             ← splitLinks URL detection (www, punctuation,
 │                                           multiple links, plain text)
 ├── services/
-│   ├── reminder_service_test.dart       ← applySharedSnapshot reconcile rules,
-│   │                                       insertTodoToPrefs sharedId link
+│   ├── reminder_service_test.dart       ← applySharedSnapshot reconcile rules
+│   │                                       (incl. subtask sync), insertTodoToPrefs link
 │   ├── agora_token_service_test.dart    ← needsRefresh thresholds, cache behavior,
 │   │                                       fetch-failure fallback
 │   └── digest_service_test.dart         ← titlesFor (today+not-done filter),
@@ -1504,7 +1507,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 195 tests, ~20 seconds
+flutter test                        # 199 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a

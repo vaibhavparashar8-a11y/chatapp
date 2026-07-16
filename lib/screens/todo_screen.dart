@@ -327,6 +327,8 @@ class _TodoScreenState extends State<TodoScreen> {
           title: todo.title,
           scheduledAt: dueDate,
           addToList: addToList,
+          // Mirror any existing sub-tasks so they show up on their phone too.
+          subtasks: addToList ? _subtaskPayload(todo) : null,
         );
         if (docId != null) {
           // Link my copy so future edits/deletes reach the doc. addToList tasks
@@ -387,16 +389,34 @@ class _TodoScreenState extends State<TodoScreen> {
         .add(_SubTodo(DateTime.now().microsecondsSinceEpoch.toString(), text)));
     ctrl.clear();
     _saveTodos();
+    _syncSubtasks(todo);
   }
 
   void _toggleSubtask(_Todo todo, _SubTodo sub, bool? val) {
     setState(() => sub.done = val ?? false);
     _saveTodos();
+    _syncSubtasks(todo);
   }
 
   void _deleteSubtask(_Todo todo, String subId) {
     setState(() => todo.subtasks.removeWhere((s) => s.id == subId));
     _saveTodos();
+    _syncSubtasks(todo);
+  }
+
+  /// Sub-task list serialized for Firestore / the shared reminder doc.
+  List<Map<String, dynamic>> _subtaskPayload(_Todo todo) => todo.subtasks
+      .map((s) => {'id': s.id, 'title': s.title, 'done': s.done})
+      .toList();
+
+  /// Push a mirrored shared task's sub-tasks to its reminder doc so the other
+  /// device sees the change. Only `sharedId` tasks are mirrored — stored-only
+  /// reminders (reminderDocId) aren't shown on the other phone, so skip them.
+  void _syncSubtasks(_Todo todo) {
+    final sid = todo.sharedId;
+    if (sid == null) return;
+    ReminderService.updateSharedTask(sid, subtasks: _subtaskPayload(todo))
+        .catchError((e) => LogService.w('todo', 'subtask sync failed: $e'));
   }
 
   // ── Task management ───────────────────────────────────────────────────────
