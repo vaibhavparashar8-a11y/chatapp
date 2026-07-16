@@ -330,6 +330,42 @@ void main() {
       ctrl.dispose();
       repo.close();
     });
+
+    test('does NOT mark read while backgrounded, then marks read on return',
+        () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(repo);
+      await ctrl.init();
+
+      // Read an initial message while present in the chat.
+      repo.emitMessages([makeMessage(id: 'b1', sender: 'B')]);
+      await Future.delayed(const Duration(milliseconds: 600));
+      expect(repo.markReadCount, 1);
+
+      // User leaves (app backgrounded). The message stream stays live.
+      await ctrl.leave();
+
+      // A new message from the other person arrives while we're away — its
+      // read receipt must NOT advance (the sender must not see "Read").
+      repo.emitMessages([
+        makeMessage(id: 'b1', sender: 'B'),
+        makeMessage(id: 'b2', sender: 'B'),
+      ]);
+      await Future.delayed(const Duration(milliseconds: 600));
+      expect(repo.markReadCount, 1,
+          reason: 'no read receipt should fire while backgrounded');
+      expect(repo.lastReadMsgId, 'b1');
+
+      // Returning to the foreground marks the missed message read, once.
+      await ctrl.enter();
+      await Future.delayed(const Duration(milliseconds: 600));
+      expect(repo.markReadCount, 2,
+          reason: 'enter() marks the message seen on return');
+      expect(repo.lastReadMsgId, 'b2');
+
+      ctrl.dispose();
+      repo.close();
+    });
   });
 
   group('ChatController — typing', () {
