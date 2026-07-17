@@ -414,6 +414,25 @@ class _TodoScreenState extends State<TodoScreen> {
     _syncSubtasks(todo);
   }
 
+  /// Rename a sub-task via a small dialog; writes through for shared tasks.
+  Future<void> _editSubtask(_Todo todo, _SubTodo sub) async {
+    final newTitle = await showDialog<String>(
+      context: context,
+      builder: (_) => _EditTaskDialog(
+        initial: sub.title,
+        title: 'Edit sub-task',
+        hint: 'Sub-task',
+      ),
+    );
+    final trimmed = newTitle?.trim();
+    if (trimmed == null || trimmed.isEmpty || trimmed == sub.title || !mounted) {
+      return;
+    }
+    setState(() => sub.title = trimmed);
+    await _saveTodos();
+    _syncSubtasks(todo);
+  }
+
   /// Sub-task list serialized for Firestore / the shared reminder doc.
   List<Map<String, dynamic>> _subtaskPayload(_Todo todo) => todo.subtasks
       .map((s) => {'id': s.id, 'title': s.title, 'done': s.done})
@@ -675,6 +694,7 @@ class _TodoScreenState extends State<TodoScreen> {
       onToggleDone: (v) => _toggleDone(todo, v),
       onToggleSubtask: (sub, v) => _toggleSubtask(todo, sub, v),
       onDeleteSubtask: (subId) => _deleteSubtask(todo, subId),
+      onEditSubtask: (sub) => _editSubtask(todo, sub),
       onAddSubtask: () => _addSubtask(todo),
     );
   }

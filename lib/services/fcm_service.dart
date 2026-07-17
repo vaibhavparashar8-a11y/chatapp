@@ -71,6 +71,13 @@ Future<void> _processReminderPayload(Map<String, dynamic> data) async {
     scheduledTime: scheduledAt,
   );
 
+  // Confirm delivery back to the sender NOW (not only when the 15-min worker
+  // runs): flipping locallyScheduled is what makes the sender's task show
+  // "Delivered". Best-effort — the background worker re-marks it as a backup.
+  try {
+    await ReminderService.markScheduled(reminderId, chatRoomId);
+  } catch (_) {}
+
   if (addToList) {
     try {
       final prefs = await SharedPreferences.getInstance();
