@@ -331,6 +331,36 @@ void main() {
       repo.close();
     });
 
+    test('message stream self-heals after a listener error (no restart needed)',
+        () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(
+        repo,
+        messageResubscribeDelay: const Duration(milliseconds: 30),
+      );
+      await ctrl.init();
+
+      repo.emitMessages([makeMessage(id: 'm1', sender: 'B')]);
+      await Future.delayed(Duration.zero);
+      expect(ctrl.messages.any((m) => m.id == 'm1'), isTrue);
+
+      // Simulate a Firestore listener disruption (e.g. bulk server-side delete).
+      repo.emitMessagesError('listener disrupted');
+      await Future.delayed(const Duration(milliseconds: 60)); // await resubscribe
+
+      // The stream re-subscribed, so new messages flow again instead of freezing.
+      repo.emitMessages([
+        makeMessage(id: 'm1', sender: 'B'),
+        makeMessage(id: 'm2', sender: 'B'),
+      ]);
+      await Future.delayed(Duration.zero);
+      expect(ctrl.messages.any((m) => m.id == 'm2'), isTrue,
+          reason: 'chat must recover without an app restart');
+
+      ctrl.dispose();
+      repo.close();
+    });
+
     test('does NOT mark read while backgrounded, then marks read on return',
         () async {
       final repo = FakeChatRepository();
