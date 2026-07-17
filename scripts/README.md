@@ -24,6 +24,8 @@ Deletes any of:
    cd scripts
    npm install
    ```
+   > On **Windows PowerShell**, run each line separately — `&&` is not a valid
+   > separator there (use `;` to chain, e.g. `cd scripts; npm install`).
 
 ## Usage
 
