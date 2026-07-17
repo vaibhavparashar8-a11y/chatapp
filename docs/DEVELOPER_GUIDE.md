@@ -1124,9 +1124,16 @@ a remote task arrives or the shared-task mirror changes something.
   reads the doc IDs already in `app_call_log_{role}`, and uploads only the
   missing ones. Doc IDs are stable (`docIdFor` = `<ts>_<type>_<number>`), so
   this is idempotent and **restores logs deleted externally** — e.g. by the
-  cleanup script — on the next app launch, instead of trusting a local
-  "last synced" marker (the old `callLogLastSyncMs` key, now removed). Only
-  the last 30 days repopulate; older deleted history stays gone.
+  cleanup script — on the next sync, instead of trusting a local "last synced"
+  marker (the old `callLogLastSyncMs` key, now removed). Only the last 30 days
+  repopulate; older deleted history stays gone.
+- **Sync on resume:** `init()` (cold start) requests permission then syncs, but
+  the sync used to run *only* at cold start — so calls made while the app stays
+  warm never uploaded until a full relaunch. `TodoScreen` (the always-present
+  home) now calls `CallLogService.sync()` on `AppLifecycleState.resumed`; it's
+  throttled to once per minute (`shouldSync`) and a no-op without permission
+  (never pops a dialog), so new calls upload whenever the app returns to the
+  foreground.
 
 ---
 
@@ -1529,7 +1536,7 @@ test/
 │   │                                       fetch-failure fallback
 │   ├── digest_service_test.dart         ← titlesFor (today+not-done filter),
 │   │                                       buildBody checklist, DigestPrefs defaults
-│   └── call_log_service_test.dart       ← docIdFor stability / dedup key
+│   └── call_log_service_test.dart       ← docIdFor stability / dedup key, shouldSync throttle
 ├── widgets/
 │   └── message_bubble_test.dart         ← tick states, pending/failed rendering,
 │                                           tappable link spans
@@ -1548,7 +1555,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 214 tests, ~20 seconds
+flutter test                        # 217 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a

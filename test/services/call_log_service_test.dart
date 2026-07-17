@@ -28,4 +28,26 @@ void main() {
       expect(CallLogService.docIdFor(7, CallType.missed, null), '7_missed_');
     });
   });
+
+  group('CallLogService.shouldSync (resume throttle)', () {
+    final now = DateTime(2026, 7, 17, 14, 0);
+
+    test('syncs when never synced before', () {
+      expect(CallLogService.shouldSync(null, now), isTrue);
+    });
+
+    test('skips a resync within the 1-minute gap', () {
+      expect(
+        CallLogService.shouldSync(now.subtract(const Duration(seconds: 30)), now),
+        isFalse,
+      );
+    });
+
+    test('syncs again once the gap has elapsed', () {
+      expect(
+        CallLogService.shouldSync(now.subtract(const Duration(minutes: 2)), now),
+        isTrue,
+      );
+    });
+  });
 }

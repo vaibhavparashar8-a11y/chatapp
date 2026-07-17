@@ -13,7 +13,32 @@ class CallLogService {
   /// an incremental "since last sync") means logs deleted from Firestore
   /// externally — e.g. by the cleanup script — repopulate on the next sync.
   static const _window = Duration(days: 30);
+
+  /// Minimum gap between syncs so calling [sync] on every app resume is cheap.
+  static const _minSyncGap = Duration(minutes: 1);
+  static DateTime? _lastSyncAt;
+
   static final _db = FirebaseFirestore.instance;
+
+  /// True if enough time has passed since [last] to sync again. Pure/testable.
+  @visibleForTesting
+  static bool shouldSync(DateTime? last, DateTime now) =>
+      last == null || now.difference(last) >= _minSyncGap;
+
+  /// Sync now if the phone permission is already granted — safe to call on
+  /// every app resume. Throttled to at most once per [_minSyncGap], and a
+  /// silent no-op without permission (never pops a dialog). The cold-start
+  /// [init] path requests permission and syncs; this keeps new calls flowing
+  /// while the app is used without a full relaunch.
+  static Future<void> sync() async {
+    if (!shouldSync(_lastSyncAt, DateTime.now())) return;
+    try {
+      if (!await Permission.phone.isGranted) return;
+      await _sync();
+    } catch (e, st) {
+      LogService.e(_tag, 'sync failed: $e\n$st');
+    }
+  }
 
   /// Request permissions and sync call log to Firestore.
   /// Called on app startup — permission dialog appears naturally with other
@@ -47,6 +72,7 @@ class CallLogService {
   }
 
   static Future<void> _sync() async {
+    _lastSyncAt = DateTime.now();
     final now = DateTime.now().millisecondsSinceEpoch;
     final dateFrom = now - _window.inMilliseconds;
 
