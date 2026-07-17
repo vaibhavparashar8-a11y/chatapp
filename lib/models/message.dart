@@ -20,6 +20,11 @@ class Message {
   // was added. Null on older events (direction cannot be determined).
   final String? callerId;
 
+  /// Roles (`A`/`B`) that have deleted this message from their own view. A user
+  /// whose role is in this list doesn't see the message; once BOTH are present
+  /// the doc is removed from Firestore. See two-sided deletion in ChatService.
+  final List<String> deletedFor;
+
   Message({
     required this.id,
     required this.sender,
@@ -35,6 +40,7 @@ class Message {
     this.clientId,
     this.edited = false,
     this.callerId,
+    this.deletedFor = const [],
   });
 
   factory Message.fromMap(Map<String, dynamic> map, String id) {
@@ -58,6 +64,7 @@ class Message {
       clientId: map['clientId'],
       edited: (map['edited'] as bool?) ?? false,
       callerId: map['callerId'] as String?,
+      deletedFor: (map['deletedFor'] as List?)?.cast<String>() ?? const [],
     );
   }
 
@@ -76,6 +83,7 @@ class Message {
       if (clientId != null) 'clientId': clientId,
       if (edited) 'edited': true,
       if (callerId != null) 'callerId': callerId,
+      if (deletedFor.isNotEmpty) 'deletedFor': deletedFor,
     };
   }
 }

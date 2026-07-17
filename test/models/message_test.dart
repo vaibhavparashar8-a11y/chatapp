@@ -126,6 +126,25 @@ void main() {
       expect(msg.toMap()['callerId'], 'B');
     });
 
+    test('fromMap reads deletedFor, defaulting to empty', () {
+      expect(Message.fromMap(baseMap, 'x').deletedFor, isEmpty);
+      final msg = Message.fromMap({...baseMap, 'deletedFor': ['A']}, 'y');
+      expect(msg.deletedFor, ['A']);
+    });
+
+    test('toMap includes deletedFor only when non-empty', () {
+      final base = Message(
+        id: 'm', sender: 'A', text: 'hi',
+        type: MessageType.text, timestamp: DateTime(2024, 1, 1),
+      );
+      expect(base.toMap().containsKey('deletedFor'), isFalse);
+      final deleted = Message(
+        id: 'm', sender: 'A', text: 'hi', type: MessageType.text,
+        timestamp: DateTime(2024, 1, 1), deletedFor: const ['A', 'B'],
+      );
+      expect(deleted.toMap()['deletedFor'], ['A', 'B']);
+    });
+
     test('toMap omits callerId when null', () {
       final msg = Message(
         id: 'ce1', sender: 'system', text: 'Audio call ended • 45s',

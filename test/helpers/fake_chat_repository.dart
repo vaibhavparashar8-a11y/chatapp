@@ -185,6 +185,18 @@ class FakeChatRepository implements IChatRepository {
     _confirmed.removeWhere((m) => m.id == messageId);
     _msgsCtrl.add(List.from(_confirmed));
   }
+
+  // ── Two-sided deletion ─────────────────────────────────────────────────────
+  final List<({String id, List<String> deletedFor})> deleteForMeLog = [];
+  int clearChatForMeCount = 0;
+
+  @override
+  Future<void> deleteForMe(String messageId, List<String> deletedFor) async {
+    deleteForMeLog.add((id: messageId, deletedFor: deletedFor));
+  }
+
+  @override
+  Future<void> clearChatForMe() async => clearChatForMeCount++;
 }
 
 // ── Factory helpers ──────────────────────────────────────────────────────────
@@ -195,6 +207,7 @@ Message makeMessage({
   String text = 'hello',
   DateTime? timestamp,
   String? clientId,
+  List<String> deletedFor = const [],
 }) {
   return Message(
     id: id,
@@ -203,5 +216,6 @@ Message makeMessage({
     type: MessageType.text,
     timestamp: timestamp ?? DateTime(2024, 1, 1, 12, 0),
     clientId: clientId,
+    deletedFor: deletedFor,
   );
 }

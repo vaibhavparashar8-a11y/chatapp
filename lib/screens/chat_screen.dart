@@ -426,12 +426,32 @@ class _ChatScreenState extends State<ChatScreen>
         IconButton(icon: const Icon(Icons.videocam), onPressed: () => _startCall(true), tooltip: 'Video call'),
         IconButton(
           icon: const Icon(Icons.delete_sweep),
-          tooltip: 'Clear my chat',
+          tooltip: 'Clear chat',
           onPressed: () async {
-            await _ctrl.clearMyView();
+            final ok = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Clear chat?'),
+                content: const Text(
+                    'Messages are removed from your view now. Each one is '
+                    'permanently deleted once the other person clears it too.'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel')),
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Clear')),
+                ],
+              ),
+            );
+            if (ok != true) return;
+            await _ctrl.clearChat();
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Chat cleared for you'), duration: Duration(seconds: 1)),
+                const SnackBar(
+                    content: Text('Chat cleared for you'),
+                    duration: Duration(seconds: 1)),
               );
             }
           },
@@ -747,13 +767,14 @@ class _ChatScreenState extends State<ChatScreen>
                   ),
                 );
               }),
-            // Delete for me (my msg within 1 h → Firestore delete; otherwise hide locally)
+            // My recent msg → delete for everyone immediately; otherwise a
+            // two-sided "delete for me" (gone for both once they delete it too).
             _actionTile(Icons.delete_outline, 'Delete', () {
               Navigator.pop(context);
               if (isMe && canModify) {
                 _ctrl.deleteMessage(msg.id);
               } else {
-                _ctrl.hideMessage(msg.id);
+                _ctrl.deleteForMe(msg);
               }
             }, destructive: true),
             const SizedBox(height: 8),

@@ -458,6 +458,55 @@ void main() {
     });
   });
 
+  group('ChatController — two-sided deletion', () {
+    test('messages deleted-for-me (my role in deletedFor) are hidden', () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(repo); // mySenderId == 'A'
+      await ctrl.init();
+
+      repo.emitMessages([
+        makeMessage(id: 'visible', sender: 'B'),
+        makeMessage(id: 'goneForA', sender: 'B', deletedFor: ['A']),
+        makeMessage(id: 'goneForBonly', sender: 'B', deletedFor: ['B']),
+      ]);
+      await Future.delayed(Duration.zero);
+
+      final ids = ctrl.messages.map((m) => m.id).toList();
+      expect(ids, contains('visible'));
+      expect(ids, contains('goneForBonly')); // only B deleted → I still see it
+      expect(ids, isNot(contains('goneForA')));
+      ctrl.dispose();
+      repo.close();
+    });
+
+    test('deleteForMe delegates to the repo with id and current deletedFor',
+        () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(repo);
+      await ctrl.init();
+
+      await ctrl.deleteForMe(
+          makeMessage(id: 'm1', sender: 'B', deletedFor: ['B']));
+
+      expect(repo.deleteForMeLog.single.id, 'm1');
+      expect(repo.deleteForMeLog.single.deletedFor, ['B']);
+      ctrl.dispose();
+      repo.close();
+    });
+
+    test('clearChat delegates to repo.clearChatForMe', () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(repo);
+      await ctrl.init();
+
+      await ctrl.clearChat();
+
+      expect(repo.clearChatForMeCount, 1);
+      ctrl.dispose();
+      repo.close();
+    });
+  });
+
   group('ChatController — leave', () {
     test('leave() is idempotent — leaveChat called only once', () async {
       final repo = FakeChatRepository();
