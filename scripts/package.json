@@ -1,0 +1,14 @@
+{
+  "name": "chatapp-cleanup",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Firestore cleanup admin tool — selectively bulk-delete app logs, call logs, messages, and reminders.",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "cleanup": "node cleanup.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.0.0"
+  }
+}

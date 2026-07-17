@@ -256,7 +256,20 @@ app_logs/
     ├── tag: string                      ← e.g. "Upload", "Call"
     ├── message: string
     └── time: Timestamp
+
+app_call_log_A/   (and app_call_log_B/)  ← per-role call history (CallLogService)
+└── {docId}
+    └── … call metadata (direction, type, timestamps, duration)
 ```
+
+**Firestore cleanup:** `app_logs`, `app_call_log_A/B`, `rooms/{room}/messages`
+and `rooms/{room}/reminders` accumulate over time. `scripts/cleanup.js` is a
+`firebase-admin` CLI that selectively bulk-deletes any of them (interactive or
+`node cleanup.js <category…>`, with a `--dry-run` preview). Needs a
+service-account key at `scripts/serviceAccountKey.json` (gitignored). Full
+instructions in `scripts/README.md`. Note the in-app "clear" actions do **not**
+delete from Firestore — `LogService.clear()` clears only the in-memory buffer,
+and `deleteAllMessages()` just sets a per-device `clearedAt` view marker.
 
 ---
 
