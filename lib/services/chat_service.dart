@@ -28,16 +28,33 @@ class ChatService {
   // are listening.  The controller is created lazily and lives for the app
   // lifetime — acceptable for a single-room chat app.
   static StreamController<Map<String, dynamic>>? _roomBcast;
+  static StreamSubscription? _roomSub;
 
   static Stream<Map<String, dynamic>> _sharedRoomData() {
     if (_roomBcast == null) {
       _roomBcast = StreamController<Map<String, dynamic>>.broadcast();
-      _room.snapshots().listen(
-        (snap) => _roomBcast?.add(snap.data() as Map<String, dynamic>? ?? {}),
-        onError: (e, st) => _roomBcast?.addError(e, st),
-      );
+      _listenRoom();
     }
     return _roomBcast!.stream;
+  }
+
+  static void _listenRoom() {
+    _roomSub?.cancel();
+    _roomSub = _room.snapshots().listen(
+      (snap) => _roomBcast?.add(snap.data() as Map<String, dynamic>? ?? {}),
+      onError: (e, st) {
+        // Do NOT forward the error downstream: the presence/typing/readAt
+        // listeners have no onError, so addError would permanently cancel them
+        // (chat frozen until an app restart). Instead log and re-subscribe so
+        // the shared room stream self-heals after a transient disruption — e.g.
+        // the flood of change events from a bulk server-side deletion.
+        LogService.e('ChatService', 'room listener error: $e — resubscribing');
+        _roomSub?.cancel();
+        Future.delayed(const Duration(seconds: 2), () {
+          if (_roomBcast != null && !_roomBcast!.isClosed) _listenRoom();
+        });
+      },
+    );
   }
 
   /// Publicly exposed so [DeviceService] and other callers outside this file

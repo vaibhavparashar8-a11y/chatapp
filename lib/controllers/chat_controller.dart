@@ -24,11 +24,16 @@ class ChatController extends ChangeNotifier {
   final Duration presenceRefreshInterval;
   final Duration presenceStaleAfter;
 
+  /// Backoff before re-subscribing the message stream after a listener error.
+  /// Injectable so tests don't wait the real delay.
+  final Duration messageResubscribeDelay;
+
   ChatController(
     this._repo, {
     this.onUploadError,
     this.presenceRefreshInterval = const Duration(seconds: 20),
     this.presenceStaleAfter = const Duration(seconds: 45),
+    this.messageResubscribeDelay = const Duration(seconds: 2),
   });
 
   // ── Private state ────────────────────────────────────────────────────────
@@ -67,6 +72,8 @@ class ChatController extends ChangeNotifier {
   Timer? _markReadTimer;
 
   StreamSubscription<List<Message>>? _messagesSub;
+  Timer? _resubscribeTimer;
+  bool _disposed = false;
   StreamSubscription<DateTime?>? _readAtSub;
   StreamSubscription<bool>? _typingSub;
   StreamSubscription<bool>? _presenceSub;
@@ -168,8 +175,25 @@ class ChatController extends ChangeNotifier {
 
   void _subscribeMessages() {
     _messagesSub?.cancel();
-    _messagesSub = _repo.messagesStream().listen((msgs) {
-      _streamMessages = msgs;
+    _messagesSub = _repo.messagesStream().listen(_onMessages, onError: (
+      Object e,
+      StackTrace st,
+    ) {
+      // A Firestore listener can drop on a transient disruption (e.g. the flood
+      // of change events from a bulk server-side deletion). Without recovery the
+      // chat would stay frozen until an app restart. Log and re-subscribe after
+      // a short backoff so it self-heals.
+      LogService.e('ChatController', 'messagesStream error: $e — resubscribing');
+      _messagesSub?.cancel();
+      _resubscribeTimer?.cancel();
+      _resubscribeTimer = Timer(messageResubscribeDelay, () {
+        if (!_disposed) _subscribeMessages();
+      });
+    });
+  }
+
+  void _onMessages(List<Message> msgs) {
+    _streamMessages = msgs;
 
       final confirmedClientIds = msgs
           .where((m) => m.clientId != null)
@@ -194,7 +218,6 @@ class ChatController extends ChangeNotifier {
         }
       }
       notifyListeners();
-    });
   }
 
   Future<void> enter() async {
@@ -539,9 +562,11 @@ class ChatController extends ChangeNotifier {
     // Guarded by _didLeave, so the normal path is a no-op. Fire-and-forget —
     // dispose() is synchronous.
     if (!_didLeave) leave();
+    _disposed = true;
     _typingTimer?.cancel();
     _markReadTimer?.cancel();
     _presenceTimer?.cancel();
+    _resubscribeTimer?.cancel();
     _messagesSub?.cancel();
     _readAtSub?.cancel();
     _typingSub?.cancel();

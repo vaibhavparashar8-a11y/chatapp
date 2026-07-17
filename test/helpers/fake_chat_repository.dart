@@ -34,6 +34,7 @@ class FakeChatRepository implements IChatRepository {
   // ── Helpers for test control ──────────────────────────────────────────────
 
   void emitMessages(List<Message> msgs) => _msgsCtrl.add(msgs);
+  void emitMessagesError(Object error) => _msgsCtrl.addError(error);
   void emitTyping(bool typing) => _typingCtrl.add(typing);
   void emitReadAt(DateTime? ts) => _readAtCtrl.add(ts);
 
