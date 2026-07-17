@@ -1321,6 +1321,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Sender sees "Read HH:mm" advance while the reader is away (offline) | (Fixed) `leave()` (app backgrounded) cleared presence but did not pause read receipts, and the message stream stays live — so an incoming message hit `_subscribeMessages` and advanced `readAt` even though the reader had left | Gate auto-mark-read on `!_didLeave` too; `enter()` calls `_markReadLatestIfNew()` to mark the missed message read on return |
 | Presence flips offline during WhatsApp call overlay | Some devices fire only `inactive` for overlays | 8s debounce timer on `inactive` (`??=` so it never restarts mid-sequence) |
 | "online" stuck forever after force-kill / crash | (Fixed) `presence` boolean was only cleared by in-memory debounce timers; a killed process never runs them, and Firestore has no onDisconnect | `presenceAt` heartbeat re-stamped every 20s while chat open; reader shows "online" only while heartbeats keep arriving (45s stale window, measured by local receive time — clock-skew immune). `ChatController.dispose()` also leaves as defense-in-depth |
+| Chat frozen (no new messages / presence / read receipts) until app restart — often after a bulk server-side deletion | (Fixed) A Firestore listener error was fatal: the room stream did `_roomBcast.addError(...)`, which cancelled the presence/typing/readAt listeners (they have no `onError`), and the message stream had no `onError` either — so any listener drop wedged the chat permanently | Both streams now **self-heal**: `ChatService._listenRoom()` logs and re-subscribes instead of forwarding the error downstream; `ChatController._subscribeMessages` re-subscribes after `messageResubscribeDelay` (2s, injectable). No restart needed |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
 | Overlay "stuck" — won't move when enlarged | (Fixed) Resize mode latched at pan-down; at max size the clamps absorbed every delta, so the drag neither resized nor moved | Resize gesture falls back to move when the size is pinned at its clamp bounds |
 | Overlay resets to small size after returning from CallScreen | (Fixed) Geometry was widget State, wiped by the `_floatingVideoEpoch` key-bump reconstruction | Geometry hoisted to `CallService.overlayX/Y/W/H`; reset only in `joinCall()` (new call) |
@@ -1526,7 +1527,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 204 tests, ~20 seconds
+flutter test                        # 205 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
