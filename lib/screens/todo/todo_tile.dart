@@ -24,6 +24,7 @@ class _TodoTile extends StatelessWidget {
   final ValueChanged<bool?> onToggleDone;
   final void Function(_SubTodo sub, bool? val) onToggleSubtask;
   final ValueChanged<String> onDeleteSubtask;
+  final ValueChanged<_SubTodo> onEditSubtask;
   final VoidCallback onAddSubtask;
 
   const _TodoTile({
@@ -38,6 +39,7 @@ class _TodoTile extends StatelessWidget {
     required this.onToggleDone,
     required this.onToggleSubtask,
     required this.onDeleteSubtask,
+    required this.onEditSubtask,
     required this.onAddSubtask,
   });
 
@@ -190,7 +192,7 @@ class _TodoTile extends StatelessWidget {
                                           Icon(
                                               outgoingDelivered!
                                                   ? Icons.done_all_rounded
-                                                  : Icons.done_rounded,
+                                                  : Icons.schedule_send_rounded,
                                               size: 12,
                                               color: outgoingDelivered!
                                                   ? _kTodoEmerald
@@ -199,7 +201,7 @@ class _TodoTile extends StatelessWidget {
                                           Text(
                                             outgoingDelivered!
                                                 ? 'Delivered'
-                                                : 'Sent — waiting for their phone',
+                                                : 'Not delivered',
                                             style: TextStyle(
                                               fontSize: 11,
                                               color: outgoingDelivered!
@@ -321,15 +323,29 @@ class _TodoTile extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 10),
+          // Tap the text to rename the sub-task.
           Expanded(
-            child: Text(
-              sub.title,
-              style: TextStyle(
-                fontSize: 13,
-                color: sub.done ? _kTodoTextFaint : _kTodoTextDim,
-                decoration: sub.done ? TextDecoration.lineThrough : null,
+            child: InkWell(
+              onTap: () => onEditSubtask(sub),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text(
+                  sub.title,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: sub.done ? _kTodoTextFaint : _kTodoTextDim,
+                    decoration: sub.done ? TextDecoration.lineThrough : null,
+                  ),
+                ),
               ),
             ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.edit_rounded,
+                size: 15, color: Colors.white38),
+            onPressed: () => onEditSubtask(sub),
+            padding: const EdgeInsets.all(6),
+            constraints: const BoxConstraints(),
           ),
           IconButton(
             icon: const Icon(Icons.close_rounded,

@@ -322,6 +322,38 @@ void main() {
       expect(find.text('Other task'), findsNothing);
     });
 
+    testWidgets('tapping the edit icon renames a sub-task', (tester) async {
+      await tester.pumpWidget(wrap());
+      await tester.pump();
+      await addTask(tester, 'Parent');
+
+      // Expand and add a sub-task.
+      await tester.tap(find.text('Parent'));
+      await tester.pumpAndSettle();
+      final subField = find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.hintText == 'Add sub-task...',
+      );
+      await tester.enterText(subField, 'Old name');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(find.text('Old name'), findsOneWidget);
+
+      // Open the edit dialog via the pencil icon and rename it.
+      await tester.tap(find.byIcon(Icons.edit_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('Edit sub-task'), findsOneWidget);
+      await tester.enterText(
+        find.byWidgetPredicate(
+            (w) => w is TextField && w.decoration?.hintText == 'Sub-task'),
+        'New name',
+      );
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('New name'), findsOneWidget);
+      expect(find.text('Old name'), findsNothing);
+    });
+
     testWidgets('empty search query shows all tasks', (tester) async {
       await tester.pumpWidget(wrap());
       await tester.pump();
@@ -595,14 +627,14 @@ void main() {
     // Their phone hasn't armed it yet.
     delivery.add({'doc1': false});
     await tester.pumpAndSettle();
-    expect(find.text('Sent — waiting for their phone'), findsOneWidget);
+    expect(find.text('Not delivered'), findsOneWidget);
     expect(find.text('Delivered'), findsNothing);
 
     // Their phone received and scheduled it.
     delivery.add({'doc1': true});
     await tester.pumpAndSettle();
     expect(find.text('Delivered'), findsOneWidget);
-    expect(find.text('Sent — waiting for their phone'), findsNothing);
+    expect(find.text('Not delivered'), findsNothing);
   });
 
   testWidgets('no delivery badge for a task with no outgoing reminder',
@@ -614,7 +646,7 @@ void main() {
     });
     await tester.pumpWidget(wrap());
     await tester.pumpAndSettle();
-    expect(find.text('Sent — waiting for their phone'), findsNothing);
+    expect(find.text('Not delivered'), findsNothing);
     expect(find.text('Delivered'), findsNothing);
   });
 }

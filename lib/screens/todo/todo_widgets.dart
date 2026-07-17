@@ -192,7 +192,13 @@ class _TaskInputBar extends StatelessWidget {
 /// route (disposing in the caller crashes the still-animating dialog exit).
 class _EditTaskDialog extends StatefulWidget {
   final String initial;
-  const _EditTaskDialog({required this.initial});
+  final String title;
+  final String hint;
+  const _EditTaskDialog({
+    required this.initial,
+    this.title = 'Edit Task',
+    this.hint = 'Task title',
+  });
 
   @override
   State<_EditTaskDialog> createState() => _EditTaskDialogState();
@@ -218,7 +224,7 @@ class _EditTaskDialogState extends State<_EditTaskDialog> {
     return AlertDialog(
       backgroundColor: _kTodoCard,
       titleTextStyle: _kTodoDialogTitle,
-      title: const Text('Edit Task'),
+      title: Text(widget.title),
       content: TextField(
         controller: _ctrl,
         autofocus: true,
@@ -226,7 +232,7 @@ class _EditTaskDialogState extends State<_EditTaskDialog> {
         style: const TextStyle(color: _kTodoText),
         cursorColor: _kTodoAccentLight,
         decoration: InputDecoration(
-          hintText: 'Task title',
+          hintText: widget.hint,
           hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.35)),
           enabledBorder: const UnderlineInputBorder(
               borderSide: BorderSide(color: _kTodoDivider)),

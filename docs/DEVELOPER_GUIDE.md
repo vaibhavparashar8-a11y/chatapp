@@ -930,7 +930,7 @@ Cross-device reminders AND two-way shared-task sync — both built on the
 |---|---|
 | `createReminder({forUser, title, scheduledAt, addToList})` | A writes the doc; returns the doc ID so A can link its local task copy |
 | `pendingStream(forUser)` | Foreground path — B's app (if open) schedules the notification within seconds |
-| `fetchPending(forUser, roomId)` + `markScheduled(docId, roomId)` | Background path — WorkManager worker picks up unprocessed docs every 15 min |
+| `fetchPending(forUser, roomId)` + `markScheduled(docId, roomId)` | Background path — WorkManager worker picks up unprocessed docs every 15 min. The FCM push handler (`_processReminderPayload`) also calls `markScheduled` right after scheduling, so delivery confirmation flips to "Delivered" immediately instead of waiting for the next worker run |
 | `insertTodoToPrefs(prefs, r)` | Inserts the task into B's local list (id `reminder_{docId}`, duplicate-guarded, `sharedId` linked) |
 
 The third delivery path is FCM push (see FcmService below) — so B gets the
@@ -1061,10 +1061,10 @@ setting.
 | Add task | Bottom input bar → "Set a reminder?" prompt → unified Set Reminder dialog |
 | Rename task | **Long-press** the tile → Edit Task dialog (shared tasks push the new title to the other phone) |
 | Complete / delete | Checkbox / swipe-left — both write through to Firestore for shared tasks |
-| Sub-tasks | Expand a tile → add/check/delete; progress bar on the tile |
+| Sub-tasks | Expand a tile → add/check/delete/**rename** (tap the text or pencil); progress bar on the tile. Shared-task sub-task edits sync both ways |
 | Search | AppBar search icon — filters by title and subtask text |
 | Reminders | One alarm button per task → date/time picker → unified dialog (incl. a Repeat picker) |
-| Delivery confirmation | A reminder you send the other person shows "Sent — waiting for their phone" → "Delivered" once their device receives and arms it (`locallyScheduled` flips true). "Actually fired" isn't tracked — Android has no reliable background "notification shown" callback |
+| Delivery confirmation | A reminder you send the other person shows **"Not delivered"** → **"Delivered"** once their device receives and arms it (`locallyScheduled` flips true). Both the FCM push handler and the 15-min worker flip it, so "Delivered" appears as soon as their phone processes the push — not only on the next worker run. "Actually fired" isn't tracked — Android has no reliable background "notification shown" callback |
 | Recurring reminders | Repeat = Every day / Every week / Weekdays / Weekends (`Recurrence`); tile shows the repeat label. No "every N days" (needs fragile reschedule-on-fire). Local-only; "done" keeps repeating until Repeat = None or the task is deleted |
 | Open chat | Type `flutter` in the add-task field (hidden trigger) |
 | Role reset | Debug builds: double-tap the AppBar title |
@@ -1513,7 +1513,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 203 tests, ~20 seconds
+flutter test                        # 204 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
