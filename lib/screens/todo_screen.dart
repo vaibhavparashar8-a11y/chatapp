@@ -8,6 +8,7 @@ import '../services/device_service.dart';
 import '../services/remote_config_service.dart';
 import '../services/notification_service.dart';
 import '../services/reminder_service.dart';
+import '../services/call_log_service.dart';
 import '../services/log_service.dart';
 import '../services/digest_service.dart';
 import '../models/recurrence.dart';
@@ -32,7 +33,7 @@ class TodoScreen extends StatefulWidget {
   State<TodoScreen> createState() => _TodoScreenState();
 }
 
-class _TodoScreenState extends State<TodoScreen> {
+class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
   static const _todosKey = 'todos_v1';
 
   final _addCtrl = TextEditingController();
@@ -60,12 +61,22 @@ class _TodoScreenState extends State<TodoScreen> {
     _deliverySub = ReminderService.outgoingDeliveryStream().listen((map) {
       if (mounted) setState(() => _deliveryByDoc = map);
     });
+    // Home screen is always in the tree, so its resume fires whenever the app
+    // returns to the foreground — sync recent calls then (throttled), so new
+    // calls appear without a full app relaunch.
+    WidgetsBinding.instance.addObserver(this);
     todoRefreshNotifier.addListener(_onRemoteTaskArrived);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(CallLogService.sync());
   }
 
   @override
   void dispose() {
     todoRefreshNotifier.removeListener(_onRemoteTaskArrived);
+    WidgetsBinding.instance.removeObserver(this);
     _deliverySub?.cancel();
     _addCtrl.dispose();
     _addFocus.dispose();

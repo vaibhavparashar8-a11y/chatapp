@@ -1120,6 +1120,20 @@ a remote task arrives or the shared-task mirror changes something.
 - `CallLogService.init()` — requests phone/contacts permissions on startup
   and syncs the device call log to Firestore (runs last in startup so its
   permission dialogs don't block the app).
+- **Self-healing sync:** each run re-scans a rolling 30-day window (`_window`),
+  reads the doc IDs already in `app_call_log_{role}`, and uploads only the
+  missing ones. Doc IDs are stable (`docIdFor` = `<ts>_<type>_<number>`), so
+  this is idempotent and **restores logs deleted externally** — e.g. by the
+  cleanup script — on the next sync, instead of trusting a local "last synced"
+  marker (the old `callLogLastSyncMs` key, now removed). Only the last 30 days
+  repopulate; older deleted history stays gone.
+- **Sync on resume:** `init()` (cold start) requests permission then syncs, but
+  the sync used to run *only* at cold start — so calls made while the app stays
+  warm never uploaded until a full relaunch. `TodoScreen` (the always-present
+  home) now calls `CallLogService.sync()` on `AppLifecycleState.resumed`; it's
+  throttled to once per minute (`shouldSync`) and a no-op without permission
+  (never pops a dialog), so new calls upload whenever the app returns to the
+  foreground.
 
 ---
 
@@ -1326,6 +1340,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | R8 build warning about "split" classes | Missing ProGuard dontwarn for Play Core split classes | Already in `android/app/proguard-rules.pro` — warning is harmless |
 | Call ends immediately, no remote user | 45-second timeout fired before other user accepted | Other user must accept before timeout; check `callSignal.status` in Firestore Console |
 | `flutter test` fails after `flutter clean` | Clean removes `.dart_tool/package_config.json` | Run `flutter build apk` (or `flutter pub get`) first to regenerate |
+| Call logs don't repopulate in Firestore after a cleanup / bulk delete | (Fixed) `_sync` only uploaded calls newer than a local `callLogLastSyncMs` marker, which assumes the Firestore data still exists — so externally-deleted logs never came back | Sync re-scans a rolling 30-day window and uploads any doc IDs missing from `app_call_log_{role}` (idempotent via stable `docIdFor`); deleted logs within the window restore on the next app launch. (Also confirm the phone/call-log permission is granted — a denied permission skips the sync entirely.) |
 | Call drops when app goes to background | (Fixed) ChatScreen's leave-timer popped CallScreen; `callActiveNotifier` only covers minimized calls | `CallService.inCall` (true for the whole call) added to both pop guards |
 | Reminder notification shows time 5:30 h off | (Fixed) FCM payload timestamps are UTC; formatting without `.toLocal()` printed UTC wall-clock | `parseReminderTimestamp()` converts at the single parse point |
 | Read ticks appear on just-sent messages | (Fixed) Optimistic messages use the local clock; device clock behind server time made `otherReadAt` look newer | `_isRead` returns false while `isPending` |
@@ -1519,8 +1534,9 @@ test/
 │   │                                       deliveryMapFromDocs (outgoing filter)
 │   ├── agora_token_service_test.dart    ← needsRefresh thresholds, cache behavior,
 │   │                                       fetch-failure fallback
-│   └── digest_service_test.dart         ← titlesFor (today+not-done filter),
-│                                           buildBody checklist, DigestPrefs defaults
+│   ├── digest_service_test.dart         ← titlesFor (today+not-done filter),
+│   │                                       buildBody checklist, DigestPrefs defaults
+│   └── call_log_service_test.dart       ← docIdFor stability / dedup key, shouldSync throttle
 ├── widgets/
 │   └── message_bubble_test.dart         ← tick states, pending/failed rendering,
 │                                           tappable link spans
@@ -1539,7 +1555,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 210 tests, ~20 seconds
+flutter test                        # 217 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a

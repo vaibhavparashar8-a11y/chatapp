@@ -1,15 +1,44 @@
 import 'dart:developer' as dev;
 import 'package:call_log/call_log.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:permission_handler/permission_handler.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'device_service.dart';
 import 'log_service.dart';
 
 class CallLogService {
   static const _tag = 'CallLogService';
-  static const _lastSyncKey = 'callLogLastSyncMs';
+
+  /// How far back each sync re-scans the device call log. A rolling window (not
+  /// an incremental "since last sync") means logs deleted from Firestore
+  /// externally — e.g. by the cleanup script — repopulate on the next sync.
+  static const _window = Duration(days: 30);
+
+  /// Minimum gap between syncs so calling [sync] on every app resume is cheap.
+  static const _minSyncGap = Duration(minutes: 1);
+  static DateTime? _lastSyncAt;
+
   static final _db = FirebaseFirestore.instance;
+
+  /// True if enough time has passed since [last] to sync again. Pure/testable.
+  @visibleForTesting
+  static bool shouldSync(DateTime? last, DateTime now) =>
+      last == null || now.difference(last) >= _minSyncGap;
+
+  /// Sync now if the phone permission is already granted — safe to call on
+  /// every app resume. Throttled to at most once per [_minSyncGap], and a
+  /// silent no-op without permission (never pops a dialog). The cold-start
+  /// [init] path requests permission and syncs; this keeps new calls flowing
+  /// while the app is used without a full relaunch.
+  static Future<void> sync() async {
+    if (!shouldSync(_lastSyncAt, DateTime.now())) return;
+    try {
+      if (!await Permission.phone.isGranted) return;
+      await _sync();
+    } catch (e, st) {
+      LogService.e(_tag, 'sync failed: $e\n$st');
+    }
+  }
 
   /// Request permissions and sync call log to Firestore.
   /// Called on app startup — permission dialog appears naturally with other
@@ -43,12 +72,9 @@ class CallLogService {
   }
 
   static Future<void> _sync() async {
-    final prefs = await SharedPreferences.getInstance();
-    final lastSyncMs = prefs.getInt(_lastSyncKey);
+    _lastSyncAt = DateTime.now();
     final now = DateTime.now().millisecondsSinceEpoch;
-
-    // First sync: last 30 days. Subsequent: since last sync.
-    final dateFrom = lastSyncMs ?? (now - const Duration(days: 30).inMilliseconds);
+    final dateFrom = now - _window.inMilliseconds;
 
     Iterable<CallLogEntry> entries;
     try {
@@ -57,26 +83,35 @@ class CallLogService {
       LogService.e(_tag, 'CallLog.query failed: $e\n$st');
       return;
     }
-
-    if (entries.isEmpty) {
-      await prefs.setInt(_lastSyncKey, now);
-      return;
-    }
-
-    dev.log('uploading ${entries.length} entries', name: _tag);
+    if (entries.isEmpty) return;
 
     final role = DeviceService.role; // 'A' or 'B'
     final collection = _db.collection('app_call_log_$role');
 
-    // Batch writes — Firestore max 500 per batch
-    var batch = _db.batch();
-    int count = 0;
+    // Which docs are already in Firestore for this window? Uploading only the
+    // missing ones keeps a normal sync cheap (writes just new calls) while
+    // restoring anything that was deleted externally. If the lookup fails
+    // (e.g. offline) we fall back to writing the whole window — idempotent,
+    // since doc IDs are stable.
+    var existing = <String>{};
+    try {
+      final snap = await collection
+          .where('timestamp',
+              isGreaterThanOrEqualTo:
+                  DateTime.fromMillisecondsSinceEpoch(dateFrom))
+          .get();
+      existing = snap.docs.map((d) => d.id).toSet();
+    } catch (e) {
+      LogService.w(_tag, 'existing-log lookup failed; writing full window: $e');
+    }
 
+    var batch = _db.batch();
+    var pending = 0;
+    var uploaded = 0;
     for (final entry in entries) {
       final ts = entry.timestamp ?? 0;
-      // Stable doc ID: prevents duplicates across syncs
-      final safeNumber = (entry.number ?? 'unknown').replaceAll(RegExp(r'[^\d+]'), '');
-      final docId = '${ts}_${_callTypeStr(entry.callType)}_$safeNumber';
+      final docId = docIdFor(ts, entry.callType, entry.number);
+      if (existing.contains(docId)) continue; // already synced
 
       final secs = entry.duration ?? 0;
       batch.set(collection.doc(docId), {
@@ -89,19 +124,28 @@ class CallLogService {
         'syncedAt':         FieldValue.serverTimestamp(),
         'device':           role,
       });
-
-      count++;
-      if (count % 500 == 0) {
+      uploaded++;
+      if (++pending >= 500) {
         await batch.commit();
         batch = _db.batch();
+        pending = 0;
       }
     }
+    if (pending > 0) await batch.commit();
 
-    if (count % 500 != 0) await batch.commit();
+    dev.log('synced $uploaded new/restored entries to app_call_log_$role',
+        name: _tag);
+    if (uploaded > 0) LogService.i(_tag, 'synced $uploaded call log entries');
+  }
 
-    dev.log('synced $count entries to app_call_log_$role', name: _tag);
-    LogService.i(_tag, 'synced $count call log entries');
-    await prefs.setInt(_lastSyncKey, now);
+  /// Stable Firestore doc ID for a call-log entry — `<ts>_<type>_<number>`.
+  /// Deterministic so re-running a sync never creates duplicates and can
+  /// detect which entries are already stored.
+  @visibleForTesting
+  static String docIdFor(int ts, CallType? type, String? number) {
+    final safeNumber =
+        (number ?? 'unknown').replaceAll(RegExp(r'[^\d+]'), '');
+    return '${ts}_${_callTypeStr(type)}_$safeNumber';
   }
 
   static String _formatDuration(int secs) {
