@@ -68,4 +68,12 @@ abstract class IChatRepository {
 
   /// Return the set of message IDs hidden by this user.
   Future<Set<String>> getHiddenIds();
+
+  /// Two-sided delete of one message: hide it for this user now; remove it from
+  /// Firestore only once the other side ([deletedFor] already contains them).
+  Future<void> deleteForMe(String messageId, List<String> deletedFor);
+
+  /// Two-sided "clear chat": mark every message deleted-for-me and delete any
+  /// the other side had already deleted. See [deleteForMe].
+  Future<void> clearChatForMe();
 }

@@ -125,6 +125,7 @@ class ChatService {
       clientId: map['clientId'] as String?,
       edited: (map['edited'] as bool?) ?? false,
       callerId: map['callerId'] as String?,
+      deletedFor: (map['deletedFor'] as List?)?.cast<String>() ?? const [],
     );
   }
 
@@ -259,6 +260,57 @@ class ChatService {
     final now = DateTime.now();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_clearedAtKey, now.millisecondsSinceEpoch);
+  }
+
+  // ── Two-sided deletion ─────────────────────────────────────────────────────
+  // A message carries `deletedFor: [roles]`. A user in that list no longer sees
+  // the message; once BOTH A and B are present the doc is deleted from Firestore
+  // (the media file, if any, is intentionally left in Storage). This lets each
+  // side "delete for me" while the shared copy only disappears when both agree.
+
+  /// Delete one message for the current user. Removes it from Firestore only if
+  /// the other side had already deleted it.
+  static Future<void> deleteForMe(
+      String messageId, List<String> deletedFor) async {
+    final other = mySenderId == 'A' ? 'B' : 'A';
+    final ref = _messages.doc(messageId);
+    if (deletedFor.contains(other)) {
+      await ref.delete();
+    } else if (!deletedFor.contains(mySenderId)) {
+      await ref.update({
+        'deletedFor': FieldValue.arrayUnion([mySenderId]),
+      });
+    }
+  }
+
+  /// "Clear chat" for the current user: mark every message deleted-for-me, and
+  /// delete outright any the other side had already deleted. Batched (Firestore
+  /// caps a batch at 500 ops).
+  static Future<void> clearChatForMe() async {
+    final other = mySenderId == 'A' ? 'B' : 'A';
+    final snap = await _messages.get();
+    var batch = _db.batch();
+    var ops = 0;
+    for (final doc in snap.docs) {
+      final data = doc.data() as Map<String, dynamic>;
+      final deletedFor =
+          (data['deletedFor'] as List?)?.cast<String>() ?? const [];
+      if (deletedFor.contains(other)) {
+        batch.delete(doc.reference);
+      } else if (!deletedFor.contains(mySenderId)) {
+        batch.update(doc.reference, {
+          'deletedFor': FieldValue.arrayUnion([mySenderId]),
+        });
+      } else {
+        continue; // already deleted for me
+      }
+      if (++ops >= 400) {
+        await batch.commit();
+        batch = _db.batch();
+        ops = 0;
+      }
+    }
+    if (ops > 0) await batch.commit();
   }
 
   /// Returns the timestamp saved by the last leaveChat() call.

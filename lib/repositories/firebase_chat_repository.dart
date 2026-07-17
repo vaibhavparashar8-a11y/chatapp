@@ -100,4 +100,11 @@ class FirebaseChatRepository implements IChatRepository {
 
   @override
   Future<Set<String>> getHiddenIds() => ChatService.getHiddenIds();
+
+  @override
+  Future<void> deleteForMe(String messageId, List<String> deletedFor) =>
+      ChatService.deleteForMe(messageId, deletedFor);
+
+  @override
+  Future<void> clearChatForMe() => ChatService.clearChatForMe();
 }

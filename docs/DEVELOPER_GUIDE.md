@@ -245,6 +245,10 @@ rooms/{chatRoomId}/messages/
     ├── replyToId: string?               ← message ID being replied to
     ├── replyToText: string?             ← preview text of the quoted message
     ├── replyToSender: string?           ← "A" | "B" for quote styling
+    ├── deletedFor: ["A"|"B"]?           ← two-sided delete: roles that deleted this
+    │                                       message from their own view. A user in the
+    │                                       list doesn't see it; once BOTH are present
+    │                                       the doc is deleted from Firestore.
     └── iv: string?                      ← LEGACY ONLY — presence means the message
                                             was sent by the old encrypted app.
                                             New app never writes this field.
@@ -396,7 +400,15 @@ All Firestore and Storage operations — only static methods, no instance state.
 | `signalCall(type, {token})` | Writes `callSignal` map to room doc |
 | `updateCallStatus(status)` | Updates `callSignal.status` |
 | `editMessage(id, newText)` | Updates `text` and sets `edited: true` |
-| `deleteMessage(id)` | Deletes Firestore doc + Storage file if media |
+| `deleteMessage(id)` | Deletes Firestore doc + Storage file if media (immediate "delete for everyone") |
+| `deleteForMe(id, deletedFor)` | Two-sided delete: adds this role to the message's `deletedFor`; deletes the doc once the other side is already there (media file left in Storage) |
+| `clearChatForMe()` | Batched two-sided "clear chat" — `deletedFor += me` on every message, deletes any the other side already deleted |
+
+**Two-sided deletion:** the chat-clear button and the per-message "Delete" (for a
+message that isn't your own recent one) use `deletedFor`. A message with your role
+in `deletedFor` is hidden by `ChatController.messages`; the Firestore doc only goes
+away once **both** A and B have deleted it. Your own message within the 1-hour
+window still uses `deleteMessage` (immediate delete-for-everyone).
 
 **Send a text message with a reply:**
 
@@ -1527,7 +1539,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 205 tests, ~20 seconds
+flutter test                        # 210 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
@@ -1584,6 +1596,8 @@ class FakeChatRepository implements IChatRepository {
   @override Future<void> hideMessage(String _) async {}
   @override Future<void> editMessage(String _, String __) async {}
   @override Future<void> deleteMessage(String _) async {}
+  @override Future<void> deleteForMe(String _, List<String> __) async {}
+  @override Future<void> clearChatForMe() async {}
   @override Future<List<Message>> fetchOlderMessages(DateTime _, {int limit = 30}) async => [];
 }
 ```

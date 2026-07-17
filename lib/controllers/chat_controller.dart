@@ -94,6 +94,7 @@ class ChatController extends ChangeNotifier {
   /// Combined, filtered message list: paginated older + stream recent + pending.
   List<Message> get messages {
     bool visible(Message m) =>
+        !m.deletedFor.contains(mySenderId) &&
         !_hiddenIds.contains(m.id) &&
         (_clearedAt == null || m.timestamp.isAfter(_clearedAt!));
     return [
@@ -473,6 +474,16 @@ class ChatController extends ChangeNotifier {
     _hasMoreMessages = true;
     notifyListeners();
   }
+
+  /// Two-sided delete of a single message: hidden for me now, removed from
+  /// Firestore once the other side has also deleted it.
+  Future<void> deleteForMe(Message msg) =>
+      _repo.deleteForMe(msg.id, msg.deletedFor);
+
+  /// Two-sided "clear chat": every message becomes deleted-for-me (and any the
+  /// other side already deleted is removed from Firestore). The stream re-emits
+  /// with `deletedFor` set, so the view empties without a local `clearedAt`.
+  Future<void> clearChat() => _repo.clearChatForMe();
 
   void setReplyingTo(Message? msg) {
     _replyingTo = msg;
