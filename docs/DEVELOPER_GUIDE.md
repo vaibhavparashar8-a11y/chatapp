@@ -816,6 +816,17 @@ instead so motion stays smooth. `onLocalVideoStateChanged` /
 `onRemoteVideoStateChanged` handlers log failed/frozen states to `app_logs`
 for diagnosis (observability only, no behavior).
 
+**Screen wakelock during calls** — two different mechanisms:
+- **Audio** calls acquire the native `PROXIMITY_SCREEN_OFF_WAKE_LOCK`
+  (`proximity` channel, from `CallScreen`), so the screen turns off when the
+  phone is held to the ear.
+- **Video** calls instead keep the screen on via `FLAG_KEEP_SCREEN_ON`
+  (`call` channel `keepScreenOn`/`allowScreenOff`, driven by
+  `CallService.joinCall`/`leaveCall` gated on `videoEnabled`). Tied to the call
+  lifecycle, not the widget, so the display stays awake for the whole call —
+  full-screen **and** minimized — and is released on every teardown path.
+  Without this the OS screen-timeout dimmed/locked the display mid-video-call.
+
 **Token priority chain** (in `CallScreen._startCall()`):
 
 ```
@@ -1341,6 +1352,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Call ends immediately, no remote user | 45-second timeout fired before other user accepted | Other user must accept before timeout; check `callSignal.status` in Firestore Console |
 | `flutter test` fails after `flutter clean` | Clean removes `.dart_tool/package_config.json` | Run `flutter build apk` (or `flutter pub get`) first to regenerate |
 | Call logs don't repopulate in Firestore after a cleanup / bulk delete | (Fixed) `_sync` only uploaded calls newer than a local `callLogLastSyncMs` marker, which assumes the Firestore data still exists — so externally-deleted logs never came back | Sync re-scans a rolling 30-day window and uploads any doc IDs missing from `app_call_log_{role}` (idempotent via stable `docIdFor`); deleted logs within the window restore on the next app launch. (Also confirm the phone/call-log permission is granted — a denied permission skips the sync entirely.) |
+| Screen dims / locks during a video call | (Fixed) Only audio calls held a wakelock (proximity); video calls held none, so the OS screen-timeout fired | `CallService.joinCall` sets `FLAG_KEEP_SCREEN_ON` (native `call` channel `keepScreenOn`) for video calls; `leaveCall` clears it. Spans full-screen + minimized |
 | Call drops when app goes to background | (Fixed) ChatScreen's leave-timer popped CallScreen; `callActiveNotifier` only covers minimized calls | `CallService.inCall` (true for the whole call) added to both pop guards |
 | Reminder notification shows time 5:30 h off | (Fixed) FCM payload timestamps are UTC; formatting without `.toLocal()` printed UTC wall-clock | `parseReminderTimestamp()` converts at the single parse point |
 | Read ticks appear on just-sent messages | (Fixed) Optimistic messages use the local clock; device clock behind server time made `otherReadAt` look newer | `_isRead` returns false while `isPending` |

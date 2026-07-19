@@ -1,12 +1,17 @@
 // lib/features/call/call_service.dart
 
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../constants.dart';
 import '../../services/log_service.dart';
 
 class CallService {
+  // Native channel shared with CallScreen — also drives the screen wakelock so
+  // a video call keeps the display awake for the whole call (full-screen AND
+  // minimized), released centrally in [leaveCall].
+  static const _callChannel = MethodChannel('com.example.chatapp/call');
+
   static RtcEngine? _engine;
   static bool _isInitialized = false;
   static RtcEngineEventHandler? _handler;
@@ -141,6 +146,12 @@ class CallService {
     required void Function() onError,
   }) async {
     inCall = true; // set before any await so a pending leave-timer can't pop us
+    // Video calls: keep the screen awake for the whole call. Audio calls rely on
+    // the proximity wakelock (see CallScreen) instead, so the screen can still
+    // switch off when held to the ear.
+    if (videoEnabled) {
+      _callChannel.invokeMethod('keepScreenOn').catchError((_) {});
+    }
     resetOverlayGeometry(); // new call → overlay starts at default size/position
     final myUid = mySenderId == 'A' ? 1 : 2;
     LogService.i('Call', 'joinCall — role=$mySenderId uid=$myUid token=${token.isEmpty ? "none" : "set(${token.length})"}');
@@ -191,6 +202,8 @@ class CallService {
   static Future<void> leaveCall() async {
     LogService.i('Call', 'leaveCall — releasing engine');
     inCall = false;
+    // Always clear the screen-on flag (no-op if it was an audio call).
+    _callChannel.invokeMethod('allowScreenOff').catchError((_) {});
     // Centralized here so EVERY teardown path (error, timeout, remote hangup)
     // hides the overlay/mini-bar. The scattered per-callback resets in
     // CallScreen missed atypical paths, leaving the overlay to appear

@@ -46,6 +46,16 @@ public class MainActivity extends FlutterActivity {
                 } else if (call.method.equals("stopForeground")) {
                     stopCallForegroundService();
                     result.success(null);
+                } else if (call.method.equals("keepScreenOn")) {
+                    // Hold the screen on for the duration of a video call so it
+                    // doesn't dim/lock while the user just watches.
+                    runOnUiThread(() -> getWindow().addFlags(
+                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));
+                    result.success(null);
+                } else if (call.method.equals("allowScreenOff")) {
+                    runOnUiThread(() -> getWindow().clearFlags(
+                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));
+                    result.success(null);
                 } else {
                     result.notImplemented();
                 }
