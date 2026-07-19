@@ -91,8 +91,14 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
 
   Future<void> _loadTodos() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_todosKey);
-    if (raw == null) return;
+    var raw = prefs.getString(_todosKey);
+    if (raw == null) {
+      // Fresh install / cleared data: restore this device's Firestore backup
+      // (role is reclaimed via ANDROID_ID) so local reminders survive reinstall.
+      raw = await ReminderService.fetchTodoBackup();
+      if (raw == null) return;
+      await prefs.setString(_todosKey, raw); // persist so we don't refetch
+    }
     try {
       final list = jsonDecode(raw) as List;
       if (!mounted) return;
@@ -129,24 +135,25 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
 
   Future<void> _saveTodos() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _todosKey,
-      jsonEncode(_todos
-          .map((t) => {
-                'id': t.id,
-                'title': t.title,
-                'done': t.done,
-                if (t.sharedId != null) 'sharedId': t.sharedId,
-                if (t.reminderDocId != null) 'reminderDocId': t.reminderDocId,
-                if (t.dueDate != null) 'dueDate': t.dueDate!.toIso8601String(),
-                if (t.recurrence != Recurrence.none)
-                  'recurrence': t.recurrence.storage,
-                'subtasks': t.subtasks
-                    .map((s) => {'id': s.id, 'title': s.title, 'done': s.done})
-                    .toList(),
-              })
-          .toList()),
-    );
+    final json = jsonEncode(_todos
+        .map((t) => {
+              'id': t.id,
+              'title': t.title,
+              'done': t.done,
+              if (t.sharedId != null) 'sharedId': t.sharedId,
+              if (t.reminderDocId != null) 'reminderDocId': t.reminderDocId,
+              if (t.dueDate != null) 'dueDate': t.dueDate!.toIso8601String(),
+              if (t.recurrence != Recurrence.none)
+                'recurrence': t.recurrence.storage,
+              'subtasks': t.subtasks
+                  .map((s) => {'id': s.id, 'title': s.title, 'done': s.done})
+                  .toList(),
+            })
+        .toList());
+    await prefs.setString(_todosKey, json);
+    // Mirror to Firestore (role-keyed) so these reminders survive a reinstall.
+    unawaited(ReminderService.backupTodos(json)
+        .catchError((e) => LogService.w('todo', 'todo backup failed: $e')));
   }
 
   // ── Navigation ────────────────────────────────────────────────────────────

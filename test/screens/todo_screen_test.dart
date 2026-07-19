@@ -154,6 +154,24 @@ void main() {
     expect(stored.first['done'], isTrue);
   });
 
+  testWidgets('restores todos from the Firestore backup on a fresh install',
+      (tester) async {
+    // Fresh install: no local todos, but a role-keyed backup exists in Firestore.
+    ReminderService.debugTodoBackup = jsonEncode([
+      {'id': 't1', 'title': 'Restored reminder', 'done': false, 'subtasks': []},
+    ]);
+    addTearDown(() => ReminderService.debugTodoBackup = null);
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(wrap());
+    await tester.pumpAndSettle();
+
+    // The backed-up task appears and is persisted locally so it won't refetch.
+    expect(find.text('Restored reminder'), findsOneWidget);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('todos_v1'), isNotNull);
+  });
+
   // ── Deleting tasks ────────────────────────────────────────────────────────────
 
   testWidgets('swiping left dismisses the task', (tester) async {

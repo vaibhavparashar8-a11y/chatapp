@@ -230,6 +230,15 @@ rooms/{chatRoomId}/reminders/
   EITHER side (the mirror removes the other copy); stored-only reminders are owned by
   their creator.
 
+rooms/{chatRoomId}/todoBackups/
+└── {role}                              ← "A" | "B" — this device's FULL local todo
+    ├── data: string                       list as one JSON blob (SharedPreferences
+    │                                       `todos_v1`), mirrored on every save
+    └── updatedAt: Timestamp
+    Restore: SharedPreferences is wiped on uninstall, so on a fresh install (role
+    reclaimed via ANDROID_ID) `_loadTodos` fetches this doc when local is empty and
+    repopulates the list — local reminders survive reinstall. See §5 todo_screen.
+
 rooms/{chatRoomId}/messages/
 └── {auto-id}                            ← one document per message
     ├── sender: "A" | "B"               ← who sent it
@@ -1352,6 +1361,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Call ends immediately, no remote user | 45-second timeout fired before other user accepted | Other user must accept before timeout; check `callSignal.status` in Firestore Console |
 | `flutter test` fails after `flutter clean` | Clean removes `.dart_tool/package_config.json` | Run `flutter build apk` (or `flutter pub get`) first to regenerate |
 | Call logs don't repopulate in Firestore after a cleanup / bulk delete | (Fixed) `_sync` only uploaded calls newer than a local `callLogLastSyncMs` marker, which assumes the Firestore data still exists — so externally-deleted logs never came back | Sync re-scans a rolling 30-day window and uploads any doc IDs missing from `app_call_log_{role}` (idempotent via stable `docIdFor`); deleted logs within the window restore on the next app launch. (Also confirm the phone/call-log permission is granted — a denied permission skips the sync entirely.) |
+| Local reminders/tasks vanish after uninstall + reinstall | (Fixed) The todo list lived only in SharedPreferences, which the OS wipes on uninstall | Each save mirrors the full list to `rooms/{room}/todoBackups/{role}` (`ReminderService.backupTodos`); on a fresh install `_loadTodos` restores from it when local is empty (`fetchTodoBackup`). Role is reclaimed via ANDROID_ID so the right backup is picked |
 | Screen dims / locks during a video call | (Fixed) Only audio calls held a wakelock (proximity); video calls held none, so the OS screen-timeout fired | `CallService.joinCall` sets `FLAG_KEEP_SCREEN_ON` (native `call` channel `keepScreenOn`) for video calls; `leaveCall` clears it. Spans full-screen + minimized |
 | Call drops when app goes to background | (Fixed) ChatScreen's leave-timer popped CallScreen; `callActiveNotifier` only covers minimized calls | `CallService.inCall` (true for the whole call) added to both pop guards |
 | Reminder notification shows time 5:30 h off | (Fixed) FCM payload timestamps are UTC; formatting without `.toLocal()` printed UTC wall-clock | `parseReminderTimestamp()` converts at the single parse point |
@@ -1567,7 +1577,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 217 tests, ~20 seconds
+flutter test                        # 218 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
