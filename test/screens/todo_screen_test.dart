@@ -7,6 +7,7 @@ import 'package:chatapp/screens/todo_screen.dart';
 import 'package:chatapp/services/notification_service.dart';
 import 'package:chatapp/services/reminder_service.dart';
 import 'package:chatapp/services/remote_config_service.dart';
+import 'package:chatapp/services/device_service.dart';
 
 void main() {
   setUp(() {
@@ -15,12 +16,14 @@ void main() {
     NotificationService.testMode = true;
     RemoteConfigService.testMode = true;
     ReminderService.testMode = true;
+    DeviceService.testMode = true;
   });
 
   tearDown(() {
     NotificationService.testMode = false;
     RemoteConfigService.testMode = false;
     ReminderService.testMode = false;
+    DeviceService.testMode = false;
   });
 
   Widget wrap() => const MaterialApp(home: TodoScreen());
@@ -170,6 +173,13 @@ void main() {
     expect(find.text('Restored reminder'), findsOneWidget);
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getString('todos_v1'), isNotNull);
+  });
+
+  testWidgets('records todoLastOpened when the todo app opens', (tester) async {
+    DeviceService.debugTodoOpenedWrites = 0;
+    await tester.pumpWidget(wrap());
+    await tester.pump();
+    expect(DeviceService.debugTodoOpenedWrites, greaterThan(0));
   });
 
   // ── Deleting tasks ────────────────────────────────────────────────────────────

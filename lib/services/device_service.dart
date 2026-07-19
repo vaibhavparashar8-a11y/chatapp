@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -112,15 +113,34 @@ class DeviceService {
   }
 
   static Future<void> _writeHeartbeat(String r) async {
+    await _writeOpened('appLastOpened', r);
+  }
+
+  /// Counts calls to [writeTodoOpened] (incl. in testMode) so widget tests can
+  /// assert the todo app records its open time. Unused in production.
+  @visibleForTesting
+  static int debugTodoOpenedWrites = 0;
+
+  /// Writes the current timestamp so the other device can tell when this phone
+  /// last opened the todo app. Call from TodoScreen open / resume. Mirrors
+  /// [writeHeartbeat] but under a separate `todoLastOpened` field.
+  static Future<void> writeTodoOpened() async {
+    debugTodoOpenedWrites++;
+    if (testMode) return;
+    await _writeOpened('todoLastOpened', role);
+  }
+
+  /// Merge `<field>.<role> = serverTimestamp()` onto the room doc.
+  static Future<void> _writeOpened(String field, String r) async {
     try {
       await FirebaseFirestore.instance
           .collection('rooms')
           .doc(chatRoomId)
           .set({
-        'appLastOpened': {r: FieldValue.serverTimestamp()},
+        field: {r: FieldValue.serverTimestamp()},
       }, SetOptions(merge: true));
     } catch (e) {
-      LogService.e('DeviceService', 'writeHeartbeat failed: $e');
+      LogService.e('DeviceService', '$field write failed: $e');
     }
   }
 

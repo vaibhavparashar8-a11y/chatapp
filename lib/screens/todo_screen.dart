@@ -65,12 +65,17 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
     // returns to the foreground — sync recent calls then (throttled), so new
     // calls appear without a full app relaunch.
     WidgetsBinding.instance.addObserver(this);
+    // Record that this device opened the todo app (mirrors chat's appLastOpened).
+    unawaited(DeviceService.writeTodoOpened());
     todoRefreshNotifier.addListener(_onRemoteTaskArrived);
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) unawaited(CallLogService.sync());
+    if (state == AppLifecycleState.resumed) {
+      unawaited(CallLogService.sync());
+      unawaited(DeviceService.writeTodoOpened());
+    }
   }
 
   @override
