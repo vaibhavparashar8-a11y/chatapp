@@ -57,6 +57,42 @@ class ReminderService {
   static CollectionReference _col(String roomId) =>
       _db.collection('rooms').doc(roomId).collection('reminders');
 
+  // ── Local todo backup (survives reinstall) ─────────────────────────────────
+  // The local todo list lives in SharedPreferences, which is wiped on
+  // uninstall. Mirror it to a role-keyed Firestore doc so a reinstall (which
+  // reclaims the same role via ANDROID_ID) can restore it. This is the whole
+  // list as one JSON blob — private to this device's role.
+
+  static DocumentReference _todoBackupDoc() => _db
+      .collection('rooms')
+      .doc(chatRoomId)
+      .collection('todoBackups')
+      .doc(mySenderId);
+
+  /// Test seam: when set, [fetchTodoBackup] returns this instead of reading
+  /// Firestore (so restore-on-fresh-install is widget-testable).
+  @visibleForTesting
+  static String? debugTodoBackup;
+
+  /// Mirror this device's full todo list (JSON) to Firestore, keyed by role.
+  static Future<void> backupTodos(String json) async {
+    if (testMode) return;
+    await _todoBackupDoc().set({
+      'data': json,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// This device's todo backup JSON (role-keyed), or null if none exists.
+  static Future<String?> fetchTodoBackup() async {
+    if (debugTodoBackup != null) return debugTodoBackup;
+    if (testMode) return null;
+    final snap = await _todoBackupDoc().get();
+    if (!snap.exists) return null;
+    final data = snap.data() as Map<String, dynamic>?;
+    return data?['data'] as String?;
+  }
+
   /// A sets a reminder for B. [forUser] is the recipient's role ('A' or 'B').
   /// Returns the new doc's ID so the caller can link its local task copy to
   /// the shared doc (enables edit/delete sync for addToList tasks).
