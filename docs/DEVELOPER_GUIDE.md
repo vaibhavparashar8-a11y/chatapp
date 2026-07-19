@@ -192,6 +192,9 @@ rooms/
     ├── appLastOpened/
     │   ├── A: Timestamp                 ← heartbeat from ChatScreen.initState();
     │   └── B: Timestamp                    shows "other device last opened" info
+    ├── todoLastOpened/
+    │   ├── A: Timestamp                 ← DeviceService.writeTodoOpened(), written
+    │   └── B: Timestamp                    on TodoScreen open + app resume
     └── callSignal/
         ├── from: "A" | "B"
         ├── type: "audio" | "video"
@@ -1577,7 +1580,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 218 tests, ~20 seconds
+flutter test                        # 219 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
