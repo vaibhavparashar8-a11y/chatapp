@@ -16,8 +16,13 @@ dependencies:
   cloud_firestore: ^4.14.0
   firebase_storage: ^11.6.0
 
-  # Agora calls
+  # Calls — Agora (hosted, per-minute) and peer-to-peer WebRTC (free).
+  # Which one runs is chosen at runtime by the `call_backend` Remote Config key.
   agora_rtc_engine: ^6.3.0
+  # Pinned below 0.11.7: newer versions need `web ^1.0.0`, which conflicts with
+  # the currently pinned firebase_core 2.x / firebase_auth 4.x (migration is
+  # deferred — see issue #53). Revisit when Firebase is upgraded.
+  flutter_webrtc: 0.11.6+hotfix.1
 
   # Media picking
   image_picker: ^1.0.7

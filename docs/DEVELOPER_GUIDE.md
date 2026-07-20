@@ -93,6 +93,10 @@ Set these in Firebase Console → Remote Config → Add parameter:
 | `agora_channel` | `my-call-channel-001` | Both users must share the same channel |
 | `chat_room_id` | `my-chat-room-001` | Firestore document path segment |
 | `agora_token` | `""` | **Legacy fallback** — tokens are now fetched from the `getAgoraToken` Cloud Function on app open (see §5 AgoraTokenService) |
+| `call_backend` | `agora` | Which media backend calls use: `agora` (hosted, per-minute) or `webrtc` (peer-to-peer, free). Any other value falls back to Agora. Flip it here and relaunch — no rebuild |
+| `webrtc_turn_url` | `""` | TURN relay for the WebRTC backend (e.g. `turn:host:3478`). Empty = STUN only |
+| `webrtc_turn_username` | `""` | TURN credential |
+| `webrtc_turn_credential` | `""` | TURN credential |
 | `todo_input_text_color` | `#ADADAD` | Hex color of the to-do input hint text |
 | `enable_firestore_logging` | `false` | When true, LogService also writes to Firestore `app_logs/` |
 
@@ -232,6 +236,15 @@ rooms/{chatRoomId}/reminders/
   self reminders and remind-them-without-list). addToList tasks can be deleted by
   EITHER side (the mirror removes the other copy); stored-only reminders are owned by
   their creator.
+
+rooms/{chatRoomId}/webrtc/
+└── current                             ← signalling for the ONE active WebRTC call
+    ├── offer:  {type, sdp}                (only used when call_backend = webrtc)
+    ├── answer: {type, sdp}
+    ├── callerCandidates/{auto}          ← trickled ICE from the caller
+    └── calleeCandidates/{auto}          ← trickled ICE from the callee
+    The caller resets this doc before offering, so a previous call's SDP/ICE can
+    never be mistaken for the current one. See §5 WebRtcCallEngine.
 
 rooms/{chatRoomId}/todoBackups/
 └── {role}                              ← "A" | "B" — this device's FULL local todo
@@ -813,12 +826,32 @@ bool get _isRead {
 
 | File | Responsibility |
 |---|---|
-| `call_service.dart` | Singleton Agora RTC engine — join/leave/mute/camera |
+| `call_service.dart` | Backend-agnostic facade — wakelock, overlay geometry, mute/camera/speaker flags, call timer, swappable UI callbacks. Delegates media to a `CallEngine` |
+| `call_engine.dart` | The `CallEngine` interface both backends implement |
+| `agora_call_engine.dart` | Agora RTC implementation (hosted SFU, billed per minute) |
+| `webrtc_call_engine.dart` | Peer-to-peer WebRTC implementation (no per-minute cost) |
+| `webrtc_signaling.dart` | Firestore offer/answer/ICE exchange for the WebRTC backend |
 | `call_screen.dart` | Full-screen call UI with timer, mute/camera buttons |
 | `incoming_call_dialog.dart` | Bottom-sheet shown when `callSignal.status == 'ringing'` |
 | `agora_token_builder.dart` | Client-side HMAC-SHA256 token builder (Test Mode fallback) |
 
-**Video encoder profile** — set explicitly in `CallService.joinCall()` (video
+**Pluggable backend.** `CallService.joinCall()` builds the engine from the
+`call_backend` Remote Config key — `agora` (default) or `webrtc`. Anything else
+falls back to Agora, so a typo can never leave calling without a backend
+(`createEngineForBackend`, unit-tested). The UI is backend-agnostic: it renders
+`CallService.localVideoView()` / `remoteVideoView(uid)` rather than any
+SDK-specific widget, so neither `CallScreen` nor the floating overlay imports an
+SDK. `CallService.activeBackend` records which one the live call is using.
+
+**Why WebRTC is viable here:** the app is always exactly two participants, which
+is the one topology needing no media server — the phones connect directly, so
+there is no per-minute billing. `isCallCaller` (already set by the existing call
+flow) decides which side creates the offer. NAT traversal uses free Google STUN;
+two phones on mobile data behind carrier-grade NAT additionally need a **TURN**
+relay (`webrtc_turn_*` keys) — without it those calls fail to connect, logged as
+`webrtc: connection FAILED`.
+
+**Video encoder profile** — set explicitly in `AgoraCallEngine.join()` (video
 calls only): 640×360 @ 15 fps, `standardBitrate`, adaptive orientation, and
 `DegradationPreference.maintainFramerate`. The last one is the load-bearing
 choice: the SDK default (`maintainQuality`) keeps resolution and drops frames
@@ -1545,6 +1578,8 @@ test/
 │   └── chat_controller_test.dart        ← optimistic UI, pagination, markRead, canModify,
 │                                           hideMessage, editMessage, deleteMessage, presence
 │                                           (heartbeat staleness, legacy peer, dispose guard)
+├── features/call/
+│   └── call_service_test.dart           ← backend selection (agora/webrtc + safe fallback)
 ├── models/
 │   ├── message_test.dart                ← fromMap/toMap, all MessageTypes, legacy iv field
 │   └── recurrence_test.dart             ← storage round-trip, fireDays, shortLabel, abbrev
@@ -1580,7 +1615,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 219 tests, ~20 seconds
+flutter test                        # 223 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
