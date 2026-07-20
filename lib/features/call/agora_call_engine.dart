@@ -81,6 +81,7 @@ class AgoraCallEngine implements CallEngine {
   @override
   Future<void> join({
     required bool videoEnabled,
+    required bool isCaller, // Agora uses the channel; no explicit caller role
     required String token,
     required void Function(int uid) onUserJoined,
     required void Function(int uid) onUserLeft,

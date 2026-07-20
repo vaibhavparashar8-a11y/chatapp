@@ -14,11 +14,13 @@ import 'package:flutter/widgets.dart';
 abstract class CallEngine {
   /// Start/join the call and begin publishing.
   ///
-  /// [token] is Agora-specific and ignored by peer-to-peer backends.
-  /// The callbacks are invoked for remote-participant events; [onError] fires
-  /// on an unrecoverable engine/connection failure.
+  /// [isCaller] decides which side creates the WebRTC offer (ignored by Agora,
+  /// where the channel handles it). [token] is Agora-specific and ignored by
+  /// peer-to-peer backends. The callbacks are invoked for remote-participant
+  /// events; [onError] fires on an unrecoverable engine/connection failure.
   Future<void> join({
     required bool videoEnabled,
+    required bool isCaller,
     required String token,
     required void Function(int uid) onUserJoined,
     required void Function(int uid) onUserLeft,
