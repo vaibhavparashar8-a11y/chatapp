@@ -19,10 +19,11 @@ dependencies:
   # Calls — Agora (hosted, per-minute) and peer-to-peer WebRTC (free).
   # Which one runs is chosen at runtime by the `call_backend` Remote Config key.
   agora_rtc_engine: ^6.3.0
-  # Pinned below 0.11.7: newer versions need `web ^1.0.0`, which conflicts with
-  # the currently pinned firebase_core 2.x / firebase_auth 4.x (migration is
-  # deferred — see issue #53). Revisit when Firebase is upgraded.
-  flutter_webrtc: 0.11.6+hotfix.1
+  # Must be 1.x: every 0.11.x still ships Flutter's removed v1-embedding
+  # `PluginRegistry.Registrar`, which fails to compile on Flutter 3.44+.
+  # It wants `web ^1.0.0`, which firebase_*_web 4.x/2.x cap below — resolved via
+  # dependency_overrides below (safe: Android-only app, no web code compiles).
+  flutter_webrtc: ^1.5.2
 
   # Media picking
   image_picker: ^1.0.7
@@ -53,6 +54,14 @@ dependencies:
   video_compress: ^3.1.2
   workmanager: ^0.9.0
   url_launcher: ^6.2.5
+
+# flutter_webrtc needs `web ^1.0.0`; firebase_*_web (pinned at firebase_core 2.x
+# / firebase_auth 4.x — migration deferred, issue #53) caps it below that.
+# This app targets Android only (no web/ or ios/ directory), so the firebase web
+# implementations are never compiled and the override is inert for our builds.
+# Remove this once the Firebase packages are upgraded.
+dependency_overrides:
+  web: ^1.0.0
 
 dev_dependencies:
   flutter_test:
