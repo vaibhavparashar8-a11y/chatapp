@@ -2,7 +2,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'agora_token_builder.dart';
 import 'call_service.dart';
 import '../../services/chat_service.dart';
@@ -277,25 +276,10 @@ class _CallScreenState extends State<CallScreen> {
             // ── Full-screen video ───────────────────────────────────────────
             if (widget.isVideo && _engineReady && _localIsMain && !_cameraOff)
               // Local video fills the screen
-              SizedBox.expand(
-                child: AgoraVideoView(
-                  controller: VideoViewController(
-                    rtcEngine: CallService.engine,
-                    canvas: const VideoCanvas(uid: 0),
-                  ),
-                ),
-              )
+              SizedBox.expand(child: CallService.localVideoView())
             else if (widget.isVideo && _engineReady && !_localIsMain && _remoteUid != null)
               // Remote video fills the screen (default)
-              SizedBox.expand(
-                child: AgoraVideoView(
-                  controller: VideoViewController.remote(
-                    rtcEngine: CallService.engine,
-                    canvas: VideoCanvas(uid: _remoteUid),
-                    connection: RtcConnection(channelId: agoraChannel),
-                  ),
-                ),
-              )
+              SizedBox.expand(child: CallService.remoteVideoView(_remoteUid!))
             else
               // Waiting / audio call background
               Container(
@@ -349,13 +333,7 @@ class _CallScreenState extends State<CallScreen> {
                 if (_localIsMain) {
                   // Small = remote
                   pipContent = _remoteUid != null
-                      ? AgoraVideoView(
-                          controller: VideoViewController.remote(
-                            rtcEngine: CallService.engine,
-                            canvas: VideoCanvas(uid: _remoteUid),
-                            connection: RtcConnection(channelId: agoraChannel),
-                          ),
-                        )
+                      ? CallService.remoteVideoView(_remoteUid!)
                       : const ColoredBox(
                           color: Color(0xFF1A2332),
                           child: Center(
@@ -365,12 +343,7 @@ class _CallScreenState extends State<CallScreen> {
                 } else {
                   // Small = local (hide pip when camera is off)
                   if (_cameraOff) return const SizedBox.shrink();
-                  pipContent = AgoraVideoView(
-                    controller: VideoViewController(
-                      rtcEngine: CallService.engine,
-                      canvas: const VideoCanvas(uid: 0),
-                    ),
-                  );
+                  pipContent = CallService.localVideoView();
                 }
 
                 return Positioned(

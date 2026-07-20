@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import '../constants.dart';
 import '../controllers/chat_controller.dart';
 import '../models/message.dart';

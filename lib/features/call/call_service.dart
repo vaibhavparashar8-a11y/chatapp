@@ -1,20 +1,32 @@
 // lib/features/call/call_service.dart
 
-import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../constants.dart';
 import '../../services/log_service.dart';
+import 'agora_call_engine.dart';
+import 'call_engine.dart';
+import 'webrtc_call_engine.dart';
 
+/// Backend-agnostic call facade.
+///
+/// Owns everything that is the same whichever backend runs the media: screen
+/// wakelock, overlay geometry, mute/camera/speaker flags, the call timer, and
+/// the swappable UI callbacks. The actual media work is delegated to a
+/// [CallEngine] chosen at join time from [callBackend] (Remote Config
+/// `call_backend`: `agora` — default — or `webrtc`).
 class CallService {
   // Native channel shared with CallScreen — also drives the screen wakelock so
   // a video call keeps the display awake for the whole call (full-screen AND
   // minimized), released centrally in [leaveCall].
   static const _callChannel = MethodChannel('com.example.chatapp/call');
 
-  static RtcEngine? _engine;
-  static bool _isInitialized = false;
-  static RtcEngineEventHandler? _handler;
+  static CallEngine? _engine;
+
+  /// Which backend the ACTIVE call is using (null when no call). Exposed for
+  /// diagnostics/logging so a misbehaving call can be traced to its backend.
+  static String? activeBackend;
 
   // Current remote participant — survives screen minimize/restore
   static int? currentRemoteUid;
@@ -51,65 +63,12 @@ class CallService {
   // Called when remote user leaves, even while UI is minimized
   static VoidCallback? onCallEnded;
 
-  // Swappable UI callbacks — updated without re-joining the channel
+  // Swappable UI callbacks — updated without re-joining the channel. The engine
+  // receives the stable _handle* wrappers below, so swapping these never needs
+  // the engine to be touched.
   static void Function(int)? _onUserJoined;
   static void Function(int)? _onUserLeft;
   static void Function()? _onError;
-
-  static Future<void> _init() async {
-    if (_isInitialized) return;
-
-    _engine = createAgoraRtcEngine();
-    await _engine!.initialize(RtcEngineContext(
-      appId: agoraAppId,
-      channelProfile: ChannelProfileType.channelProfileCommunication,
-    ));
-
-    _handler = RtcEngineEventHandler(
-      onJoinChannelSuccess: (connection, elapsed) {
-        LogService.i('Call', 'Joined channel — uid=${connection.localUid}');
-      },
-      onUserJoined: (connection, remoteUid, elapsed) {
-        LogService.i('Call', 'Remote user joined — remoteUid=$remoteUid');
-        currentRemoteUid = remoteUid;
-        _engine?.muteAllRemoteAudioStreams(false);
-        _onUserJoined?.call(remoteUid);
-      },
-      onUserOffline: (connection, remoteUid, reason) {
-        LogService.i('Call', 'Remote user left — remoteUid=$remoteUid reason=$reason');
-        currentRemoteUid = null;
-        onCallEnded?.call();
-        _onUserLeft?.call(remoteUid);
-      },
-      onError: (err, msg) {
-        LogService.e('Call', 'Agora error — code=$err msg=$msg');
-        _onError?.call();
-      },
-      // Observability only — no behavior change. Logs encoder overload /
-      // frozen-stream states so low-end-device video problems show up in
-      // app_logs instead of being invisible.
-      onLocalVideoStateChanged: (source, state, reason) {
-        if (state == LocalVideoStreamState.localVideoStreamStateFailed) {
-          LogService.w('Call', 'Local video FAILED — reason=$reason');
-        }
-      },
-      onRemoteVideoStateChanged: (connection, remoteUid, state, reason, elapsed) {
-        if (state == RemoteVideoState.remoteVideoStateFrozen ||
-            state == RemoteVideoState.remoteVideoStateFailed) {
-          LogService.w('Call',
-              'Remote video $state — uid=$remoteUid reason=$reason');
-        }
-      },
-      // Fires when the token has already expired at join time, or expires mid-call.
-      // onError does NOT fire for this case in Agora SDK 4.x.
-      onRequestToken: (connection) {
-        LogService.e('Call', 'Token expired — onRequestToken (channel=${connection.channelId})');
-        _onError?.call();
-      },
-    );
-    _engine!.registerEventHandler(_handler!);
-    _isInitialized = true;
-  }
 
   /// Swap UI callbacks without re-joining. Used when returning to an active call.
   static void updateCallbacks({
@@ -122,10 +81,18 @@ class CallService {
     _onError = onError;
   }
 
-  static RtcEngine get engine {
-    if (_engine == null) throw Exception('CallService not initialized');
-    return _engine!;
+  static void _handleUserJoined(int uid) {
+    currentRemoteUid = uid;
+    _onUserJoined?.call(uid);
   }
+
+  static void _handleUserLeft(int uid) {
+    currentRemoteUid = null;
+    onCallEnded?.call();
+    _onUserLeft?.call(uid);
+  }
+
+  static void _handleError() => _onError?.call();
 
   static Future<void> requestPermissions(bool withVideo) async {
     await Permission.microphone.request();
@@ -137,6 +104,17 @@ class CallService {
   /// ChatScreen's background-leave navigation pop a full-screen CallScreen
   /// and dispose the engine mid-call.
   static bool inCall = false;
+
+  /// Build the engine for [backend]. Anything other than `webrtc` falls back to
+  /// Agora, so a bad/blank/typo'd config value can never leave calls without a
+  /// working backend.
+  @visibleForTesting
+  static CallEngine createEngineForBackend(String backend) =>
+      backend.trim().toLowerCase() == 'webrtc'
+          ? WebRtcCallEngine()
+          : AgoraCallEngine();
+
+  static CallEngine _createEngine() => createEngineForBackend(callBackend);
 
   static Future<void> joinCall({
     required bool videoEnabled,
@@ -153,54 +131,27 @@ class CallService {
       _callChannel.invokeMethod('keepScreenOn').catchError((_) {});
     }
     resetOverlayGeometry(); // new call → overlay starts at default size/position
-    final myUid = mySenderId == 'A' ? 1 : 2;
-    LogService.i('Call', 'joinCall — role=$mySenderId uid=$myUid token=${token.isEmpty ? "none" : "set(${token.length})"}');
 
-    updateCallbacks(onUserJoined: onUserJoined, onUserLeft: onUserLeft, onError: onError);
-    await _init();
+    updateCallbacks(
+        onUserJoined: onUserJoined, onUserLeft: onUserLeft, onError: onError);
     await requestPermissions(videoEnabled);
 
-    await _engine!.enableAudio();
-    await _engine!.muteAllRemoteAudioStreams(true);
-    if (videoEnabled) {
-      await _engine!.enableVideo();
-      // Explicit modest profile instead of the SDK default. The critical part
-      // is maintainFramerate: the default (maintainQuality) keeps resolution
-      // and drops frames when a weak encoder chip can't keep up, which froze
-      // video on the lower-capability phone. maintainFramerate lowers
-      // resolution under load instead, keeping motion smooth.
-      await _engine!.setVideoEncoderConfiguration(
-        const VideoEncoderConfiguration(
-          dimensions: VideoDimensions(width: 640, height: 360),
-          frameRate: 15,
-          bitrate: standardBitrate,
-          orientationMode: OrientationMode.orientationModeAdaptive,
-          degradationPreference: DegradationPreference.maintainFramerate,
-        ),
-      );
-      await _engine!.startPreview();
-    }
-    LogService.i('Call', 'Audio/video configured');
+    _engine = _createEngine();
+    activeBackend = callBackend == 'webrtc' ? 'webrtc' : 'agora';
+    LogService.i('Call', 'joinCall — backend=$activeBackend video=$videoEnabled');
 
-    await _engine!.joinChannel(
+    await _engine!.join(
+      videoEnabled: videoEnabled,
       token: token,
-      channelId: agoraChannel,
-      uid: myUid,
-      options: ChannelMediaOptions(
-        clientRoleType: ClientRoleType.clientRoleBroadcaster,
-        channelProfile: ChannelProfileType.channelProfileCommunication,
-        publishMicrophoneTrack: true,
-        publishCameraTrack: videoEnabled,
-        autoSubscribeAudio: true,
-        autoSubscribeVideo: videoEnabled,
-      ),
+      onUserJoined: _handleUserJoined,
+      onUserLeft: _handleUserLeft,
+      onError: _handleError,
     );
     callStartTime = DateTime.now();
-    LogService.i('Call', 'joinChannel returned — channel=$agoraChannel uid=$myUid');
   }
 
   static Future<void> leaveCall() async {
-    LogService.i('Call', 'leaveCall — releasing engine');
+    LogService.i('Call', 'leaveCall — releasing engine ($activeBackend)');
     inCall = false;
     // Always clear the screen-on flag (no-op if it was an audio call).
     _callChannel.invokeMethod('allowScreenOff').catchError((_) {});
@@ -218,35 +169,36 @@ class CallService {
     isMuted = false;
     isCameraOff = false;
     isSpeakerOn = false;
-    if (_handler != null) {
-      _engine?.unregisterEventHandler(_handler!);
-      _handler = null;
-    }
-    await _engine?.leaveChannel();
-    await _engine?.stopPreview();
-    await _engine?.release();
+    await _engine?.leave();
     _engine = null;
-    _isInitialized = false;
+    activeBackend = null;
   }
 
   static Future<void> toggleMute(bool muted) async {
     isMuted = muted;
-    await _engine?.muteLocalAudioStream(muted);
+    await _engine?.toggleMute(muted);
   }
 
   static Future<void> toggleSpeaker(bool enabled) async {
     isSpeakerOn = enabled;
-    await _engine?.setEnableSpeakerphone(enabled);
+    await _engine?.toggleSpeaker(enabled);
   }
 
   static Future<void> toggleCamera(bool disabled) async {
     isCameraOff = disabled;
-    await _engine?.muteLocalVideoStream(disabled);
+    await _engine?.toggleCamera(disabled);
   }
 
-  static Future<void> switchCamera() async {
-    await _engine?.switchCamera();
-  }
+  static Future<void> switchCamera() async => _engine?.switchCamera();
+
+  /// Local camera preview for the active backend. Renders nothing when no call
+  /// is live (the UI only builds these while `_engineReady`).
+  static Widget localVideoView() =>
+      _engine?.localVideoView() ?? const SizedBox.shrink();
+
+  /// Remote participant's video for the active backend.
+  static Widget remoteVideoView(int remoteUid) =>
+      _engine?.remoteVideoView(remoteUid) ?? const SizedBox.shrink();
 
   static Future<void> dispose() async {
     await leaveCall();

@@ -129,19 +129,9 @@ class _FloatingVideoOverlayState extends State<_FloatingVideoOverlay>
                     KeyedSubtree(
                       key: _surfaceKey,
                       child: CallService.currentRemoteUid != null
-                          ? AgoraVideoView(
-                              controller: VideoViewController.remote(
-                                rtcEngine: CallService.engine,
-                                canvas: VideoCanvas(uid: CallService.currentRemoteUid),
-                                connection: RtcConnection(channelId: agoraChannel),
-                              ),
-                            )
-                          : AgoraVideoView(
-                              controller: VideoViewController(
-                                rtcEngine: CallService.engine,
-                                canvas: const VideoCanvas(uid: 0),
-                              ),
-                            ),
+                          ? CallService
+                              .remoteVideoView(CallService.currentRemoteUid!)
+                          : CallService.localVideoView(),
                     ),
                     // End-call button (top-right)
                     Positioned(

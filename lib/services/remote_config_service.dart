@@ -30,6 +30,13 @@ class RemoteConfigService {
       'agora_channel': defaults.kDefaultAgoraChannel,
       'chat_room_id': defaults.kDefaultChatRoomId,
       'agora_token': '', // paste a console-generated temp token here to enable calls
+      // 'agora' (default) or 'webrtc' — swap the call backend without a rebuild.
+      'call_backend': defaults.kDefaultCallBackend,
+      // TURN relay for the WebRTC backend (empty = STUN only). Needed when both
+      // phones are on mobile data behind carrier-grade NAT.
+      'webrtc_turn_url': '',
+      'webrtc_turn_username': '',
+      'webrtc_turn_credential': '',
       'todo_input_text_color': '#ADADAD',
       'enable_firestore_logging': false, // off by default — enable remotely to debug
     });
@@ -55,6 +62,14 @@ class RemoteConfigService {
     defaults.agoraChannel = channel.isNotEmpty ? channel : defaults.kDefaultAgoraChannel;
     defaults.chatRoomId = roomId.isNotEmpty ? roomId : defaults.kDefaultChatRoomId;
     defaults.agoraToken = _rc.getString('agora_token'); // empty = no token (App ID only mode)
+    final backend = _rc.getString('call_backend').trim().toLowerCase();
+    defaults.callBackend =
+        backend.isNotEmpty ? backend : defaults.kDefaultCallBackend;
+    defaults.webrtcTurnUrl = _rc.getString('webrtc_turn_url').trim();
+    defaults.webrtcTurnUsername = _rc.getString('webrtc_turn_username').trim();
+    defaults.webrtcTurnCredential =
+        _rc.getString('webrtc_turn_credential').trim();
     LogService.firestoreLoggingEnabled = _rc.getBool('enable_firestore_logging');
+    LogService.i('RemoteConfig', 'call_backend=${defaults.callBackend}');
   }
 }
