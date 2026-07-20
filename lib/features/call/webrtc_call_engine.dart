@@ -54,12 +54,12 @@ class WebRtcCallEngine implements CallEngine {
   @override
   Future<void> join({
     required bool videoEnabled,
+    required bool isCaller,
     required String token, // Agora-only; ignored here
     required void Function(int uid) onUserJoined,
     required void Function(int uid) onUserLeft,
     required void Function() onError,
   }) async {
-    final isCaller = isCallCaller;
     LogService.i('Call',
         'joinCall(webrtc) — role=$mySenderId caller=$isCaller video=$videoEnabled turn=${webrtcTurnUrl.isEmpty ? "none" : "set"}');
 

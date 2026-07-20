@@ -132,6 +132,7 @@ class _CallScreenState extends State<CallScreen> {
 
       await CallService.joinCall(
         videoEnabled: widget.isVideo,
+        isCaller: widget.isCaller,
         token: token,
         onUserJoined: (uid) {
           LogService.i('CallScreen', 'onUserJoined uid=$uid');

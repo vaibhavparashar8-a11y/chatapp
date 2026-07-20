@@ -118,6 +118,7 @@ class CallService {
 
   static Future<void> joinCall({
     required bool videoEnabled,
+    required bool isCaller,
     required String token,
     required void Function(int uid) onUserJoined,
     required void Function(int uid) onUserLeft,
@@ -138,10 +139,12 @@ class CallService {
 
     _engine = _createEngine();
     activeBackend = callBackend == 'webrtc' ? 'webrtc' : 'agora';
-    LogService.i('Call', 'joinCall — backend=$activeBackend video=$videoEnabled');
+    LogService.i('Call',
+        'joinCall — backend=$activeBackend video=$videoEnabled caller=$isCaller');
 
     await _engine!.join(
       videoEnabled: videoEnabled,
+      isCaller: isCaller,
       token: token,
       onUserJoined: _handleUserJoined,
       onUserLeft: _handleUserLeft,
