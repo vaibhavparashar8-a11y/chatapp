@@ -53,12 +53,18 @@ class ChatController extends ChangeNotifier {
   // Presence staleness state. Firestore has no onDisconnect, so a force-killed
   // app leaves `presence=true` behind forever. The writer re-stamps
   // `presenceAt` every [presenceRefreshInterval]; the reader only shows
-  // "online" while those heartbeats keep ARRIVING. Freshness is measured by
-  // the local receive time of a CHANGED presenceAt value — never by comparing
-  // server timestamps to the device clock, so clock skew can't break it.
+  // "online" while those heartbeats stay recent.
+  //
+  // Freshness is judged by comparing the two presenceAt values — both server
+  // timestamps on the same room doc, so their difference is accurate regardless
+  // of device-clock skew. Using my OWN heartbeat as the "now" reference (I
+  // re-stamp it every 20s while in chat) means a peer who died long ago is
+  // correctly stale the instant I open the chat — unlike measuring from when I
+  // locally received their last heartbeat, which reset the window on every open.
   bool _otherPresenceRaw = false;
-  DateTime? _otherPresenceAtValue;   // last heartbeat value seen (server time)
-  DateTime? _otherBeatReceivedAt;    // local time that value last CHANGED
+  DateTime? _otherPresenceAtValue;   // other side's heartbeat (server time)
+  DateTime? _myPresenceAtValue;      // my own heartbeat (server time) = "now" ref
+  DateTime? _otherBeatReceivedAt;    // local receive time (fallback only)
   Timer? _presenceTimer;
 
   bool _hasMoreMessages = true;
@@ -78,6 +84,7 @@ class ChatController extends ChangeNotifier {
   StreamSubscription<bool>? _typingSub;
   StreamSubscription<bool>? _presenceSub;
   StreamSubscription<DateTime?>? _presenceAtSub;
+  StreamSubscription<DateTime?>? _myPresenceAtSub;
   StreamSubscription<DateTime?>? _lastSeenSub;
 
   // UI-only state that belongs here because it drives notifyListeners()
@@ -157,6 +164,11 @@ class ChatController extends ChangeNotifier {
         _otherPresenceAtValue = ts;
         _otherBeatReceivedAt = DateTime.now();
       }
+      _recomputeOnline();
+    });
+
+    _myPresenceAtSub = _repo.myPresenceAtStream().listen((ts) {
+      _myPresenceAtValue = ts;
       _recomputeOnline();
     });
 
@@ -261,10 +273,21 @@ class ChatController extends ChangeNotifier {
   }
 
   void _recomputeOnline() {
-    // Legacy compatibility: the other phone's app predates the heartbeat
-    // (never wrote presenceAt) → trust the raw boolean, exactly as before.
-    bool fresh = true;
-    if (_otherPresenceAtValue != null) {
+    final other = _otherPresenceAtValue;
+    bool fresh;
+    if (other == null) {
+      // Legacy: the other phone predates the heartbeat (never wrote presenceAt)
+      // → trust the raw boolean, exactly as before.
+      fresh = true;
+    } else if (_myPresenceAtValue != null) {
+      // Both are server timestamps on the same doc — compare them directly. My
+      // own heartbeat (re-stamped every 20s while in chat) is the "now"
+      // reference, so a peer whose heartbeat is far behind mine is stale even
+      // the moment I open the chat. Clock-skew immune.
+      fresh = _myPresenceAtValue!.difference(other) <= presenceStaleAfter;
+    } else {
+      // Haven't observed my own heartbeat yet (brief, right after open) — fall
+      // back to local receive time so we don't wrongly flap.
       final beat = _otherBeatReceivedAt;
       fresh = beat != null &&
           DateTime.now().difference(beat) <= presenceStaleAfter;
@@ -572,6 +595,7 @@ class ChatController extends ChangeNotifier {
     _typingSub?.cancel();
     _presenceSub?.cancel();
     _presenceAtSub?.cancel();
+    _myPresenceAtSub?.cancel();
     _lastSeenSub?.cancel();
     super.dispose();
   }

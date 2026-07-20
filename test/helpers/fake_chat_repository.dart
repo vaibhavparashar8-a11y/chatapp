@@ -43,6 +43,7 @@ class FakeChatRepository implements IChatRepository {
     _typingCtrl.close();
     _readAtCtrl.close();
     _presenceAtCtrl.close();
+    _myPresenceAtCtrl.close();
   }
 
   // ── IChatRepository ───────────────────────────────────────────────────────
@@ -120,12 +121,17 @@ class FakeChatRepository implements IChatRepository {
   Stream<bool> otherPresenceStream() => overridePresenceStream ?? const Stream.empty();
 
   final _presenceAtCtrl = StreamController<DateTime?>.broadcast();
+  final _myPresenceAtCtrl = StreamController<DateTime?>.broadcast();
   int refreshPresenceCount = 0;
 
   void emitPresenceAt(DateTime? ts) => _presenceAtCtrl.add(ts);
+  void emitMyPresenceAt(DateTime? ts) => _myPresenceAtCtrl.add(ts);
 
   @override
   Stream<DateTime?> otherPresenceAtStream() => _presenceAtCtrl.stream;
+
+  @override
+  Stream<DateTime?> myPresenceAtStream() => _myPresenceAtCtrl.stream;
 
   @override
   Future<void> refreshPresence() async => refreshPresenceCount++;

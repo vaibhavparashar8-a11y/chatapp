@@ -750,6 +750,39 @@ void main() {
       repo.close();
     });
 
+    test('a long-dead peer shows offline immediately on chat open', () async {
+      // The bug: staleness was measured from when we LOCALLY received the
+      // peer's last heartbeat, so opening the chat granted a fresh window even
+      // though the peer died long ago. Fix: compare the peer's heartbeat to our
+      // OWN (both server timestamps). Our heartbeat is recent; theirs is 30 min
+      // behind → stale at once, no false "online" grace.
+      final repo = FakeChatRepository();
+      final presenceCtrl = StreamController<bool>.broadcast();
+      repo.overridePresenceStream = presenceCtrl.stream;
+      final ctrl = ChatController(
+        repo,
+        presenceStaleAfter: const Duration(seconds: 45),
+      );
+      await ctrl.init();
+
+      presenceCtrl.add(true); // presence bool still stuck true (force-killed)
+      repo.emitMyPresenceAt(DateTime(2030, 1, 1, 12, 30, 0)); // my heartbeat: now
+      repo.emitPresenceAt(DateTime(2030, 1, 1, 12, 0, 0)); // theirs: 30 min ago
+      await Future.delayed(Duration.zero);
+
+      expect(ctrl.otherOnline, false,
+          reason: 'a 30-min-old heartbeat must never read as online on open');
+
+      // Both heartbeating recently → online.
+      repo.emitPresenceAt(DateTime(2030, 1, 1, 12, 29, 50));
+      await Future.delayed(Duration.zero);
+      expect(ctrl.otherOnline, true);
+
+      ctrl.dispose();
+      presenceCtrl.close();
+      repo.close();
+    });
+
     test('legacy peer with no heartbeat is trusted on the raw boolean', () async {
       final repo = FakeChatRepository();
       final presenceCtrl = StreamController<bool>.broadcast();
