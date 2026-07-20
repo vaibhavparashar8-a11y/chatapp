@@ -382,6 +382,19 @@ class ChatService {
     });
   }
 
+  /// Emits THIS device's own presence heartbeat timestamp. It and
+  /// [otherPresenceAtStream] are both server timestamps on the same doc, so
+  /// ChatController compares them to judge staleness without touching the
+  /// device clock (skew-immune) — and, crucially, without being fooled into
+  /// showing a long-dead peer "online" just because we only *just received*
+  /// their last heartbeat when the chat opened.
+  static Stream<DateTime?> myPresenceAtStream() {
+    return _sharedRoomData().map((data) {
+      final ts = (data['presenceAt'] as Map<String, dynamic>? ?? {})[mySenderId];
+      return ts != null ? (ts as dynamic).toDate() as DateTime : null;
+    });
+  }
+
   /// Emits true whenever the other user is actively typing.
   static Stream<bool> otherTypingStream() {
     final otherId = mySenderId == 'A' ? 'B' : 'A';

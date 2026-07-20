@@ -48,6 +48,11 @@ abstract class IChatRepository {
   /// The other user's presence heartbeat timestamp; null when their app
   /// version predates the heartbeat (reader then trusts the raw boolean).
   Stream<DateTime?> otherPresenceAtStream();
+
+  /// This device's OWN presence heartbeat timestamp — compared against
+  /// [otherPresenceAtStream] (both server timestamps) to judge staleness
+  /// without device-clock skew.
+  Stream<DateTime?> myPresenceAtStream();
   Stream<DateTime?> otherLastSeenStream();
   Stream<DateTime?> otherReadAtStream();
   Future<void> clearMyView();

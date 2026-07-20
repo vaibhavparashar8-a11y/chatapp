@@ -71,6 +71,9 @@ class FirebaseChatRepository implements IChatRepository {
       ChatService.otherPresenceAtStream();
 
   @override
+  Stream<DateTime?> myPresenceAtStream() => ChatService.myPresenceAtStream();
+
+  @override
   Stream<DateTime?> otherLastSeenStream() => ChatService.otherLastSeenStream();
 
   @override
