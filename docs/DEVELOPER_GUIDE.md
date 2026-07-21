@@ -94,9 +94,9 @@ Set these in Firebase Console → Remote Config → Add parameter:
 | `chat_room_id` | `my-chat-room-001` | Firestore document path segment |
 | `agora_token` | `""` | **Legacy fallback** — tokens are now fetched from the `getAgoraToken` Cloud Function on app open (see §5 AgoraTokenService) |
 | `call_backend` | `agora` | Which media backend calls use: `agora` (hosted, per-minute) or `webrtc` (peer-to-peer, free). Any other value falls back to Agora. Flip it here and relaunch — no rebuild |
-| `webrtc_turn_url` | `""` | TURN relay for the WebRTC backend (e.g. `turn:host:3478`). Empty = STUN only |
-| `webrtc_turn_username` | `""` | TURN credential |
-| `webrtc_turn_credential` | `""` | TURN credential |
+| `webrtc_turn_url` | `turn:openrelay.metered.ca:80` | TURN relay for the WebRTC backend. Empty = STUN only, which fails whenever either phone is behind carrier-grade/symmetric NAT. Currently set to the free Open Relay Project — swap for self-hosted coturn if you need something you don't depend on a third party for |
+| `webrtc_turn_username` | `openrelayproject` | TURN credential (must be a static, non-expiring credential — the engine has no code path to refresh time-limited tokens) |
+| `webrtc_turn_credential` | `openrelayproject` | TURN credential |
 | `todo_input_text_color` | `#ADADAD` | Hex color of the to-do input hint text |
 | `enable_firestore_logging` | `false` | When true, LogService also writes to Firestore `app_logs/` |
 
@@ -1418,6 +1418,8 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Calls fail with token error | Cached token expired and `getAgoraToken` unreachable at last app open | Open the app once with network (token refreshes), or check function logs: `firebase functions:log` |
 | Video freezes/stutters on the lower-capability phone | (Fixed) No encoder config — Agora default `maintainQuality` kept resolution and dropped frames when the weak encoder couldn't keep up | Explicit 640×360@15fps profile with `DegradationPreference.maintainFramerate` in `joinCall()`; freeze/fail states now logged to `app_logs` |
 | "Call in progress" notification visible during background calls | Foreground service notification (required by Android) was IMPORTANCE_LOW with call-specific wording | (Fixed) IMPORTANCE_MIN channel + VISIBILITY_SECRET + neutral "MyTask — Running" text. A notification cannot be removed entirely — MIN importance is the OS maximum for discretion |
+| WebRTC calls: caller times out after 20s, callee never rings even when sitting on ChatScreen | (Fixed) `_startCall()` only called `ChatService.signalCall()` (the ring signal) after its own `CallService.joinCall()` fully finished; `WebRtcSignaling.reset()` deleted leftover ICE-candidate docs from a prior failed call one at a time, which could take 10+ seconds and ate into the 20s call-setup window before the ring was ever sent | `reset()` now batch-deletes; `_startCall()` sends the ring signal before joining its own engine, not after — check `webrtc/current` in Firestore for a fresh `offer` with zero matching `calleeCandidates`/no `answer` as the signature of this bug |
+| WebRTC calls negotiate (offer/answer/ICE exchanged, "remote stream connected" logged) but connection state goes to `FAILED` | STUN alone cannot cross carrier-grade/symmetric NAT — common when one phone is on mobile data. Not a code bug; WebRTC requires a TURN relay for that topology | Configure `webrtc_turn_url`/`_username`/`_credential` in Remote Config (a free option: Open Relay Project, `turn:openrelay.metered.ca:80`, user/pass `openrelayproject`) — no rebuild needed, or self-host coturn if you don't want to depend on a third party |
 
 ---
 
