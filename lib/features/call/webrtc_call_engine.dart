@@ -29,6 +29,14 @@ class WebRtcCallEngine implements CallEngine {
   bool _remoteJoined = false;
   bool _leaving = false;
 
+  // ICE candidates that arrive from the other side BEFORE we've applied the
+  // remote description must be buffered — addCandidate() before
+  // setRemoteDescription is rejected/dropped by WebRTC, which loses the very
+  // host/srflx candidates that connect two phones without a relay. Flushed the
+  // moment the remote description is set.
+  bool _remoteDescSet = false;
+  final List<RTCIceCandidate> _pendingRemote = [];
+
   /// Single remote peer — the uid only exists to satisfy the Agora-shaped API.
   static const int remoteUid = 1;
 
@@ -38,6 +46,9 @@ class WebRtcCallEngine implements CallEngine {
             'urls': [
               'stun:stun.l.google.com:19302',
               'stun:stun1.l.google.com:19302',
+              'stun:stun2.l.google.com:19302',
+              'stun:stun3.l.google.com:19302',
+              'stun:stun4.l.google.com:19302',
             ]
           },
           if (webrtcTurnUrl.isNotEmpty)
@@ -47,7 +58,6 @@ class WebRtcCallEngine implements CallEngine {
               'credential': webrtcTurnCredential,
             },
         ],
-        // Trickle ICE: send candidates as they're found instead of waiting.
         'sdpSemantics': 'unified-plan',
       };
 
@@ -98,6 +108,10 @@ class WebRtcCallEngine implements CallEngine {
       }
     };
 
+    _pc!.onIceConnectionState = (RTCIceConnectionState s) {
+      LogService.i('Call', 'webrtc: ICE state $s');
+    };
+
     _pc!.onConnectionState = (RTCPeerConnectionState state) {
       LogService.i('Call', 'webrtc: connection state $state');
       if (_leaving) return;
@@ -126,13 +140,19 @@ class WebRtcCallEngine implements CallEngine {
       }).catchError((e) => LogService.w('Call', 'webrtc: candidate write $e'));
     };
 
-    // Apply the other side's ICE as it trickles in.
+    // Apply the other side's ICE as it trickles in — but only after the remote
+    // description is set (buffer until then, see [_remoteDescSet]).
     _subs.add(WebRtcSignaling.remoteCandidateStream(!isCaller).listen((c) {
-      _pc?.addCandidate(RTCIceCandidate(
+      final cand = RTCIceCandidate(
         c['candidate'] as String?,
         c['sdpMid'] as String?,
         c['sdpMLineIndex'] as int?,
-      ));
+      );
+      if (_remoteDescSet) {
+        _addCandidate(cand);
+      } else {
+        _pendingRemote.add(cand);
+      }
     }, onError: (e) => LogService.w('Call', 'webrtc: candidate stream $e')));
 
     if (isCaller) {
@@ -140,6 +160,24 @@ class WebRtcCallEngine implements CallEngine {
     } else {
       await _answer();
     }
+  }
+
+  void _addCandidate(RTCIceCandidate c) {
+    _pc?.addCandidate(c).catchError(
+        (e) => LogService.w('Call', 'webrtc: addCandidate $e'));
+  }
+
+  /// Set the remote description and flush any candidates that arrived early.
+  Future<void> _applyRemoteDescription(RTCSessionDescription desc) async {
+    if (_remoteDescSet || _pc == null) return; // apply once
+    await _pc!.setRemoteDescription(desc);
+    _remoteDescSet = true;
+    for (final c in _pendingRemote) {
+      _addCandidate(c);
+    }
+    LogService.i('Call',
+        'webrtc: remote description applied (flushed ${_pendingRemote.length} buffered candidates)');
+    _pendingRemote.clear();
   }
 
   /// Caller: clear stale state, publish an offer, wait for the answer.
@@ -151,25 +189,18 @@ class WebRtcCallEngine implements CallEngine {
     await WebRtcSignaling.setOffer({'type': offer.type, 'sdp': offer.sdp});
 
     _subs.add(WebRtcSignaling.answerStream().listen((answer) async {
-      if (answer == null || _pc == null) return;
-      final desc = await _pc!.getRemoteDescription();
-      if (desc != null) return; // already applied
-      await _pc!.setRemoteDescription(
-        RTCSessionDescription(answer['sdp'] as String?, answer['type'] as String?),
-      );
-      LogService.i('Call', 'webrtc: answer applied');
+      if (answer == null) return;
+      await _applyRemoteDescription(RTCSessionDescription(
+          answer['sdp'] as String?, answer['type'] as String?));
     }, onError: (e) => LogService.w('Call', 'webrtc: answer stream $e')));
   }
 
   /// Callee: wait for the offer, then publish an answer.
   Future<void> _answer() async {
     _subs.add(WebRtcSignaling.offerStream().listen((offer) async {
-      if (offer == null || _pc == null) return;
-      final desc = await _pc!.getRemoteDescription();
-      if (desc != null) return; // already applied
-      await _pc!.setRemoteDescription(
-        RTCSessionDescription(offer['sdp'] as String?, offer['type'] as String?),
-      );
+      if (offer == null || _pc == null || _remoteDescSet) return;
+      await _applyRemoteDescription(RTCSessionDescription(
+          offer['sdp'] as String?, offer['type'] as String?));
       final answer = await _pc!.createAnswer();
       await _pc!.setLocalDescription(answer);
       await WebRtcSignaling.setAnswer({'type': answer.type, 'sdp': answer.sdp});
@@ -184,6 +215,8 @@ class WebRtcCallEngine implements CallEngine {
       await s.cancel();
     }
     _subs.clear();
+    _pendingRemote.clear();
+    _remoteDescSet = false;
     for (final track in _localStream?.getTracks() ?? <MediaStreamTrack>[]) {
       await track.stop();
     }
