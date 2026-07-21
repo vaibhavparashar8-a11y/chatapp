@@ -130,6 +130,15 @@ class _CallScreenState extends State<CallScreen> {
         if (mounted) _endCall();
       };
 
+      // Ring the other side before joining our own engine — joining (camera
+      // capture, SDP offer, Firestore round-trip for WebRTC) can take several
+      // seconds, and gating the ring on that finishing first meant a slow
+      // join could eat the whole 20s call-setup window with the other side
+      // never even notified. See docs §6.4 for the intended signal-first flow.
+      if (widget.isCaller) {
+        ChatService.signalCall(widget.isVideo ? 'video' : 'audio', token: token);
+      }
+
       await CallService.joinCall(
         videoEnabled: widget.isVideo,
         isCaller: widget.isCaller,
@@ -163,9 +172,6 @@ class _CallScreenState extends State<CallScreen> {
       // Start foreground service so Android keeps the process alive in background
       _callChannel.invokeMethod('startForeground').catchError((_) {});
       LogService.i('CallScreen', 'Engine ready — isCaller=${widget.isCaller}');
-      if (widget.isCaller) {
-        ChatService.signalCall(widget.isVideo ? 'video' : 'audio', token: token);
-      }
 
       Future.delayed(const Duration(seconds: 20), () {
         if (mounted && !_callConnected) {

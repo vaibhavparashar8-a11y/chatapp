@@ -31,11 +31,22 @@ class WebRtcSignaling {
       _doc.collection(fromCaller ? 'callerCandidates' : 'calleeCandidates');
 
   /// Wipe the previous call's offer/answer and ICE. Caller-only, before offering.
+  ///
+  /// Deletes are batched (one round-trip per 400 docs) rather than awaited one
+  /// at a time — a call that timed out unanswered can leave a couple dozen
+  /// stray candidate docs behind, and deleting those sequentially delayed the
+  /// next offer by 10+ seconds on a slow connection, which ate into the
+  /// caller's own call-setup window before the ring signal was even sent.
   static Future<void> reset() async {
     for (final fromCaller in [true, false]) {
       final snap = await candidates(fromCaller).get();
-      for (final d in snap.docs) {
-        await d.reference.delete();
+      for (var i = 0; i < snap.docs.length; i += 400) {
+        final chunk = snap.docs.skip(i).take(400);
+        final batch = _db.batch();
+        for (final d in chunk) {
+          batch.delete(d.reference);
+        }
+        await batch.commit();
       }
     }
     await _doc.set({
