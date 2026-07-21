@@ -2,6 +2,7 @@
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../constants.dart';
+import '../../services/log_service.dart';
 
 /// Firestore-backed signalling for the single active WebRTC call.
 ///
@@ -38,8 +39,10 @@ class WebRtcSignaling {
   /// next offer by 10+ seconds on a slow connection, which ate into the
   /// caller's own call-setup window before the ring signal was even sent.
   static Future<void> reset() async {
+    var deleted = 0;
     for (final fromCaller in [true, false]) {
       final snap = await candidates(fromCaller).get();
+      deleted += snap.docs.length;
       for (var i = 0; i < snap.docs.length; i += 400) {
         final chunk = snap.docs.skip(i).take(400);
         final batch = _db.batch();
@@ -54,6 +57,7 @@ class WebRtcSignaling {
       'answer': null,
       'updatedAt': FieldValue.serverTimestamp(),
     });
+    LogService.i('Call', 'webrtc: reset — cleared $deleted stale candidate(s)');
   }
 
   static Future<void> setOffer(Map<String, dynamic> sdp) =>

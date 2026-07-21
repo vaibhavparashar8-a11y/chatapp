@@ -135,7 +135,11 @@ class _CallScreenState extends State<CallScreen> {
       // seconds, and gating the ring on that finishing first meant a slow
       // join could eat the whole 20s call-setup window with the other side
       // never even notified. See docs §6.4 for the intended signal-first flow.
+      // prepareOutgoingCall() (clears stale WebRTC signaling state) MUST run
+      // before the ring goes out — otherwise the callee can start listening
+      // and pick up the previous call's leftover offer.
       if (widget.isCaller) {
+        await CallService.prepareOutgoingCall();
         ChatService.signalCall(widget.isVideo ? 'video' : 'audio', token: token);
       }
 

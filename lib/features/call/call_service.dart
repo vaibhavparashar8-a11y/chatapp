@@ -8,6 +8,7 @@ import '../../services/log_service.dart';
 import 'agora_call_engine.dart';
 import 'call_engine.dart';
 import 'webrtc_call_engine.dart';
+import 'webrtc_signaling.dart';
 
 /// Backend-agnostic call facade.
 ///
@@ -115,6 +116,25 @@ class CallService {
           : AgoraCallEngine();
 
   static CallEngine _createEngine() => createEngineForBackend(callBackend);
+
+  /// Caller-only prep that must finish BEFORE the other side is rung.
+  ///
+  /// The WebRTC backend keeps its offer/answer/ICE state in one well-known
+  /// Firestore doc across calls (see [WebRtcSignaling]) — a prior call (even a
+  /// failed one) leaves its offer/answer/candidates sitting there until the
+  /// next caller's [WebRtcSignaling.reset] clears them. That reset used to run
+  /// deep inside the engine's own join() (after local media capture), so the
+  /// callee — rung immediately on accept — could start listening and apply
+  /// that stale leftover offer before the new one was ever written, corrupting
+  /// the negotiation (mismatched m-line count → "Incompatible send direction",
+  /// or ICE candidates from an unrelated call). Running the reset here, before
+  /// the ring goes out, guarantees the callee never sees anything but a clean
+  /// slate or the real new offer. No-op for Agora.
+  static Future<void> prepareOutgoingCall() async {
+    if (callBackend.trim().toLowerCase() == 'webrtc') {
+      await WebRtcSignaling.reset();
+    }
+  }
 
   static Future<void> joinCall({
     required bool videoEnabled,
