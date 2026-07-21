@@ -170,6 +170,12 @@ class WebRtcCallEngine implements CallEngine {
   /// Set the remote description and flush any candidates that arrived early.
   Future<void> _applyRemoteDescription(RTCSessionDescription desc) async {
     if (_remoteDescSet || _pc == null) return; // apply once
+    // m-line count is logged alongside the type so a stale/mismatched SDP
+    // (e.g. a leftover offer from a previous call with a different track mix)
+    // shows up here instead of surfacing only as a cryptic setRemoteDescription
+    // error later — see the "Incompatible send direction" issue this caught.
+    LogService.i('Call',
+        'webrtc: applying remote ${desc.type} (${_countMLines(desc.sdp)} m-line(s))');
     await _pc!.setRemoteDescription(desc);
     _remoteDescSet = true;
     for (final c in _pendingRemote) {
@@ -180,12 +186,18 @@ class WebRtcCallEngine implements CallEngine {
     _pendingRemote.clear();
   }
 
-  /// Caller: clear stale state, publish an offer, wait for the answer.
+  /// Caller: publish an offer, wait for the answer.
+  ///
+  /// Stale state from a previous call is cleared by
+  /// [CallService.prepareOutgoingCall] BEFORE the callee is rung — doing it
+  /// here instead would be too late: the callee starts listening for the
+  /// offer as soon as it's rung, which by then can be well before this join()
+  /// call (local media capture, peer connection setup) even reaches this
+  /// point, letting it read the previous call's leftover offer.
   Future<void> _offer() async {
-    await WebRtcSignaling.reset();
-
     final offer = await _pc!.createOffer();
     await _pc!.setLocalDescription(offer);
+    LogService.i('Call', 'webrtc: publishing offer (${_countMLines(offer.sdp)} m-line(s))');
     await WebRtcSignaling.setOffer({'type': offer.type, 'sdp': offer.sdp});
 
     _subs.add(WebRtcSignaling.answerStream().listen((answer) async {
@@ -204,9 +216,13 @@ class WebRtcCallEngine implements CallEngine {
       final answer = await _pc!.createAnswer();
       await _pc!.setLocalDescription(answer);
       await WebRtcSignaling.setAnswer({'type': answer.type, 'sdp': answer.sdp});
-      LogService.i('Call', 'webrtc: answer published');
+      LogService.i('Call',
+          'webrtc: answer published (${_countMLines(answer.sdp)} m-line(s))');
     }, onError: (e) => LogService.w('Call', 'webrtc: offer stream $e')));
   }
+
+  static int _countMLines(String? sdp) =>
+      RegExp('^m=', multiLine: true).allMatches(sdp ?? '').length;
 
   @override
   Future<void> leave() async {
