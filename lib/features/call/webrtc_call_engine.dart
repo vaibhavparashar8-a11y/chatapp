@@ -98,14 +98,19 @@ class WebRtcCallEngine implements CallEngine {
     }
 
     // ── Remote media ───────────────────────────────────────────────────────
+    // onTrack fires as soon as the SDP negotiates a track — well before ICE
+    // actually connects and media flows. Firing onUserJoined from here (as
+    // this used to) marked the call "connected" in the UI immediately, which
+    // both showed a black screen/silent audio while the real ICE handshake
+    // was still stuck, AND disabled CallScreen's 20s no-answer timeout (it's
+    // gated on !_callConnected) — so a call that never actually connects (e.g.
+    // a TURN relay that's slow or out of capacity) hung forever with no error
+    // shown instead of timing out. onUserJoined now fires from onConnectionState
+    // below, once the connection is actually Connected.
     _pc!.onTrack = (RTCTrackEvent event) {
       if (event.streams.isEmpty) return;
       _remoteRenderer.srcObject = event.streams.first;
-      if (!_remoteJoined) {
-        _remoteJoined = true;
-        LogService.i('Call', 'webrtc: remote stream connected');
-        onUserJoined(remoteUid);
-      }
+      LogService.i('Call', 'webrtc: remote track attached (not yet connected)');
     };
 
     _pc!.onIceConnectionState = (RTCIceConnectionState s) {
@@ -116,6 +121,13 @@ class WebRtcCallEngine implements CallEngine {
       LogService.i('Call', 'webrtc: connection state $state');
       if (_leaving) return;
       switch (state) {
+        case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
+          if (!_remoteJoined) {
+            _remoteJoined = true;
+            LogService.i('Call', 'webrtc: connected — media flowing');
+            onUserJoined(remoteUid);
+          }
+          break;
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
           LogService.e('Call',
               'webrtc: connection FAILED — likely NAT traversal (TURN needed?)');

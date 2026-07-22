@@ -183,7 +183,10 @@ class _CallScreenState extends State<CallScreen> {
           if (widget.isCaller) {
             _endCall();
           } else {
-            _endCall(errorMsg: 'Call timed out. Check that the Agora token is valid.');
+            final msg = CallService.activeBackend == 'webrtc'
+                ? 'Call timed out. The peer-to-peer connection never completed — check the TURN relay in Remote Config.'
+                : 'Call timed out. Check that the Agora token is valid.';
+            _endCall(errorMsg: msg);
           }
         }
       });
