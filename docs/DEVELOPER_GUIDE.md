@@ -203,6 +203,11 @@ rooms/
         ├── from: "A" | "B"
         ├── type: "audio" | "video"
         ├── status: "ringing" | "accepted" | "declined" | "ended"
+        ├── delivered: bool              ← set true by the callee the instant its
+        │                                  incoming-call UI appears; reset false by
+        │                                  signalCall(). Separate from `status` so it
+        │                                  never triggers ChatScreen's caller-cancelled
+        │                                  auto-dismiss (see §6.4)
         ├── token: string                ← Agora RTC token (may be empty in Test Mode)
         └── timestamp: Timestamp
 
@@ -422,8 +427,9 @@ All Firestore and Storage operations — only static methods, no instance state.
 | `setTyping(bool)` | Updates `typing.{mySenderId}` on the room doc |
 | `enterChat()` / `leaveChat()` | Sets `presence`, `presenceAt` heartbeat, and `lastSeen` |
 | `refreshPresence()` | Re-stamps `presence`+`presenceAt` — called every 20s by ChatController's presence timer while the chat is open |
-| `signalCall(type, {token})` | Writes `callSignal` map to room doc |
+| `signalCall(type, {token})` | Writes `callSignal` map to room doc (resets `delivered: false`) |
 | `updateCallStatus(status)` | Updates `callSignal.status` |
+| `markCallDelivered()` | Sets `callSignal.delivered = true` — callee → caller "my incoming-call UI is showing" signal |
 | `editMessage(id, newText)` | Updates `text` and sets `edited: true` |
 | `deleteMessage(id)` | Deletes Firestore doc + Storage file if media (immediate "delete for everyone") |
 | `deleteForMe(id, deletedFor)` | Two-sided delete: adds this role to the message's `deletedFor`; deletes the doc once the other side is already there (media file left in Storage) |
@@ -1280,32 +1286,55 @@ MessageBubble._statusIcon():
 
 ### 6.4 Incoming Call
 
+A's `CallScreen` rings the other side and joins its own engine in parallel
+(see the comment on `_startCall()` in `call_screen.dart` — gating the ring on
+`joinCall()` finishing first used to eat the whole 20s setup window). So A's
+side of the flow is really two independent things happening at once: joining
+the media engine, and watching `callSignal` to drive the "Calling.../
+Ringing.../Connecting..." label via `interpretCallSignal()`
+(`utils/call_signal_interpreter.dart`):
+
 ```
 A taps "Video Call"
         │
         ▼
 ChatService.signalCall('video', token: agoraToken)
-  room.set({callSignal: {from:'A', type:'video', status:'ringing', token: ...}})
+  room.set({callSignal: {from:'A', type:'video', status:'ringing',
+                          delivered:false, token: ...}})
+CallScreen(isCaller:true) joins its own engine + subscribes to callSignalStream
+  label: "Calling..."
         │
         ▼ (on B's device)
-callSignalStream() emits {status: 'ringing'}
+callSignalStream() emits {status: 'ringing', delivered:false}
         │
         ▼
-ChatScreen listener shows IncomingCallDialog
+ChatScreen listener calls ChatService.markCallDelivered() → shows IncomingCallDialog
+  room.update({'callSignal.delivered': true})
+        │
+        ▼ (on A's device)
+callSignalStream() emits {status:'ringing', delivered:true}
+A's CallScreen: interpretCallSignal → CallSignalEvent.delivered
+  label: "Ringing..."
         │
    ┌────┴────┐
    │Accept   │Decline
    ▼         ▼
 updateCallStatus('accepted')    updateCallStatus('declined')
-Navigator.push(CallScreen)      dialog dismissed
-        │
-        ▼ (on A's device)
-callSignalStream() emits {status: 'accepted'}
-A's CallScreen._awaitAccept() unblocks → joins Agora channel
-        │
+Navigator.push(CallScreen           dialog dismissed
+  (isCaller:false)) — its own
+  label is always "Connecting..."
+  until its engine's onUserJoined
+        │                            │
+        ▼ (on A's device)            ▼ (on A's device)
+callSignalStream() emits            callSignalStream() emits
+  {status:'accepted'}                 {status:'declined'}
+A's CallScreen: interpretCallSignal  A's CallScreen: interpretCallSignal
+  → CallSignalEvent.accepted           → CallSignalEvent.declined
+  label: "Connecting..."               → _endCall(errorMsg:'Call rejected')
+        │                               → SnackBar + Navigator.pop back to chat
         ▼
 Both devices: CallService.joinCall(videoEnabled, token, ...)
-Agora onUserJoined fires → video/audio streams active
+onUserJoined fires on both → _callConnected=true → label replaced by duration
 ```
 
 ### 6.5 App Startup
@@ -1590,8 +1619,10 @@ test/
 ├── utils/
 │   ├── time_utils_test.dart             ← formatLastSeen, formatDue,
 │   │                                       parseReminderTimestamp (UTC→local regression)
-│   └── link_utils_test.dart             ← splitLinks URL detection (www, punctuation,
-│                                           multiple links, plain text)
+│   ├── link_utils_test.dart             ← splitLinks URL detection (www, punctuation,
+│   │                                       multiple links, plain text)
+│   └── call_signal_interpreter_test.dart ← interpretCallSignal event mapping,
+│                                            callerStatusLabel priority (§6.4)
 ├── services/
 │   ├── reminder_service_test.dart       ← applySharedSnapshot reconcile rules
 │   │                                       (incl. subtask sync), insertTodoToPrefs link,
@@ -1619,7 +1650,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 223 tests, ~20 seconds
+flutter test                        # 235 tests, ~20 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
@@ -1633,6 +1664,7 @@ static flag or injectable, set them in `setUp()`:
 | `DeviceService.testMode` | heartbeat no-op, last-opened stream emits null |
 | `AgoraTokenService.fetchOverride` | replaces the Cloud Function call |
 | `ChatScreen(repository:, callSignalProvider:)` | constructor injection |
+| `CallScreen(callSignalProvider:)` | constructor injection — caller-side ringing/accept/decline tracking |
 | `CallsScreen(callsStream:)` | constructor injection |
 
 ### How FakeChatRepository Works
