@@ -1,5 +1,6 @@
 // lib/features/call/call_screen.dart
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'agora_token_builder.dart';
@@ -7,6 +8,7 @@ import 'call_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/log_service.dart';
 import '../../constants.dart';
+import '../../utils/call_signal_interpreter.dart';
 
 const _proximityChannel = MethodChannel('com.example.chatapp/proximity');
 const _callChannel      = MethodChannel('com.example.chatapp/call');
@@ -17,6 +19,8 @@ class CallScreen extends StatefulWidget {
   final String callToken;
   // true when user returns to a minimized call — skips joinChannel
   final bool isReconnecting;
+  /// Injectable for testing; defaults to [ChatService.callSignalStream] in production.
+  final Stream<Map<String, dynamic>?> Function()? callSignalProvider;
 
   const CallScreen({
     super.key,
@@ -24,6 +28,7 @@ class CallScreen extends StatefulWidget {
     required this.isCaller,
     this.callToken = '',
     this.isReconnecting = false,
+    this.callSignalProvider,
   });
 
   @override
@@ -39,6 +44,10 @@ class _CallScreenState extends State<CallScreen> {
   bool _engineReady = false;
   bool _ending = false;
   bool _minimizing = false;
+  // Caller-only: driven by the callee's callSignal updates.
+  bool _remoteDelivered = false;
+  bool _remoteAccepted = false;
+  StreamSubscription<Map<String, dynamic>?>? _callSignalSub;
   // Video layout state
   bool _localIsMain = false; // when true, local video fills screen, remote is small
   double? _selfVideoX;       // null = unset, initialized on first build
@@ -59,6 +68,33 @@ class _CallScreenState extends State<CallScreen> {
     } else {
       _startCall();
     }
+    // Only the caller needs to track the callee's ringing/accept/decline —
+    // the callee only ever opens this screen after already accepting.
+    if (widget.isCaller && !widget.isReconnecting) {
+      _listenForCallSignal();
+    }
+  }
+
+  void _listenForCallSignal() {
+    final stream = widget.callSignalProvider != null
+        ? widget.callSignalProvider!()
+        : ChatService.callSignalStream();
+    _callSignalSub = stream.listen((signal) {
+      if (!mounted) return;
+      switch (interpretCallSignal(signal, mySenderId: mySenderId)) {
+        case CallSignalEvent.delivered:
+          setState(() => _remoteDelivered = true);
+          break;
+        case CallSignalEvent.accepted:
+          setState(() => _remoteAccepted = true);
+          break;
+        case CallSignalEvent.declined:
+          unawaited(_endCall(errorMsg: 'Call rejected'));
+          break;
+        case CallSignalEvent.none:
+          break;
+      }
+    });
   }
 
   // Re-attach UI callbacks to the existing Agora engine session.
@@ -265,6 +301,7 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
+    _callSignalSub?.cancel();
     // Release proximity wake lock regardless of how the screen exits
     if (!widget.isVideo) {
       _proximityChannel.invokeMethod('release').catchError((_) {});
@@ -274,6 +311,15 @@ class _CallScreenState extends State<CallScreen> {
       CallService.dispose();
     }
     super.dispose();
+  }
+
+  // Waiting-to-connect label — overridden by the live duration once connected.
+  String get _statusLabel {
+    if (!widget.isCaller) return 'Connecting...';
+    return callerStatusLabel(
+      remoteAccepted: _remoteAccepted,
+      remoteDelivered: _remoteDelivered,
+    );
   }
 
   @override
@@ -323,11 +369,7 @@ class _CallScreenState extends State<CallScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        _callConnected
-                            ? _duration
-                            : widget.isCaller
-                                ? 'Calling...'
-                                : 'Connecting...',
+                        _callConnected ? _duration : _statusLabel,
                         style: const TextStyle(color: Colors.white70, fontSize: 16),
                       ),
                     ],
@@ -409,11 +451,7 @@ class _CallScreenState extends State<CallScreen> {
                       ),
                       const SizedBox(width: 12),
                       Text(
-                        _callConnected
-                            ? _duration
-                            : widget.isCaller
-                                ? 'Calling...'
-                                : 'Connecting...',
+                        _callConnected ? _duration : _statusLabel,
                         style: const TextStyle(color: Colors.white70, fontSize: 14),
                       ),
                     ],

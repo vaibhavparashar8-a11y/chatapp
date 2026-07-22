@@ -460,9 +460,28 @@ class ChatService {
         'type': callType,
         'status': 'ringing',
         'token': token,
+        // Reset from any previous call — set true by the callee the moment
+        // its incoming-call UI actually appears (see markCallDelivered).
+        'delivered': false,
         'timestamp': FieldValue.serverTimestamp(),
       }
     }, SetOptions(merge: true));
+  }
+
+  /// Callee → caller signal that the incoming-call UI is now showing on the
+  /// callee's device, so the caller can switch its "Calling..." label to
+  /// "Ringing...". Deliberately a separate field rather than a `status`
+  /// value — `status` stays 'ringing' until accept/decline/end, and those
+  /// transitions are what ChatScreen's caller-cancelled auto-dismiss logic
+  /// keys off of.
+  static Future<void> markCallDelivered() async {
+    try {
+      await _db.collection('rooms').doc(chatRoomId).update({
+        'callSignal.delivered': true,
+      });
+    } catch (e) {
+      LogService.e('ChatService', 'markCallDelivered failed: $e');
+    }
   }
 
   static String _mimeType(String ext) {

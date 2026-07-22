@@ -192,6 +192,9 @@ class _ChatScreenState extends State<ChatScreen>
       if (_incomingDialogShowing) return;
 
       _incomingDialogShowing = true;
+      // Tell the caller its call actually reached this device — flips the
+      // caller's "Calling..." label to "Ringing...".
+      unawaited(ChatService.markCallDelivered());
       showDialog(
         context: context,
         barrierDismissible: false,
