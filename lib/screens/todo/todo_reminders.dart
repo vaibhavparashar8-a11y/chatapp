@@ -16,11 +16,11 @@ extension _TodoReminders on _TodoScreenState {
   Future<void> _rearmReminders() async {
     final now = DateTime.now();
     for (final todo in _todos) {
-      final due = todo.dueDate;
+      final due = todo.start;
       if (due == null || todo.done) continue;
       // A one-shot whose time has passed already fired — leave it. Recurring
       // reminders always re-arm; their future occurrences keep firing.
-      if (todo.recurrence == Recurrence.none && !due.isAfter(now)) continue;
+      if (!todo.recurrence.repeats && !due.isAfter(now)) continue;
       // Clear any stale schedule (incl. weekday-group ids) before re-arming.
       await NotificationService.cancelReminderGroup(todo.id.hashCode);
       // A task received from the other phone was armed by the delivery path
@@ -32,12 +32,7 @@ extension _TodoReminders on _TodoScreenState {
         await NotificationService.cancelReminder(
             NotificationService.docNotifId(docId));
       }
-      await NotificationService.scheduleReminder(
-        id: todo.id.hashCode,
-        title: todo.title,
-        scheduledTime: due,
-        recurrence: todo.recurrence,
-      );
+      await _armLocalReminder(todo, due, todo.recurrence);
     }
   }
 }

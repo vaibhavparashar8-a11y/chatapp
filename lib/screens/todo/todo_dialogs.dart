@@ -6,6 +6,69 @@ part of '../todo_screen.dart';
 // is analyzer-clean.
 
 extension _TodoDialogs on _TodoScreenState {
+  /// The "Set a reminder?" prompt shown right after a task is added.
+  /// Returns true when the user chose to set one.
+  Future<bool> _askSetReminder(String taskTitle) async {
+    final want = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _kTodoCard,
+        titleTextStyle: _kTodoDialogTitle,
+        contentTextStyle: _kTodoDialogContent,
+        title: const Text('Set a reminder?'),
+        content: Text('Add a reminder for "$taskTitle"?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              style: TextButton.styleFrom(foregroundColor: _kTodoTextDim),
+              child: const Text('Skip')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(backgroundColor: _kTodoAccentDeep),
+              child: const Text('Set')),
+        ],
+      ),
+    );
+    return want == true;
+  }
+
+  /// Debug-only: clear the A/B role assignment for this device (double-tap the
+  /// AppBar title). Both devices must relaunch afterwards.
+  Future<void> _showRoleResetDialog() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _kTodoCard,
+        titleTextStyle: _kTodoDialogTitle,
+        contentTextStyle: _kTodoDialogContent,
+        title: const Text('Reset Role Assignment?'),
+        content: const Text(
+          'Clears A/B roles for this device and wipes Firestore assignment. '
+          'Both devices must relaunch after resetting.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              style: TextButton.styleFrom(foregroundColor: _kTodoTextDim),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Reset'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await DeviceService.resetAssignments();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Role reset. Relaunch both devices.'),
+      duration: Duration(seconds: 5),
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
   /// Configure the daily task summary — a single on-device notification each
   /// morning listing the day's tasks as a ☐ checklist. Fully local (see
   /// [DigestService]); no account or network needed.

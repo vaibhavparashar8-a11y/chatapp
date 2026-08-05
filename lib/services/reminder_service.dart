@@ -1,10 +1,13 @@
-import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
 import '../models/recurrence.dart';
+import '../models/recurrence_rule.dart';
+import '../models/task.dart';
+import 'log_service.dart';
 import 'notification_service.dart';
+import 'task_store.dart';
 
 /// A reminder fetched from Firestore that hasn't been locally scheduled yet.
 class PendingReminder {
@@ -15,13 +18,26 @@ class PendingReminder {
 
   /// How the reminder repeats, as set by the creator. Carried across so the
   /// recipient's phone arms the same repeat instead of a one-shot.
-  final Recurrence recurrence;
+  final RecurrenceRule recurrence;
+
+  /// When the task ends, if it is a span rather than a point in time.
+  final DateTime? endsAt;
+
+  /// Occupies whole days rather than a time range.
+  final bool allDay;
+
+  /// Lead times to notify before [scheduledAt]. Stored but not yet scheduled.
+  final List<Duration> alerts;
+
   const PendingReminder({
     required this.id,
     required this.title,
     required this.scheduledAt,
     required this.addToList,
-    this.recurrence = Recurrence.none,
+    this.recurrence = RecurrenceRule.none,
+    this.endsAt,
+    this.allDay = false,
+    this.alerts = const [],
   });
 }
 
@@ -39,15 +55,28 @@ class SharedTask {
   final List<Map<String, dynamic>>? subtasks;
 
   /// How the reminder repeats. Docs written before recurrence-sync carry no
-  /// field and parse back as [Recurrence.none] — matching their old behaviour.
-  final Recurrence recurrence;
+  /// field and parse back as "does not repeat" — matching their old behaviour.
+  final RecurrenceRule recurrence;
+
+  /// When the task ends, if it is a span rather than a point in time.
+  final DateTime? endsAt;
+
+  /// Occupies whole days rather than a time range.
+  final bool allDay;
+
+  /// Lead times to notify before [scheduledAt]. Stored but not yet scheduled.
+  final List<Duration> alerts;
+
   const SharedTask({
     required this.id,
     required this.title,
     required this.scheduledAt,
     this.done,
     this.subtasks,
-    this.recurrence = Recurrence.none,
+    this.recurrence = RecurrenceRule.none,
+    this.endsAt,
+    this.allDay = false,
+    this.alerts = const [],
   });
 }
 
@@ -119,7 +148,10 @@ class ReminderService {
     required bool addToList,
     bool locallyScheduled = false,
     List<Map<String, dynamic>>? subtasks,
-    Recurrence recurrence = Recurrence.none,
+    RecurrenceRule recurrence = RecurrenceRule.none,
+    DateTime? endsAt,
+    bool allDay = false,
+    List<Duration> alerts = const [],
   }) async {
     if (testMode) return null;
     final doc = await _col(chatRoomId).add({
@@ -129,13 +161,46 @@ class ReminderService {
       'addToList': addToList,
       'locallyScheduled': locallyScheduled,
       'done': false,
-      if (recurrence != Recurrence.none) 'recurrence': recurrence.storage,
+      ..._repeatFields(recurrence),
+      if (endsAt != null) 'endsAt': Timestamp.fromDate(endsAt),
+      if (allDay) 'allDay': true,
+      if (alerts.isNotEmpty)
+        'alerts': alerts.map((d) => d.inMinutes).toList(),
       if (subtasks != null && subtasks.isNotEmpty) 'subtasks': subtasks,
       'createdBy': mySenderId,
       'createdAt': FieldValue.serverTimestamp(),
     });
     return doc.id;
   }
+
+  /// The repeat fields to write on a reminder doc.
+  ///
+  /// **Dual-written.** `rrule` is the RRULE string this app now reads, and
+  /// `recurrence` is the old enum name. The legacy field is kept so a phone
+  /// still running the previous APK — and the deployed `onReminderCreated`
+  /// function, which forwards `data.recurrence` — keep working during a
+  /// rollout. It is only written for rules the enum can express; a richer
+  /// rule writes `rrule` alone, and old readers see "does not repeat" rather
+  /// than a wrong repeat. Drop `recurrence` once both phones are updated.
+  static Map<String, dynamic> _repeatFields(RecurrenceRule r) {
+    final legacy = r.toLegacy();
+    return {
+      'rrule': r.storage,
+      'recurrence': (legacy ?? Recurrence.none).storage,
+    };
+  }
+
+  /// Read the repeat off a doc, preferring the RRULE string and falling back
+  /// to the legacy enum name on docs written before this model.
+  static RecurrenceRule _repeatFromDoc(Map<String, dynamic> data) =>
+      RecurrenceRule.fromStorage(
+          (data['rrule'] ?? data['recurrence']) as String?);
+
+  static List<Duration> _alertsFromDoc(Map<String, dynamic> data) =>
+      (data['alerts'] as List?)
+          ?.map((m) => Duration(minutes: (m as num).toInt()))
+          .toList() ??
+      const [];
 
   // ── Shared task sync ───────────────────────────────────────────────────────
   // A task created with "Add to their task list" exists on both phones. The
@@ -150,7 +215,10 @@ class ReminderService {
     DateTime? scheduledAt,
     bool? done,
     List<Map<String, dynamic>>? subtasks,
-    Recurrence? recurrence,
+    RecurrenceRule? recurrence,
+    DateTime? endsAt,
+    bool? allDay,
+    List<Duration>? alerts,
   }) async {
     if (testMode) return;
     final data = <String, dynamic>{
@@ -159,7 +227,10 @@ class ReminderService {
       if (done != null) 'done': done,
       if (subtasks != null) 'subtasks': subtasks,
       // Written even for `none` so clearing a repeat reaches the other phone.
-      if (recurrence != null) 'recurrence': recurrence.storage,
+      if (recurrence != null) ..._repeatFields(recurrence),
+      if (endsAt != null) 'endsAt': Timestamp.fromDate(endsAt),
+      if (allDay != null) 'allDay': allDay,
+      if (alerts != null) 'alerts': alerts.map((d) => d.inMinutes).toList(),
       'updatedBy': mySenderId,
       'updatedAt': FieldValue.serverTimestamp(),
     };
@@ -241,7 +312,10 @@ class ReminderService {
           : 'Reminder',
       scheduledAt: (data['scheduledAt'] as Timestamp).toDate(),
       done: data['done'] as bool?,
-      recurrence: Recurrence.fromStorage(data['recurrence'] as String?),
+      recurrence: _repeatFromDoc(data),
+      endsAt: (data['endsAt'] as Timestamp?)?.toDate(),
+      allDay: data['allDay'] as bool? ?? false,
+      alerts: _alertsFromDoc(data),
       subtasks: (data['subtasks'] as List?)
           ?.map((s) => {
                 'id': (s as Map)['id'] as String,
@@ -282,113 +356,117 @@ class ReminderService {
   }
 
   /// Reconcile the local todo list in SharedPreferences against the current
-  /// shared-doc set. Applies remote title/done/dueDate changes to linked
-  /// tasks and — when [applyDeletes] is true (server-confirmed snapshot) —
-  /// removes local copies whose doc has been deleted by the other side.
+  /// shared-doc set. Applies remote title/done/start changes to linked tasks
+  /// and — when [applyDeletes] is true (server-confirmed snapshot) — removes
+  /// local copies whose doc has been deleted by the other side.
   /// Returns true if the stored list changed.
   static Future<bool> applySharedSnapshot(
     SharedPreferences prefs,
     List<SharedTask> docs, {
     required bool applyDeletes,
   }) async {
-    final raw = prefs.getString(_todosKey);
-    if (raw == null) return false;
-    final list = jsonDecode(raw) as List;
+    if (prefs.getString(TaskStore.key) == null &&
+        prefs.getString(TaskStore.legacyKey) == null) {
+      return false;
+    }
+    final tasks = await TaskStore.load(prefs);
     final byId = {for (final d in docs) d.id: d};
     bool changed = false;
-    final removed = <Map>[];
+    final removed = <Task>[];
 
-    for (final e in list) {
-      final m = e as Map;
-      final localId = m['id'] as String;
-      var sid = m['sharedId'] as String?;
-      // Legacy entries (pre-sync) created on the recipient side carry the doc
-      // ID inside their local ID — backfill the link.
-      if (sid == null && localId.startsWith('reminder_')) {
-        sid = localId.substring('reminder_'.length);
-        m['sharedId'] = sid;
-        changed = true;
-      }
+    for (final task in tasks) {
+      // Task.fromJson already backfills sharedId from a legacy
+      // "reminder_<docId>" local id, so a pre-sync entry links itself on load.
+      final sid = task.sharedId;
       if (sid == null) continue; // not a shared task
 
       final doc = byId[sid];
       if (doc == null) {
-        if (applyDeletes) removed.add(m);
+        if (applyDeletes) removed.add(task);
         continue;
       }
 
-      if (m['title'] != doc.title) {
-        m['title'] = doc.title;
+      if (task.title != doc.title) {
+        task.title = doc.title;
         changed = true;
       }
-      if (doc.done != null && (m['done'] as bool? ?? false) != doc.done) {
-        m['done'] = doc.done;
+      if (doc.done != null && task.done != doc.done) {
+        task.done = doc.done!;
         changed = true;
       }
       // Sub-tasks: last-write-wins on the whole list. null means the doc
       // predates subtask-sync — leave the local copy untouched.
-      if (doc.subtasks != null &&
-          !_subtasksEqual(m['subtasks'] as List?, doc.subtasks!)) {
-        m['subtasks'] = doc.subtasks;
+      if (doc.subtasks != null && !_subtasksEqual(task.subtasks, doc.subtasks!)) {
+        task.subtasks =
+            doc.subtasks!.map((s) => SubTask.fromJson(s)).toList();
         changed = true;
       }
-      // Due date + repeat: only synced onto tasks that already track a due
-      // date. The creator may have declined "Remind me" — their copy has no
-      // dueDate and must not start firing notifications because the other side
+      if (task.allDay != doc.allDay) {
+        task.allDay = doc.allDay;
+        changed = true;
+      }
+      if (task.end != doc.endsAt) {
+        task.end = doc.endsAt;
+        changed = true;
+      }
+      // Start + repeat: only synced onto tasks that already track a start.
+      // The creator may have declined "Remind me" — their copy has no start
+      // and must not begin firing notifications because the other side
       // changed the time.
-      final localDue = m['dueDate'] as String?;
-      if (localDue != null) {
-        final localRecurrence =
-            Recurrence.fromStorage(m['recurrence'] as String?);
-        final dueChanged = DateTime.parse(localDue) != doc.scheduledAt;
-        final repeatChanged = localRecurrence != doc.recurrence;
-        if (dueChanged || repeatChanged) {
-          m['dueDate'] = doc.scheduledAt.toIso8601String();
-          if (doc.recurrence == Recurrence.none) {
-            m.remove('recurrence');
-          } else {
-            m['recurrence'] = doc.recurrence.storage;
-          }
+      if (task.start != null) {
+        final startChanged = task.start != doc.scheduledAt;
+        final repeatChanged = task.recurrence != doc.recurrence;
+        if (startChanged || repeatChanged) {
+          task.start = doc.scheduledAt;
+          task.recurrence = doc.recurrence;
           changed = true;
-          await _cancelNotificationsFor(localId, sid);
+          await _cancelNotificationsFor(task.id, sid);
           // A repeating reminder re-arms even when this occurrence has already
           // passed — its future occurrences still fire. One-shots do not.
-          final stillFires = doc.recurrence != Recurrence.none ||
+          final stillFires = doc.recurrence.repeats ||
               doc.scheduledAt.isAfter(DateTime.now());
-          if (!(m['done'] as bool? ?? false) && stillFires) {
-            await NotificationService.scheduleReminder(
-              id: localId.hashCode,
-              title: doc.title,
-              scheduledTime: doc.scheduledAt,
-              recurrence: doc.recurrence,
-            );
+          final legacy = doc.recurrence.toLegacy();
+          if (!task.done && stillFires) {
+            if (legacy == null) {
+              // Refuse rather than silently arm it as a one-shot; occurrence
+              // expansion for such rules is not built yet.
+              LogService.e('reminder',
+                  'repeat "${doc.recurrence.storage}" cannot be scheduled natively yet');
+            } else {
+              await NotificationService.scheduleReminder(
+                id: task.id.hashCode,
+                title: doc.title,
+                scheduledTime: doc.scheduledAt,
+                recurrence: legacy,
+              );
+            }
           }
         }
       }
     }
 
-    for (final m in removed) {
+    for (final task in removed) {
       changed = true;
-      await _cancelNotificationsFor(m['id'] as String, m['sharedId'] as String);
-      list.remove(m);
+      await _cancelNotificationsFor(task.id, task.sharedId!);
+      tasks.remove(task);
     }
 
-    if (changed) await prefs.setString(_todosKey, jsonEncode(list));
+    if (changed) await TaskStore.save(prefs, tasks);
     return changed;
   }
 
-  /// Value-compare a local subtask list (raw prefs maps) against a doc's, by
-  /// id/title/done in order — so an identical set never triggers a needless
-  /// rewrite (which would loop the two devices).
-  static bool _subtasksEqual(List? local, List<Map<String, dynamic>> doc) {
-    final a = local ?? const [];
-    if (a.length != doc.length) return false;
+  /// Value-compare a local subtask list against a doc's, by id/title/done in
+  /// order — so an identical set never triggers a needless rewrite (which
+  /// would loop the two devices).
+  static bool _subtasksEqual(
+      List<SubTask> local, List<Map<String, dynamic>> doc) {
+    if (local.length != doc.length) return false;
     for (var i = 0; i < doc.length; i++) {
-      final l = a[i] as Map;
+      final l = local[i];
       final r = doc[i];
-      if (l['id'] != r['id'] ||
-          l['title'] != r['title'] ||
-          (l['done'] as bool? ?? false) != (r['done'] as bool? ?? false)) {
+      if (l.id != r['id'] ||
+          l.title != r['title'] ||
+          l.done != (r['done'] as bool? ?? false)) {
         return false;
       }
     }
@@ -428,7 +506,10 @@ class ReminderService {
             : 'Reminder',
         scheduledAt: (data['scheduledAt'] as Timestamp).toDate(),
         addToList: (data['addToList'] as bool?) ?? false,
-        recurrence: Recurrence.fromStorage(data['recurrence'] as String?),
+        recurrence: _repeatFromDoc(data),
+        endsAt: (data['endsAt'] as Timestamp?)?.toDate(),
+        allDay: data['allDay'] as bool? ?? false,
+        alerts: _alertsFromDoc(data),
       );
 
   /// Mark a reminder as locally scheduled so the background worker skips it
@@ -459,26 +540,27 @@ class ReminderService {
             .map((c) => _pendingFromDoc(c.doc.id, c.doc.data()!)));
   }
 
-  static const _todosKey = 'todos_v1';
-
   /// Insert a reminder as a todo task into SharedPreferences.
   /// Guards against duplicates so it's safe to call from both the foreground
   /// stream handler and the background FCM/WorkManager worker.
   static Future<void> insertTodoToPrefs(
       SharedPreferences prefs, PendingReminder r) async {
-    final raw = prefs.getString(_todosKey);
-    final list = raw != null ? jsonDecode(raw) as List : <dynamic>[];
+    final tasks = await TaskStore.load(prefs);
     final guardId = 'reminder_${r.id}';
-    if (list.any((e) => (e as Map)['id'] == guardId)) return;
-    list.insert(0, {
-      'id': guardId,
-      'sharedId': r.id,
-      'title': r.title,
-      'done': false,
-      'dueDate': r.scheduledAt.toIso8601String(),
-      if (r.recurrence != Recurrence.none) 'recurrence': r.recurrence.storage,
-      'subtasks': <dynamic>[],
-    });
-    await prefs.setString(_todosKey, jsonEncode(list));
+    if (tasks.any((t) => t.id == guardId)) return;
+    tasks.insert(
+      0,
+      Task(
+        guardId,
+        r.title,
+        sharedId: r.id,
+        start: r.scheduledAt,
+        end: r.endsAt,
+        allDay: r.allDay,
+        alerts: r.alerts,
+        recurrence: r.recurrence,
+      ),
+    );
+    await TaskStore.save(prefs, tasks);
   }
 }

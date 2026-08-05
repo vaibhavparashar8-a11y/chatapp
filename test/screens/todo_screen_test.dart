@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:chatapp/screens/todo_screen.dart';
 import 'package:chatapp/services/notification_service.dart';
 import 'package:chatapp/services/reminder_service.dart';
+import 'package:chatapp/services/task_store.dart';
 import 'package:chatapp/services/remote_config_service.dart';
 import 'package:chatapp/services/device_service.dart';
 
@@ -153,7 +154,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final prefs = await SharedPreferences.getInstance();
-    final stored = jsonDecode(prefs.getString('todos_v1')!) as List;
+    final stored = jsonDecode(prefs.getString(TaskStore.key)!) as List;
     expect(stored.first['reminderDocId'], 'backup-doc-1');
     expect(stored.first['done'], isTrue);
   });
@@ -173,7 +174,7 @@ void main() {
     // The backed-up task appears and is persisted locally so it won't refetch.
     expect(find.text('Restored reminder'), findsOneWidget);
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getString('todos_v1'), isNotNull);
+    expect(prefs.getString(TaskStore.key), isNotNull);
   });
 
   testWidgets('records todoLastOpened when the todo app opens', (tester) async {
@@ -711,8 +712,8 @@ void main() {
     expect(find.text('Reminder cleared'), findsOneWidget);
 
     final prefs = await SharedPreferences.getInstance();
-    final stored = jsonDecode(prefs.getString('todos_v1')!) as List;
-    expect(stored.first['dueDate'], isNull);
+    final stored = jsonDecode(prefs.getString(TaskStore.key)!) as List;
+    expect(stored.first['start'], isNull);
   });
 
   testWidgets('ticking neither box reports that nothing was set',

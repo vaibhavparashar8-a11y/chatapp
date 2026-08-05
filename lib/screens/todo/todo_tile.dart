@@ -6,7 +6,7 @@ part of '../todo_screen.dart';
 // back to _TodoScreenState through callbacks so this widget stays state-free.
 
 class _TodoTile extends StatelessWidget {
-  final _Todo todo;
+  final Task todo;
   final bool isExpanded;
 
   /// Delivery status of a reminder THIS phone sent to the other person:
@@ -22,9 +22,9 @@ class _TodoTile extends StatelessWidget {
   final VoidCallback onSetReminder;
   final VoidCallback onDelete;
   final ValueChanged<bool?> onToggleDone;
-  final void Function(_SubTodo sub, bool? val) onToggleSubtask;
+  final void Function(SubTask sub, bool? val) onToggleSubtask;
   final ValueChanged<String> onDeleteSubtask;
-  final ValueChanged<_SubTodo> onEditSubtask;
+  final ValueChanged<SubTask> onEditSubtask;
   final VoidCallback onAddSubtask;
 
   const _TodoTile({
@@ -45,9 +45,9 @@ class _TodoTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasReminder = todo.dueDate != null;
+    final hasReminder = todo.start != null;
     final isOverdue =
-        hasReminder && todo.dueDate!.isBefore(DateTime.now()) && !todo.done;
+        hasReminder && todo.start!.isBefore(DateTime.now()) && !todo.done;
 
     Color accent;
     if (todo.done) {
@@ -158,7 +158,7 @@ class _TodoTile extends StatelessWidget {
                                                   : _kTodoAccentLight),
                                           const SizedBox(width: 3),
                                           Text(
-                                            formatDue(todo.dueDate!),
+                                            formatDue(todo.start!),
                                             style: TextStyle(
                                               fontSize: 11,
                                               color: isOverdue
@@ -169,8 +169,7 @@ class _TodoTile extends StatelessWidget {
                                                   : FontWeight.normal,
                                             ),
                                           ),
-                                          if (todo.recurrence !=
-                                              Recurrence.none) ...[
+                                          if (todo.recurrence.repeats) ...[
                                             const SizedBox(width: 6),
                                             const Icon(Icons.repeat,
                                                 size: 10,
@@ -178,7 +177,7 @@ class _TodoTile extends StatelessWidget {
                                             const SizedBox(width: 2),
                                             Text(
                                               todo.recurrence
-                                                  .shortLabel(todo.dueDate!),
+                                                  .shortLabel(todo.start!),
                                               style: const TextStyle(
                                                   fontSize: 11,
                                                   color: _kTodoAccentLight),
@@ -305,7 +304,7 @@ class _TodoTile extends StatelessWidget {
     );
   }
 
-  Widget _subtaskRow(_SubTodo sub) {
+  Widget _subtaskRow(SubTask sub) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
       child: Row(
