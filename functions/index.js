@@ -59,6 +59,9 @@ exports.onReminderCreated = functions.firestore
         title: data.title || 'Reminder',
         scheduledAt,
         addToList: String(data.addToList || false),
+        // Absent on docs written before recurrence-sync — the app parses a
+        // missing/unknown value back as "does not repeat".
+        recurrence: String(data.recurrence || 'none'),
       },
       android: {
         priority: 'high',

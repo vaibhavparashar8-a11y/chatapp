@@ -23,6 +23,15 @@ extension _TodoReminders on _TodoScreenState {
       if (todo.recurrence == Recurrence.none && !due.isAfter(now)) continue;
       // Clear any stale schedule (incl. weekday-group ids) before re-arming.
       await NotificationService.cancelReminderGroup(todo.id.hashCode);
+      // A task received from the other phone was armed by the delivery path
+      // under its doc id, not under this todo's id — so re-arming below would
+      // add a SECOND schedule and the reminder would fire twice. Clear that
+      // one too; this device's own id is the single owner afterwards.
+      final docId = todo.backingDocId;
+      if (docId != null) {
+        await NotificationService.cancelReminder(
+            NotificationService.docNotifId(docId));
+      }
       await NotificationService.scheduleReminder(
         id: todo.id.hashCode,
         title: todo.title,

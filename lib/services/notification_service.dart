@@ -26,6 +26,22 @@ class NotificationService {
         Recurrence recurrence,
       })> debugScheduled = [];
 
+  /// Records every notification id cancelled while [testMode] is on, so tests
+  /// can assert that both id families of a reminder were cleared. Tests should
+  /// clear it in setUp; it is unused in production.
+  @visibleForTesting
+  static final List<int> debugCancelled = [];
+
+  /// The notification id a Firestore reminder doc is armed under by the
+  /// delivery paths (FCM handler, WorkManager worker, `pendingStream`).
+  ///
+  /// A task can therefore hold **two** schedules: this one, and the one the
+  /// todo screen arms under `todoId.hashCode`. Both must be cancelled whenever
+  /// a reminder is re-armed, changed or deleted — otherwise a received shared
+  /// reminder fires twice. Kept here as the single definition so those call
+  /// sites can never drift apart again.
+  static int docNotifId(String docId) => docId.hashCode.abs() % 0x7FFFFFFF;
+
   static const _channelId = 'task_reminders';
   static const _channelName = 'Task Reminders';
   static const _tag = 'NotificationService';
@@ -277,7 +293,10 @@ class NotificationService {
       (baseId.abs() % 100000000) * 10 + weekday;
 
   static Future<void> cancelReminder(int id) async {
-    if (testMode) return;
+    if (testMode) {
+      debugCancelled.add(id);
+      return;
+    }
     try {
       await _plugin.cancel(id);
       dev.log('cancelReminder: id=$id', name: _tag);
@@ -290,7 +309,6 @@ class NotificationService {
   /// weekday-derived id a weekdays/weekends schedule could have used. Cheap
   /// (8 cancels) and safe regardless of the actual recurrence.
   static Future<void> cancelReminderGroup(int baseId) async {
-    if (testMode) return;
     await cancelReminder(baseId);
     for (var wd = 1; wd <= 7; wd++) {
       await cancelReminder(_weekdayNotifId(baseId, wd));

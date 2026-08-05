@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:chatapp/models/recurrence.dart';
 import 'package:chatapp/services/notification_service.dart';
 import 'package:chatapp/services/reminder_service.dart';
 
@@ -12,6 +13,8 @@ void main() {
   setUp(() {
     NotificationService.testMode = true;
     ReminderService.testMode = true;
+    NotificationService.debugScheduled.clear();
+    NotificationService.debugCancelled.clear();
   });
 
   tearDown(() {
@@ -323,6 +326,136 @@ void main() {
       final stored = storedTasks(prefs);
       expect(stored.first['id'], 'reminder_doc9');
       expect(stored.first['sharedId'], 'doc9');
+    });
+
+    test('carries the creator\'s repeat onto the received task', () async {
+      // Regression: recurrence was never transported, so a shared "every
+      // weekday" reminder landed on the other phone as a one-shot.
+      final prefs = await prefsWith([]);
+      await ReminderService.insertTodoToPrefs(
+        prefs,
+        PendingReminder(
+          id: 'doc9',
+          title: 'Standup',
+          scheduledAt: due,
+          addToList: true,
+          recurrence: Recurrence.weekdays,
+        ),
+      );
+      expect(storedTasks(prefs).first['recurrence'], 'weekdays');
+    });
+
+    test('a one-shot reminder stores no recurrence field', () async {
+      final prefs = await prefsWith([]);
+      await ReminderService.insertTodoToPrefs(
+        prefs,
+        PendingReminder(
+            id: 'doc9', title: 'Once', scheduledAt: due, addToList: true),
+      );
+      expect(storedTasks(prefs).first.containsKey('recurrence'), isFalse);
+    });
+  });
+
+  group('applySharedSnapshot — recurrence', () {
+    test('a repeat change alone re-arms the local reminder with it', () async {
+      // The due date is unchanged — only the repeat differs. This used to be
+      // invisible to the mirror, leaving the local copy a one-shot.
+      final prefs = await prefsWith([
+        localTask('a', sharedId: 'doc1', dueDate: due.toIso8601String()),
+      ]);
+      final changed = await ReminderService.applySharedSnapshot(
+        prefs,
+        [
+          SharedTask(
+              id: 'doc1',
+              title: 'Task',
+              scheduledAt: due,
+              recurrence: Recurrence.daily),
+        ],
+        applyDeletes: true,
+      );
+      expect(changed, isTrue);
+      expect(storedTasks(prefs).first['recurrence'], 'daily');
+      expect(NotificationService.debugScheduled.single.recurrence,
+          Recurrence.daily);
+    });
+
+    test('clearing the repeat remotely removes the local field', () async {
+      final prefs = await prefsWith([
+        localTask('a', sharedId: 'doc1', dueDate: due.toIso8601String()),
+      ]);
+      // Seed the local task as repeating.
+      final seeded = storedTasks(prefs);
+      (seeded.first as Map)['recurrence'] = 'daily';
+      await prefs.setString(todosKey, jsonEncode(seeded));
+
+      final changed = await ReminderService.applySharedSnapshot(
+        prefs,
+        [SharedTask(id: 'doc1', title: 'Task', scheduledAt: due)],
+        applyDeletes: true,
+      );
+      expect(changed, isTrue);
+      expect(storedTasks(prefs).first.containsKey('recurrence'), isFalse);
+    });
+
+    test('a past-dated repeating reminder is still re-armed', () async {
+      // Future occurrences still fire, so an elapsed occurrence must not stop
+      // the mirror re-arming it — unlike a one-shot.
+      final past = DateTime.now().subtract(const Duration(days: 2));
+      final prefs = await prefsWith([
+        localTask('a',
+            sharedId: 'doc1',
+            dueDate: DateTime.now().toIso8601String()),
+      ]);
+      await ReminderService.applySharedSnapshot(
+        prefs,
+        [
+          SharedTask(
+              id: 'doc1',
+              title: 'Task',
+              scheduledAt: past,
+              recurrence: Recurrence.weekly),
+        ],
+        applyDeletes: true,
+      );
+      expect(NotificationService.debugScheduled, hasLength(1));
+      expect(NotificationService.debugScheduled.single.recurrence,
+          Recurrence.weekly);
+    });
+
+    test('a past-dated one-shot is not re-armed', () async {
+      final past = DateTime.now().subtract(const Duration(days: 2));
+      final prefs = await prefsWith([
+        localTask('a',
+            sharedId: 'doc1', dueDate: DateTime.now().toIso8601String()),
+      ]);
+      await ReminderService.applySharedSnapshot(
+        prefs,
+        [SharedTask(id: 'doc1', title: 'Task', scheduledAt: past)],
+        applyDeletes: true,
+      );
+      expect(NotificationService.debugScheduled, isEmpty);
+    });
+
+    test('rescheduling cancels both the local group and the doc-id alarm',
+        () async {
+      // A shared task can be armed under the local todo-id family (incl.
+      // weekday-derived ids) AND under the doc id by the delivery path.
+      final newDue = DateTime(2031, 5, 5, 8, 0);
+      final prefs = await prefsWith([
+        localTask('a', sharedId: 'doc1', dueDate: due.toIso8601String()),
+      ]);
+      await ReminderService.applySharedSnapshot(
+        prefs,
+        [SharedTask(id: 'doc1', title: 'Task', scheduledAt: newDue)],
+        applyDeletes: true,
+      );
+      expect(NotificationService.debugCancelled,
+          contains(NotificationService.docNotifId('doc1')));
+      expect(NotificationService.debugCancelled, contains('a'.hashCode),
+          reason: 'base local id');
+      expect(NotificationService.debugCancelled.length, greaterThan(2),
+          reason: 'weekday-derived ids are group-cancelled too');
     });
   });
 }
