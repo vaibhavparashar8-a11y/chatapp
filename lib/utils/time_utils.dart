@@ -43,3 +43,49 @@ String _hm(DateTime dt) =>
 /// as 17:00). Converting to local fixes display, scheduling and storage.
 DateTime? parseReminderTimestamp(String iso) =>
     DateTime.tryParse(iso)?.toLocal();
+
+// ── Calendar helpers ─────────────────────────────────────────────────────────
+
+const _monthNames = [
+  '',
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December'
+];
+
+/// "August 2026" — the calendar screen's app-bar title.
+String monthYearLabel(DateTime month) =>
+    '${_monthNames[month.month]} ${month.year}';
+
+/// The cells of a Monday-first month grid: leading/trailing nulls pad the weeks
+/// so the list is always a whole number of rows of 7.
+///
+/// Returned as a flat list because the grid draws it row by row; nulls render
+/// as blanks rather than as days from the neighbouring months, which keeps
+/// "which month am I looking at" unambiguous.
+List<DateTime?> monthCells(DateTime month) {
+  final first = DateTime(month.year, month.month);
+  // DateTime.weekday is 1=Mon..7=Sun, so Monday-first padding is weekday-1.
+  final leading = first.weekday - 1;
+  // Day 0 of the next month is the last day of this one.
+  final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
+
+  final cells = <DateTime?>[
+    ...List.filled(leading, null),
+    for (var d = 1; d <= daysInMonth; d++) DateTime(month.year, month.month, d),
+  ];
+  // Pad to a whole number of weeks.
+  while (cells.length % 7 != 0) {
+    cells.add(null);
+  }
+  return cells;
+}
