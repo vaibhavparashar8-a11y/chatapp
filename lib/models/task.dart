@@ -81,6 +81,41 @@ class Task {
   /// before `createdBy` existed count as mine.
   bool isMine(String me) => createdBy == null || createdBy == me;
 
+  /// Whether this task's reminder falls on the calendar day [day].
+  ///
+  /// A one-shot occurs only on its own date; a repeating one occurs on every
+  /// matching day from [start] onward. This is **display-only** expansion for
+  /// the calendar grid — the actual alarms are owned by AlarmManager via
+  /// `NotificationService`, which repeats them natively. Nothing here schedules
+  /// anything, so the two can't drift into disagreement about when a reminder
+  /// fires; they only agree on which days to *draw*.
+  bool occursOn(DateTime day) {
+    final s = start;
+    if (s == null) return false;
+    final target = DateTime(day.year, day.month, day.day);
+    final first = DateTime(s.year, s.month, s.day);
+    if (target.isBefore(first)) return false; // never before it was set
+    switch (recurrence) {
+      case Recurrence.none:
+        return target == first;
+      case Recurrence.daily:
+        return true;
+      case Recurrence.weekly:
+        return target.weekday == first.weekday;
+      case Recurrence.weekdays:
+      case Recurrence.weekends:
+        return recurrence.fireDays.contains(target.weekday);
+    }
+  }
+
+  /// This task's reminder time on [day] — the [start] time-of-day placed on
+  /// that date. Null when it doesn't occur then.
+  DateTime? occurrenceOn(DateTime day) {
+    if (!occursOn(day)) return null;
+    final s = start!;
+    return DateTime(day.year, day.month, day.day, s.hour, s.minute);
+  }
+
   // ── Storage (SharedPreferences `todos_v2`) ─────────────────────────────────
 
   Map<String, dynamic> toJson() => {

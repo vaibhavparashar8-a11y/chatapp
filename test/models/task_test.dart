@@ -113,6 +113,83 @@ void main() {
     });
   });
 
+  group('occursOn — which calendar days a reminder is drawn on', () {
+    // Mon 2026-08-03 .. Sun 2026-08-09.
+    final mon = DateTime(2026, 8, 3);
+    final wed = DateTime(2026, 8, 5);
+    final sat = DateTime(2026, 8, 8);
+    final sun = DateTime(2026, 8, 9);
+    final nextMon = DateTime(2026, 8, 10);
+
+    Task at(DateTime start, Recurrence r) =>
+        Task('t', 'x', start: start, recurrence: r);
+
+    test('a task with no reminder occurs nowhere', () {
+      expect(Task('t', 'x').occursOn(mon), isFalse);
+    });
+
+    test('a one-shot occurs only on its own date', () {
+      final t = at(DateTime(2026, 8, 5, 9, 30), Recurrence.none);
+      expect(t.occursOn(wed), isTrue);
+      expect(t.occursOn(mon), isFalse);
+      expect(t.occursOn(nextMon), isFalse);
+    });
+
+    test('the time of day does not affect which day it lands on', () {
+      final late = at(DateTime(2026, 8, 5, 23, 59), Recurrence.none);
+      final early = at(DateTime(2026, 8, 5, 0, 1), Recurrence.none);
+      expect(late.occursOn(wed), isTrue);
+      expect(early.occursOn(wed), isTrue);
+    });
+
+    test('nothing occurs before the day it was set', () {
+      final t = at(DateTime(2026, 8, 5, 9), Recurrence.daily);
+      expect(t.occursOn(mon), isFalse, reason: 'two days before it existed');
+      expect(t.occursOn(wed), isTrue);
+    });
+
+    test('daily occurs every day from the start onward', () {
+      final t = at(DateTime(2026, 8, 3, 9), Recurrence.daily);
+      for (final d in [mon, wed, sat, sun, nextMon]) {
+        expect(t.occursOn(d), isTrue, reason: '$d');
+      }
+    });
+
+    test('weekly occurs on the start weekday only', () {
+      final t = at(DateTime(2026, 8, 3, 9), Recurrence.weekly); // a Monday
+      expect(t.occursOn(mon), isTrue);
+      expect(t.occursOn(nextMon), isTrue);
+      expect(t.occursOn(wed), isFalse);
+    });
+
+    test('weekdays covers Mon–Fri, weekends covers Sat–Sun', () {
+      final wk = at(DateTime(2026, 8, 3, 9), Recurrence.weekdays);
+      expect(wk.occursOn(mon), isTrue);
+      expect(wk.occursOn(wed), isTrue);
+      expect(wk.occursOn(sat), isFalse);
+      expect(wk.occursOn(sun), isFalse);
+
+      final we = at(DateTime(2026, 8, 3, 9), Recurrence.weekends);
+      expect(we.occursOn(sat), isTrue);
+      expect(we.occursOn(sun), isTrue);
+      expect(we.occursOn(mon), isFalse);
+    });
+  });
+
+  group('occurrenceOn', () {
+    test('places the start time on the requested day', () {
+      final t = Task('t', 'x',
+          start: DateTime(2026, 8, 3, 7, 45), recurrence: Recurrence.daily);
+      expect(t.occurrenceOn(DateTime(2026, 8, 20)),
+          DateTime(2026, 8, 20, 7, 45));
+    });
+
+    test('is null on a day the task does not occur', () {
+      final t = Task('t', 'x', start: DateTime(2026, 8, 3, 7, 45));
+      expect(t.occurrenceOn(DateTime(2026, 8, 4)), isNull);
+    });
+  });
+
   group('derived values', () {
     test('backingDocId prefers sharedId over reminderDocId', () {
       expect(

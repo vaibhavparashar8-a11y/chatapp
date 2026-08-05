@@ -638,6 +638,8 @@ Shared time-formatting helpers extracted so they can be unit-tested independentl
 | `formatLastSeen(DateTime ts)` | Formats chat app-bar subtitle — "just now", "today at HH:MM", "yesterday at HH:MM", "DD/MM at HH:MM" |
 | `formatDue(DateTime dt)` | Formats to-do tile subtitle — "Due today/tomorrow/DD/MM at HH:MM", "Was due ..." for overdue |
 | `parseReminderTimestamp(String iso)` | Parses an FCM payload timestamp **into local time**. Payload strings are UTC (`...Z`); parsing without `.toLocal()` displayed UTC wall-clock time (a 22:30 IST reminder showed as 17:00) |
+| `monthYearLabel(DateTime month)` | "August 2026" — the calendar app-bar title |
+| `monthCells(DateTime month)` | The cells of a **Monday-first** month grid as a flat `List<DateTime?>`, padded with nulls to a whole number of weeks. Nulls render as blanks rather than neighbouring months' days, so "which month am I looking at" stays unambiguous |
 
 **Key invariant** — both functions compare **calendar days**, not elapsed hours:
 
@@ -1244,6 +1246,7 @@ setting.
 | Delivery confirmation | A reminder you send the other person shows **"Not delivered"** → **"Delivered"** once their device receives and arms it (`locallyScheduled` flips true). Both the FCM push handler and the 15-min worker flip it, so "Delivered" appears as soon as their phone processes the push — not only on the next worker run. "Actually fired" isn't tracked — Android has no reliable background "notification shown" callback |
 | Recurring reminders | Repeat = Every day / Every week / Weekdays / Weekends (`Recurrence`); tile shows the repeat label. No "every N days" (needs fragile reschedule-on-fire). **Syncs cross-device**: written to the reminder doc, carried in the FCM payload, and mirrored both ways for shared tasks. "done" keeps repeating until Repeat = None or the task is deleted |
 | Clearing a reminder | Re-open the dialog and untick **both** boxes → the local alarm is cancelled and `dueDate`/`recurrence` cleared ("Reminder cleared"). Unticking "Remind me" alone always cancels this phone's alarm, whatever else is ticked |
+| Calendar | AppBar calendar icon → [`CalendarScreen`](#libscreenscalendar_screendart-and-part-files), a month view over these same reminders. The list reloads on return, since the calendar can add/edit/delete |
 | Open chat | Type `flutter` in the add-task field (hidden trigger) |
 | Role reset | Debug builds: double-tap the AppBar title |
 
@@ -1262,6 +1265,63 @@ Tasks persist as JSON in SharedPreferences under **`todos_v2`**, via
 `todos_v1` list on first read. `todoRefreshNotifier` (in constants.dart)
 signals the screen to reload when a remote task arrives or the shared-task
 mirror changes something.
+
+---
+
+### `lib/screens/calendar_screen.dart` and part files
+
+A month view over **the same reminders the todo list shows** — opened from the
+calendar icon in the todo AppBar. Deliberately not a separate "events" feature:
+it reads and writes the very same `Task` list through `TaskStore`, so anything
+added here appears on the todo screen and vice versa. There are no start/end
+times, durations or all-day events; a task is a title plus one instant.
+
+Split into `part` files under `screens/calendar/`: `calendar_grid.dart` (the
+`_OwnerFilter` tick boxes + `_MonthGrid`), `calendar_day_list.dart` (the
+selected day's rows), and `calendar_edit.dart` (the add/edit/delete mutations
+as an extension, plus the `_TaskEditDialog` widget).
+
+| Feature | How |
+|---|---|
+| Month grid | Monday-first, built from `monthCells()`. Up to three dots per day for the reminders on it; today is outlined, the selected day filled |
+| Day list | Tap a day → its reminders, earliest first, with time and repeat label |
+| Add | FAB → title / time / repeat → creates a task on the **selected** day, stamped `createdBy: mySenderId` |
+| Edit | Tap a row → same dialog. Re-arms the alarm and writes through to the reminder doc for shared tasks |
+| Complete / delete | Checkbox / swipe-left — both write through, exactly like the todo screen |
+| Month navigation | Chevrons step a month; **Today** returns to the current month and selects today |
+| Mine / Theirs | Tick boxes filtering by `Task.isMine(mySenderId)` |
+
+**Repeating reminders are expanded for display only.** `Task.occursOn(day)`
+decides which days a task is drawn on (daily → every day from its start;
+weekly → the start's weekday; weekdays/weekends → those days), and
+`occurrenceOn(day)` places the start's time-of-day on that date. Nothing here
+schedules anything — the alarms stay owned by AlarmManager via
+`NotificationService`, which repeats them natively. The two therefore can't
+drift into disagreeing about when a reminder *fires*; they only agree on which
+days to *draw*.
+
+**Editing a repeat moves the whole series.** The model has no per-occurrence
+overrides, so `_editTask` keeps the task's original start *date* and changes
+only the time — otherwise editing a reminder from a day you happened to be
+viewing would silently move the series to that day.
+
+**The Mine/Theirs filter only spans what is already on this device**: your own
+tasks plus ones explicitly shared ("Add to notify task list"). Ticking
+**Theirs** shows reminders the other person shared with you — *not* their whole
+list, which this device never receives. The last ticked box cannot be cleared,
+so the calendar is never inexplicably empty. `isMine` treats a null `createdBy`
+as mine (see §5 `Task`), so tasks stored before that field existed don't vanish
+under the filter.
+
+---
+
+### `lib/theme/app_palette.dart`
+
+The dark-violet palette, shared by every screen. It used to live as private
+`_kTodo*` constants inside `screens/todo/todo_theme.dart` — a `part` file, so
+nothing outside the todo screen could reach it. The todo parts still refer to
+the old private names, now aliased to these, so the move is behaviour-neutral
+and no todo call site changed.
 
 ---
 
@@ -1714,12 +1774,16 @@ test/
 │   ├── recurrence_test.dart             ← storage round-trip, fireDays, shortLabel, abbrev
 │   └── task_test.dart                   ← toJson/fromJson round-trip, reading the v1
 │                                           format (dueDate), sharedId backfill,
-│                                           isMine (incl. null = mine), backingDocId
+│                                           isMine (incl. null = mine), backingDocId,
+│                                           occursOn/occurrenceOn per recurrence
 ├── utils/
 │   ├── time_utils_test.dart             ← formatLastSeen, formatDue,
 │   │                                       parseReminderTimestamp (UTC→local regression)
 │   ├── link_utils_test.dart             ← splitLinks URL detection (www, punctuation,
 │   │                                       multiple links, plain text)
+│   ├── calendar_utils_test.dart         ← monthYearLabel; monthCells (whole weeks,
+│   │                                       Monday-first padding, leap February,
+│   │                                       every day once, no foreign months)
 │   └── call_signal_interpreter_test.dart ← interpretCallSignal event mapping,
 │                                            callerStatusLabel priority (§6.4)
 ├── services/
@@ -1747,6 +1811,11 @@ test/
     │                                       re-arm clears the received task's doc-id alarm
     │                                       (no double-fire), unticking "Remind me" clears
     │                                       the alarm, neither-box-ticked feedback
+    ├── calendar_screen_test.dart        ← month rendering, day selection, repeats drawn
+    │                                       on every occurrence, Mine/Theirs filter
+    │                                       (incl. last-box-cannot-clear and
+    │                                       null-creator-is-mine), month navigation,
+    │                                       add/edit/complete/delete write-through
     ├── calls_screen_test.dart           ← call history rendering
     ├── chat_screen_lifecycle_test.dart  ← background-leave navigation vs live calls
     │                                       (uses DeviceService.testMode seam)
