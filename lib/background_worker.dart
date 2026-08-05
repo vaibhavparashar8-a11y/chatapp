@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
 import 'constants.dart';
+import 'models/recurrence.dart';
 import 'services/notification_service.dart';
 import 'services/reminder_service.dart';
 import 'services/digest_service.dart';
@@ -53,7 +54,7 @@ void callbackDispatcher() {
     for (final r in pending) {
       // Skip reminders already in the past (more than 1 min ago) — but a
       // repeating reminder still has future occurrences, so never drop those.
-      if (!r.recurrence.repeats &&
+      if (r.recurrence == Recurrence.none &&
           r.scheduledAt.isBefore(DateTime.now().subtract(const Duration(minutes: 1)))) {
         // Still mark it so we don't keep re-fetching it.
         try {
@@ -66,21 +67,13 @@ void callbackDispatcher() {
 
       // Schedule the local notification — identical to a self-set reminder
       // (no sender attribution → discrete).
-      // A rule the OS cannot repeat natively has no schedule path yet — leave
-      // it unscheduled rather than silently arming a one-shot.
-      final repeat = r.recurrence.toLegacy();
-      if (repeat == null) {
-        LogService.e('worker',
-            'repeat "${r.recurrence.storage}" cannot be scheduled natively yet');
-        continue;
-      }
       bool scheduled = false;
       try {
         scheduled = await NotificationService.scheduleReminder(
           id: NotificationService.docNotifId(r.id),
           title: r.title,
           scheduledTime: r.scheduledAt,
-          recurrence: repeat,
+          recurrence: r.recurrence,
         );
       } catch (_) {
         continue; // leave locallyScheduled=false so we retry next interval

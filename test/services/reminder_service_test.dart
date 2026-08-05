@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:chatapp/models/recurrence.dart';
-import 'package:chatapp/models/recurrence_rule.dart';
 import 'package:chatapp/services/notification_service.dart';
 import 'package:chatapp/services/reminder_service.dart';
 import 'package:chatapp/services/task_store.dart';
@@ -345,10 +344,10 @@ void main() {
           title: 'Standup',
           scheduledAt: due,
           addToList: true,
-          recurrence: RecurrenceRule.fromLegacy(Recurrence.weekdays),
+          recurrence: Recurrence.weekdays,
         ),
       );
-      expect(storedTasks(prefs).first['rrule'], 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR');
+      expect(storedTasks(prefs).first['recurrence'], 'weekdays');
     });
 
     test('a one-shot reminder stores no recurrence field', () async {
@@ -358,7 +357,7 @@ void main() {
         PendingReminder(
             id: 'doc9', title: 'Once', scheduledAt: due, addToList: true),
       );
-      expect(storedTasks(prefs).first.containsKey('rrule'), isFalse);
+      expect(storedTasks(prefs).first.containsKey('recurrence'), isFalse);
     });
   });
 
@@ -376,12 +375,12 @@ void main() {
               id: 'doc1',
               title: 'Task',
               scheduledAt: due,
-              recurrence: RecurrenceRule.fromLegacy(Recurrence.daily)),
+              recurrence: Recurrence.daily),
         ],
         applyDeletes: true,
       );
       expect(changed, isTrue);
-      expect(storedTasks(prefs).first['rrule'], 'FREQ=DAILY');
+      expect(storedTasks(prefs).first['recurrence'], 'daily');
       expect(NotificationService.debugScheduled.single.recurrence,
           Recurrence.daily);
     });
@@ -402,7 +401,7 @@ void main() {
         applyDeletes: true,
       );
       expect(changed, isTrue);
-      expect(storedTasks(prefs).first.containsKey('rrule'), isFalse);
+      expect(storedTasks(prefs).first.containsKey('recurrence'), isFalse);
     });
 
     test('a past-dated repeating reminder is still re-armed', () async {
@@ -421,7 +420,7 @@ void main() {
               id: 'doc1',
               title: 'Task',
               scheduledAt: past,
-              recurrence: RecurrenceRule.fromLegacy(Recurrence.weekly)),
+              recurrence: Recurrence.weekly),
         ],
         applyDeletes: true,
       );

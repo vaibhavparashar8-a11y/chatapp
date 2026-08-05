@@ -59,17 +59,12 @@ exports.onReminderCreated = functions.firestore
         title: data.title || 'Reminder',
         scheduledAt,
         addToList: String(data.addToList || false),
-        // Repeat, dual-written: `rrule` is the RRULE string the current app
-        // reads; `recurrence` is the legacy enum name kept so a phone still on
-        // the previous APK keeps working during a rollout. Both are absent on
-        // docs written before repeat-sync — the app parses a missing/unknown
-        // value back as "does not repeat".
-        rrule: String(data.rrule || ''),
+        // Absent on docs written before repeat-sync — the app parses a
+        // missing/unknown value back as "does not repeat".
         recurrence: String(data.recurrence || 'none'),
-        endsAt: data.endsAt && data.endsAt.toDate
-          ? data.endsAt.toDate().toISOString()
-          : '',
-        allDay: String(data.allDay || false),
+        // Lets the recipient file the reminder under "Theirs" on the calendar
+        // instead of defaulting it to their own.
+        createdBy: String(data.createdBy || ''),
       },
       android: {
         priority: 'high',

@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:chatapp/models/recurrence.dart';
-import 'package:chatapp/models/recurrence_rule.dart';
 import 'package:chatapp/models/task.dart';
 
 void main() {
@@ -11,12 +10,10 @@ void main() {
         'Dentist',
         done: true,
         start: DateTime(2030, 5, 1, 9, 0),
-        end: DateTime(2030, 5, 1, 10, 30),
-        allDay: false,
-        alerts: const [Duration(minutes: 10), Duration(hours: 1)],
         subtasks: [SubTask('s1', 'Bring card', done: true)],
+        createdBy: 'B',
         sharedId: 'doc1',
-        recurrence: RecurrenceRule(freq: Freq.weekly, interval: 2),
+        recurrence: Recurrence.weekdays,
       );
 
       final back = Task.fromJson(t.toJson());
@@ -25,25 +22,22 @@ void main() {
       expect(back.title, 'Dentist');
       expect(back.done, isTrue);
       expect(back.start, DateTime(2030, 5, 1, 9, 0));
-      expect(back.end, DateTime(2030, 5, 1, 10, 30));
-      expect(back.allDay, isFalse);
-      expect(back.alerts, const [Duration(minutes: 10), Duration(hours: 1)]);
       expect(back.subtasks.single.title, 'Bring card');
       expect(back.subtasks.single.done, isTrue);
+      expect(back.createdBy, 'B');
       expect(back.sharedId, 'doc1');
-      expect(back.recurrence, RecurrenceRule(freq: Freq.weekly, interval: 2));
-    });
-
-    test('an all-day task keeps its flag', () {
-      final t = Task('t1', 'Holiday',
-          start: DateTime(2030, 5, 1), allDay: true);
-      expect(Task.fromJson(t.toJson()).allDay, isTrue);
+      expect(back.recurrence, Recurrence.weekdays);
     });
 
     test('empty optional fields are omitted from the JSON', () {
       final json = Task('t1', 'Bare').toJson();
-      for (final key in ['start', 'end', 'allDay', 'alerts', 'rrule',
-        'sharedId', 'reminderDocId']) {
+      for (final key in [
+        'start',
+        'recurrence',
+        'createdBy',
+        'sharedId',
+        'reminderDocId'
+      ]) {
         expect(json.containsKey(key), isFalse, reason: key);
       }
     });
@@ -59,30 +53,26 @@ void main() {
         'subtasks': <dynamic>[],
       });
       expect(t.start, DateTime(2030, 1, 1, 9, 0));
-      expect(t.end, isNull);
-      expect(t.allDay, isFalse);
-      expect(t.alerts, isEmpty);
     });
 
-    test('a legacy recurrence enum name is read as a rule', () {
+    test('a stored recurrence name is read back', () {
       final t = Task.fromJson({
         'id': 't1',
         'title': 'Standup',
         'recurrence': 'weekdays',
         'subtasks': <dynamic>[],
       });
-      expect(t.recurrence, RecurrenceRule.fromLegacy(Recurrence.weekdays));
+      expect(t.recurrence, Recurrence.weekdays);
     });
 
-    test('rrule wins over a stale legacy recurrence field', () {
+    test('an unknown recurrence falls back to none', () {
       final t = Task.fromJson({
         'id': 't1',
         'title': 'Task',
-        'rrule': 'FREQ=DAILY;INTERVAL=3',
-        'recurrence': 'none',
+        'recurrence': 'fortnightly',
         'subtasks': <dynamic>[],
       });
-      expect(t.recurrence, RecurrenceRule(freq: Freq.daily, interval: 3));
+      expect(t.recurrence, Recurrence.none);
     });
 
     test('a legacy reminder_ id backfills sharedId', () {
@@ -108,22 +98,104 @@ void main() {
     });
   });
 
+  group('isMine — drives the calendar Mine/Theirs filter', () {
+    test('matches on the creator role', () {
+      expect(Task('t', 'x', createdBy: 'A').isMine('A'), isTrue);
+      expect(Task('t', 'x', createdBy: 'A').isMine('B'), isFalse);
+      expect(Task('t', 'x', createdBy: 'B').isMine('B'), isTrue);
+    });
+
+    test('a task with no creator counts as mine', () {
+      // Tasks stored before createdBy existed can only have been written on
+      // this phone, so they must not disappear when the filter is on.
+      expect(Task('t', 'x').isMine('A'), isTrue);
+      expect(Task('t', 'x').isMine('B'), isTrue);
+    });
+  });
+
+  group('occursOn — which calendar days a reminder is drawn on', () {
+    // Mon 2026-08-03 .. Sun 2026-08-09.
+    final mon = DateTime(2026, 8, 3);
+    final wed = DateTime(2026, 8, 5);
+    final sat = DateTime(2026, 8, 8);
+    final sun = DateTime(2026, 8, 9);
+    final nextMon = DateTime(2026, 8, 10);
+
+    Task at(DateTime start, Recurrence r) =>
+        Task('t', 'x', start: start, recurrence: r);
+
+    test('a task with no reminder occurs nowhere', () {
+      expect(Task('t', 'x').occursOn(mon), isFalse);
+    });
+
+    test('a one-shot occurs only on its own date', () {
+      final t = at(DateTime(2026, 8, 5, 9, 30), Recurrence.none);
+      expect(t.occursOn(wed), isTrue);
+      expect(t.occursOn(mon), isFalse);
+      expect(t.occursOn(nextMon), isFalse);
+    });
+
+    test('the time of day does not affect which day it lands on', () {
+      final late = at(DateTime(2026, 8, 5, 23, 59), Recurrence.none);
+      final early = at(DateTime(2026, 8, 5, 0, 1), Recurrence.none);
+      expect(late.occursOn(wed), isTrue);
+      expect(early.occursOn(wed), isTrue);
+    });
+
+    test('nothing occurs before the day it was set', () {
+      final t = at(DateTime(2026, 8, 5, 9), Recurrence.daily);
+      expect(t.occursOn(mon), isFalse, reason: 'two days before it existed');
+      expect(t.occursOn(wed), isTrue);
+    });
+
+    test('daily occurs every day from the start onward', () {
+      final t = at(DateTime(2026, 8, 3, 9), Recurrence.daily);
+      for (final d in [mon, wed, sat, sun, nextMon]) {
+        expect(t.occursOn(d), isTrue, reason: '$d');
+      }
+    });
+
+    test('weekly occurs on the start weekday only', () {
+      final t = at(DateTime(2026, 8, 3, 9), Recurrence.weekly); // a Monday
+      expect(t.occursOn(mon), isTrue);
+      expect(t.occursOn(nextMon), isTrue);
+      expect(t.occursOn(wed), isFalse);
+    });
+
+    test('weekdays covers Mon–Fri, weekends covers Sat–Sun', () {
+      final wk = at(DateTime(2026, 8, 3, 9), Recurrence.weekdays);
+      expect(wk.occursOn(mon), isTrue);
+      expect(wk.occursOn(wed), isTrue);
+      expect(wk.occursOn(sat), isFalse);
+      expect(wk.occursOn(sun), isFalse);
+
+      final we = at(DateTime(2026, 8, 3, 9), Recurrence.weekends);
+      expect(we.occursOn(sat), isTrue);
+      expect(we.occursOn(sun), isTrue);
+      expect(we.occursOn(mon), isFalse);
+    });
+  });
+
+  group('occurrenceOn', () {
+    test('places the start time on the requested day', () {
+      final t = Task('t', 'x',
+          start: DateTime(2026, 8, 3, 7, 45), recurrence: Recurrence.daily);
+      expect(t.occurrenceOn(DateTime(2026, 8, 20)),
+          DateTime(2026, 8, 20, 7, 45));
+    });
+
+    test('is null on a day the task does not occur', () {
+      final t = Task('t', 'x', start: DateTime(2026, 8, 3, 7, 45));
+      expect(t.occurrenceOn(DateTime(2026, 8, 4)), isNull);
+    });
+  });
+
   group('derived values', () {
     test('backingDocId prefers sharedId over reminderDocId', () {
       expect(
           Task('t', 'x', sharedId: 'a', reminderDocId: 'b').backingDocId, 'a');
       expect(Task('t', 'x', reminderDocId: 'b').backingDocId, 'b');
       expect(Task('t', 'x').backingDocId, isNull);
-    });
-
-    test('duration is null unless both ends are set', () {
-      final start = DateTime(2030, 1, 1, 9);
-      expect(Task('t', 'x', start: start).duration, isNull);
-      expect(Task('t', 'x', end: start).duration, isNull);
-      expect(
-          Task('t', 'x', start: start, end: start.add(const Duration(hours: 2)))
-              .duration,
-          const Duration(hours: 2));
     });
 
     test('hasReminder and doneSubtasks', () {

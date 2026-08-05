@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'chat_screen.dart';
+import 'calendar_screen.dart';
 import '../services/device_service.dart';
 import '../services/remote_config_service.dart';
 import '../services/notification_service.dart';
@@ -12,8 +13,8 @@ import '../services/log_service.dart';
 import '../services/digest_service.dart';
 import '../services/task_store.dart';
 import '../models/recurrence.dart';
-import '../models/recurrence_rule.dart';
 import '../models/task.dart';
+import '../theme/app_palette.dart';
 import '../constants.dart' show mySenderId, todoRefreshNotifier;
 import '../utils/time_utils.dart';
 
@@ -135,6 +136,15 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
 
   // ── Navigation ────────────────────────────────────────────────────────────
 
+  /// Open the month view over these same reminders. Reloads on return, since
+  /// the calendar can add, edit or delete tasks in the shared store.
+  Future<void> _openCalendar() async {
+    _addFocus.unfocus();
+    await Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const CalendarScreen()));
+    if (mounted) await _loadTodos();
+  }
+
   void _openChat() {
     _addCtrl.clear();
     _addFocus.unfocus();
@@ -153,7 +163,8 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
     }
 
     final id = DateTime.now().millisecondsSinceEpoch.toString();
-    final todo = Task(id, text);
+    // Stamp the creator so the calendar's Mine/Theirs filter can place it.
+    final todo = Task(id, text, createdBy: mySenderId);
     setState(() => _todos.insert(0, todo));
     _addCtrl.clear();
     await _saveTodos();
@@ -199,7 +210,7 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       todo.start = remindSelf ? start : null;
-      todo.recurrence = remindSelf ? recurrence : RecurrenceRule.none;
+      todo.recurrence = remindSelf ? recurrence : Recurrence.none;
     });
     await _saveTodos();
 
@@ -207,7 +218,7 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
       final ok = await _armLocalReminder(todo, start, recurrence);
       if (mounted) {
         final repeat =
-            recurrence.repeats ? ' · ${recurrence.shortLabel(start)}' : '';
+            recurrence != Recurrence.none ? ' · ${recurrence.shortLabel(start)}' : '';
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(ok
               ? 'Reminder set for ${formatDue(start)}$repeat'
@@ -346,7 +357,7 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
     // occurrences still fire).
     if (todo.start != null &&
         !todo.done &&
-        (todo.recurrence.repeats || todo.start!.isAfter(DateTime.now()))) {
+        (todo.recurrence != Recurrence.none || todo.start!.isAfter(DateTime.now()))) {
       await NotificationService.cancelReminderGroup(todo.id.hashCode);
       await _armLocalReminder(todo, todo.start!, todo.recurrence);
     }
@@ -429,6 +440,11 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
               onPressed: _closeSearch,
             )
           else ...[
+            IconButton(
+              icon: const Icon(Icons.calendar_month_outlined),
+              tooltip: 'Calendar',
+              onPressed: _openCalendar,
+            ),
             IconButton(
               icon: const Icon(Icons.notifications_active_outlined),
               tooltip: 'Daily summary',
