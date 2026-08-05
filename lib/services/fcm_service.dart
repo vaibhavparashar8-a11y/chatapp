@@ -4,7 +4,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
-import '../models/recurrence.dart';
+import '../models/recurrence_rule.dart';
 import '../utils/time_utils.dart';
 import 'notification_service.dart';
 import 'reminder_service.dart';
@@ -30,7 +30,19 @@ Future<void> _processReminderPayload(Map<String, dynamic> data) async {
       : 'Reminder';
   final scheduledAtStr = data['scheduledAt'] as String?;
   final addToList = data['addToList'] == 'true';
-  final recurrence = Recurrence.fromStorage(data['recurrence'] as String?);
+  // FCM data values are always strings, and the function sends '' rather than
+  // omitting an absent field — so normalise empty to null before choosing.
+  String? field(String key) {
+    final v = data[key] as String?;
+    return (v == null || v.isEmpty) ? null : v;
+  }
+
+  // Prefer the RRULE string; fall back to the legacy enum name so a push sent
+  // by a function build that predates it still carries the repeat.
+  final recurrence =
+      RecurrenceRule.fromStorage(field('rrule') ?? field('recurrence'));
+  final endsAtStr = field('endsAt');
+  final allDay = data['allDay'] == 'true';
 
   if (reminderId == null || scheduledAtStr == null) return;
 
@@ -40,8 +52,17 @@ Future<void> _processReminderPayload(Map<String, dynamic> data) async {
 
   // Skip if the reminder time has already passed — but a repeating reminder
   // still has future occurrences, so a late-delivered push must not drop it.
-  if (recurrence == Recurrence.none &&
+  if (!recurrence.repeats &&
       scheduledAt.isBefore(DateTime.now().subtract(const Duration(minutes: 1)))) {
+    return;
+  }
+
+  // A rule the OS cannot repeat natively has no schedule path yet — refuse it
+  // rather than silently arming a one-shot (see RecurrenceRule.toLegacy).
+  final repeat = recurrence.toLegacy();
+  if (repeat == null) {
+    dev.log('unschedulable repeat "${recurrence.storage}" — skipped',
+        name: FcmService._tag);
     return;
   }
 
@@ -73,7 +94,7 @@ Future<void> _processReminderPayload(Map<String, dynamic> data) async {
     id: notifId,
     title: title,
     scheduledTime: scheduledAt,
-    recurrence: recurrence,
+    recurrence: repeat,
   );
 
   // Confirm delivery back to the sender NOW (not only when the 15-min worker
@@ -94,6 +115,9 @@ Future<void> _processReminderPayload(Map<String, dynamic> data) async {
           scheduledAt: scheduledAt,
           addToList: true,
           recurrence: recurrence,
+          endsAt:
+              endsAtStr != null ? parseReminderTimestamp(endsAtStr) : null,
+          allDay: allDay,
         ),
       );
       // Signal TodoScreen to reload — only meaningful in the foreground path.

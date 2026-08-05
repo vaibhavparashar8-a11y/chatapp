@@ -1,6 +1,8 @@
-import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/task.dart';
+import 'log_service.dart';
 import 'notification_service.dart';
+import 'task_store.dart';
 
 /// On-device "daily task summary" preferences.
 class DigestPrefs {
@@ -30,7 +32,6 @@ class DigestService {
   static const _hourKey = 'digest_hour';
   static const _minuteKey = 'digest_minute';
   static const _lastShownKey = 'digest_last_shown'; // 'yyyy-mm-dd', local
-  static const _todosKey = 'todos_v1';
 
   /// Fixed notification id for the daily digest (never collides with reminder
   /// ids, which are task-id/doc-id hashes).
@@ -58,30 +59,27 @@ class DigestService {
     await prefs.remove(_lastShownKey);
   }
 
-  /// Titles of not-done tasks whose dueDate falls on [day]. Pure + testable.
+  /// Titles of not-done tasks starting on [day]. Pure + testable.
+  ///
+  /// Reads through [Task.fromJson], so both storage formats work — v2's
+  /// `start` and v1's `dueDate`.
   static List<String> titlesFor(String? todosJson, DateTime day) {
     if (todosJson == null) return [];
-    final List list;
+    final List<Task> tasks;
     try {
-      list = jsonDecode(todosJson) as List;
-    } catch (_) {
+      tasks = TaskStore.decode(todosJson);
+    } catch (e) {
+      LogService.w('digest', 'could not parse stored todos: $e');
       return [];
     }
     final out = <String>[];
-    for (final e in list) {
-      final m = e as Map;
-      if (m['done'] as bool? ?? false) continue;
-      final due = m['dueDate'] as String?;
-      if (due == null) continue;
-      final DateTime d;
-      try {
-        d = DateTime.parse(due);
-      } catch (_) {
-        continue;
-      }
+    for (final t in tasks) {
+      if (t.done) continue;
+      final d = t.start;
+      if (d == null) continue;
       if (d.year == day.year && d.month == day.month && d.day == day.day) {
-        final title = (m['title'] as String?)?.trim();
-        out.add(title == null || title.isEmpty ? 'Task' : title);
+        final title = t.title.trim();
+        out.add(title.isEmpty ? 'Task' : title);
       }
     }
     return out;
@@ -114,7 +112,11 @@ class DigestService {
     final cfgMinutes = p.hour * 60 + p.minute;
     if (nowMinutes < cfgMinutes) return; // not time yet
 
-    final body = buildBody(prefs.getString(_todosKey), now);
+    // Read the migrated list if present, else the pre-migration one — the
+    // worker can run before the screen has ever migrated it.
+    final body = buildBody(
+        prefs.getString(TaskStore.key) ?? prefs.getString(TaskStore.legacyKey),
+        now);
     await NotificationService.showDigest(
       id: digestNotificationId,
       title: "Today's tasks",

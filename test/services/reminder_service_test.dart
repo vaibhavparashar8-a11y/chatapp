@@ -2,8 +2,10 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:chatapp/models/recurrence.dart';
+import 'package:chatapp/models/recurrence_rule.dart';
 import 'package:chatapp/services/notification_service.dart';
 import 'package:chatapp/services/reminder_service.dart';
+import 'package:chatapp/services/task_store.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -47,7 +49,7 @@ void main() {
   }
 
   List<dynamic> storedTasks(SharedPreferences prefs) =>
-      jsonDecode(prefs.getString(todosKey)!) as List;
+      jsonDecode(prefs.getString(TaskStore.key)!) as List;
 
   final due = DateTime(2030, 1, 1, 10, 0);
 
@@ -130,21 +132,25 @@ void main() {
         applyDeletes: true,
       );
       final stored = storedTasks(prefs);
-      expect(stored[0]['dueDate'], newDue.toIso8601String());
-      expect(stored[1]['dueDate'], isNull,
+      expect(stored[0]['start'], newDue.toIso8601String());
+      expect(stored[1]['start'], isNull,
           reason: 'creator opted out of Remind me — no due date is forced on');
     });
 
     test('backfills sharedId on legacy reminder_ entries', () async {
+      // Pre-sync entries created on the recipient side carry the doc id inside
+      // their local id. Task.fromJson now backfills the link when the list is
+      // read, so it is already persisted by the time the mirror runs — the
+      // mirror itself reports no change, but the task IS linked (and so is
+      // reachable by later edits/deletes), which is what matters.
       final prefs = await prefsWith([
         localTask('reminder_legacy123', dueDate: due.toIso8601String()),
       ]);
-      final changed = await ReminderService.applySharedSnapshot(
+      await ReminderService.applySharedSnapshot(
         prefs,
         [SharedTask(id: 'legacy123', title: 'Task', scheduledAt: due)],
         applyDeletes: true,
       );
-      expect(changed, isTrue);
       expect(storedTasks(prefs).first['sharedId'], 'legacy123');
     });
 
@@ -339,10 +345,10 @@ void main() {
           title: 'Standup',
           scheduledAt: due,
           addToList: true,
-          recurrence: Recurrence.weekdays,
+          recurrence: RecurrenceRule.fromLegacy(Recurrence.weekdays),
         ),
       );
-      expect(storedTasks(prefs).first['recurrence'], 'weekdays');
+      expect(storedTasks(prefs).first['rrule'], 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR');
     });
 
     test('a one-shot reminder stores no recurrence field', () async {
@@ -352,7 +358,7 @@ void main() {
         PendingReminder(
             id: 'doc9', title: 'Once', scheduledAt: due, addToList: true),
       );
-      expect(storedTasks(prefs).first.containsKey('recurrence'), isFalse);
+      expect(storedTasks(prefs).first.containsKey('rrule'), isFalse);
     });
   });
 
@@ -370,24 +376,25 @@ void main() {
               id: 'doc1',
               title: 'Task',
               scheduledAt: due,
-              recurrence: Recurrence.daily),
+              recurrence: RecurrenceRule.fromLegacy(Recurrence.daily)),
         ],
         applyDeletes: true,
       );
       expect(changed, isTrue);
-      expect(storedTasks(prefs).first['recurrence'], 'daily');
+      expect(storedTasks(prefs).first['rrule'], 'FREQ=DAILY');
       expect(NotificationService.debugScheduled.single.recurrence,
           Recurrence.daily);
     });
 
     test('clearing the repeat remotely removes the local field', () async {
+      // Seeded in the v1 format with the legacy enum name — the migration and
+      // the mirror must both understand it.
       final prefs = await prefsWith([
-        localTask('a', sharedId: 'doc1', dueDate: due.toIso8601String()),
+        {
+          ...localTask('a', sharedId: 'doc1', dueDate: due.toIso8601String()),
+          'recurrence': 'daily',
+        },
       ]);
-      // Seed the local task as repeating.
-      final seeded = storedTasks(prefs);
-      (seeded.first as Map)['recurrence'] = 'daily';
-      await prefs.setString(todosKey, jsonEncode(seeded));
 
       final changed = await ReminderService.applySharedSnapshot(
         prefs,
@@ -395,7 +402,7 @@ void main() {
         applyDeletes: true,
       );
       expect(changed, isTrue);
-      expect(storedTasks(prefs).first.containsKey('recurrence'), isFalse);
+      expect(storedTasks(prefs).first.containsKey('rrule'), isFalse);
     });
 
     test('a past-dated repeating reminder is still re-armed', () async {
@@ -414,7 +421,7 @@ void main() {
               id: 'doc1',
               title: 'Task',
               scheduledAt: past,
-              recurrence: Recurrence.weekly),
+              recurrence: RecurrenceRule.fromLegacy(Recurrence.weekly)),
         ],
         applyDeletes: true,
       );

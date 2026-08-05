@@ -223,15 +223,26 @@ rooms/{chatRoomId}/reminders/
     ├── subtasks: [{id,title,done}]?     ← sub-tasks, synced both ways for shared
     │                                       (addToList) tasks. Absent on docs that
     │                                       predate subtask-sync → "don't touch".
-    ├── recurrence: string?              ← Recurrence.storage ("daily"/"weekly"/
-    │                                       "weekdays"/"weekends"). Absent = does not
-    │                                       repeat, which is also how docs written
-    │                                       before recurrence-sync parse. Carried in
-    │                                       the FCM payload so the recipient arms the
-    │                                       same repeat, and synced both ways for
-    │                                       shared tasks (updateSharedTask writes it
-    │                                       even for `none`, so clearing a repeat
-    │                                       reaches the other phone).
+    ├── rrule: string?                   ← the repeat, as an iCalendar RRULE subset
+    │                                       ("FREQ=WEEKLY;BYDAY=MO,WE"). Absent/empty
+    │                                       = does not repeat. THE field to read.
+    ├── recurrence: string?              ← LEGACY duplicate of the above as the old
+    │                                       enum name ("daily"/"weekdays"/…).
+    │                                       Dual-written by `_repeatFields` so a phone
+    │                                       still on the previous APK keeps working
+    │                                       during a rollout; only set when the enum
+    │                                       can express the rule, else "none" (an old
+    │                                       reader sees "no repeat" rather than a
+    │                                       WRONG repeat). Drop once both phones are
+    │                                       updated. Readers prefer `rrule`.
+    ├── endsAt: Timestamp?               ← when the task ends, if it is a span rather
+    │                                       than a point in time. Stored + synced;
+    │                                       nothing renders it yet.
+    ├── allDay: bool?                    ← occupies whole days. Stored + synced;
+    │                                       nothing renders it yet.
+    ├── alerts: [int]?                   ← lead times in whole minutes before
+    │                                       scheduledAt. Stored + synced but NOT yet
+    │                                       scheduled — see §5 Task.
     ├── locallyScheduled: bool           ← recipient sets true once its notification is
     │                                       scheduled (WorkManager skip guard). Created
     │                                       true for "Remind me" self reminders so the
@@ -263,7 +274,9 @@ rooms/{chatRoomId}/webrtc/
 rooms/{chatRoomId}/todoBackups/
 └── {role}                              ← "A" | "B" — this device's FULL local todo
     ├── data: string                       list as one JSON blob (SharedPreferences
-    │                                       `todos_v1`), mirrored on every save
+    │                                       `todos_v2`), mirrored on every save.
+    │                                       A blob in either format restores fine —
+    │                                       `Task.fromJson` reads v1 and v2.
     └── updatedAt: Timestamp
     Restore: SharedPreferences is wiped on uninstall, so on a fresh install (role
     reclaimed via ANDROID_ID) `_loadTodos` fetches this doc when local is empty and
@@ -418,6 +431,82 @@ final text = isLegacyEncrypted && !isMedia
 Old messages written by the previous app version store AES-GCM ciphertext in `text` and a base64 nonce in `iv`. The key was ephemeral and is now gone — so they are irrecoverable. The `iv` field is detected and replaced with a lock-icon label.
 
 ---
+
+### `lib/models/task.dart`
+
+`Task` + `SubTask` — one item on the todo list. Promoted out of
+`screens/todo/todo_models.dart`, where it was a private `_Todo` inside a `part`
+file (so neither unit-testable nor reachable from the services), and widened
+with the fields calendar views need.
+
+| Field | Notes |
+|---|---|
+| `id`, `title`, `done`, `subtasks` | unchanged from `_Todo` |
+| `start` | the reminder time. **Was `dueDate`** |
+| `end` | when the task ends; null = a point in time, which is every task today |
+| `allDay` | occupies whole days; `start`'s time component is then not meaningful |
+| `alerts` | `List<Duration>` lead times ("10 min before"), stored as whole minutes |
+| `recurrence` | a full `RecurrenceRule`, replacing the `Recurrence` enum |
+| `sharedId` / `reminderDocId` / `backingDocId` | unchanged — see §4 |
+
+> **`end`, `allDay` and `alerts` round-trip but nothing acts on them yet.** A
+> task with an `end` renders and fires exactly like today's point-in-time
+> reminder, and `alerts` are **stored but never scheduled**. The schema landed
+> ahead of the features so the storage migration only ever happens once —
+> lead-time notifications and the calendar views come next.
+
+`Task.fromJson` reads **both** storage formats: v2 (`start`, `rrule`) and v1
+(`dueDate`, `recurrence` as a plain enum name), and backfills `sharedId` from a
+legacy `reminder_<docId>` local id. That tolerance is what lets the Firestore
+todo backup, written at any point in the app's history, always restore.
+
+### `lib/models/recurrence_rule.dart`
+
+`RecurrenceRule` — a calendar-style repeat, shaped after the iCalendar RRULE
+subset a Google-Calendar-like picker needs: `freq` (none/daily/weekly/monthly/
+yearly), `interval` (every N), `byWeekday`, `until`, `count`. Serializes to
+`FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE`.
+
+It **replaces** the five-value `Recurrence` enum as the model type, but does not
+delete it: `Recurrence` is still what `NotificationService` schedules with, and
+still sits in stored todos and reminder docs. Two bridges connect them:
+
+| Bridge | Use |
+|---|---|
+| `RecurrenceRule.fromLegacy(Recurrence)` | build the rule for an old value |
+| `rule.toLegacy()` → `Recurrence?` | the enum equivalent, or **null** |
+
+**`toLegacy()` returning null is load-bearing.** Android can repeat daily and
+weekly-on-a-weekday natively, but has no notion of "every 3 days" or "every
+month" — those need occurrence expansion, which is not built. Null means
+*"repeats, but I cannot schedule it"*, which callers must not conflate with
+"does not repeat": doing so is exactly the silent-downgrade bug fixed in #96.
+Every scheduling call site (`_armLocalReminder`, the FCM handler, the
+WorkManager worker, `applySharedSnapshot`) therefore **refuses and logs** a null
+rather than arming a one-shot. Nothing can currently produce one — the repeat
+picker only offers natively-schedulable rules (`_repeatOptions`) — so this is a
+guard for when richer repeats are enabled, not live behaviour.
+
+### `lib/services/task_store.dart`
+
+The single owner of the locally-stored todo list. The list is read/written from
+four places — the todo screen, the shared-task mirror, the FCM handler and the
+WorkManager isolate — so the key and its migration live here instead of being a
+`_todosKey` constant repeated in each (it was, in three).
+
+| Member | What it does |
+|---|---|
+| `key` | `todos_v2` — current storage key |
+| `legacyKey` | `todos_v1` — kept on disk after migrating, as a rollback snapshot |
+| `load(prefs)` | the list, migrating v1 → v2 on first read. **Throws** on corrupt JSON rather than returning `[]`, so callers can tell "no tasks" from "could not read tasks" |
+| `save(prefs, tasks)` | persists, and returns the JSON so the Firestore backup doesn't re-encode |
+| `decode` / `encode` | format helpers; `decode` accepts both formats |
+
+**Migration:** first `load` after the update reads `todos_v1`, parses it through
+`Task.fromJson` (which understands the old field names), writes `todos_v2`, and
+leaves v1 untouched. It is idempotent — once v2 exists, v1 is never read again.
+Anything that touches the list must go through this class, or the migration only
+half-applies and the two keys silently diverge.
 
 ### `lib/services/chat_service.dart`
 
@@ -1149,7 +1238,9 @@ time — good enough for a morning summary, and subject to the same OEM
 battery-optimization caveats as the reminders themselves.
 
 `titlesFor` / `buildBody` are pure (unit-tested); `maybeShowDigest` is the
-worker entry point.
+worker entry point. Both parse through `TaskStore.decode`, so they read either
+storage format — and `maybeShowDigest` falls back to `TaskStore.legacyKey`
+when the worker runs before the screen has ever migrated the list.
 
 ---
 
@@ -1159,11 +1250,16 @@ The home screen — a personal to-do list with cross-device features.
 
 Split into `part` files under `screens/todo/` to stay approachable:
 `todo_theme.dart` (the dark-violet palette + dialog/picker helpers, mirrored
-from the chat screen so both halves feel like one product), `todo_models.dart`
-(`_Todo`/`_SubTodo`), `todo_tile.dart` (the `_TodoTile` card + sub-task rows),
-`todo_widgets.dart` (header stats, empty/no-results/section-header, input bar,
-`_EditTaskDialog`), and `todo_dialogs.dart` (the `setState`-free
-`_showDigestSettings` / `_pickDateTime` as an extension). `_TodoScreenState`
+from the chat screen so both halves feel like one product), `todo_tile.dart`
+(the `_TodoTile` card + sub-task rows), `todo_widgets.dart` (header stats,
+empty/no-results/section-header, input bar, `_EditTaskDialog`),
+`todo_dialogs.dart` (the `setState`-free `_showDigestSettings` /
+`_pickDateTime` / `_askSetReminder` / `_showRoleResetDialog` as an extension),
+and `todo_reminder_dialog.dart` (the `_SetReminderDialog` widget plus the
+`_armLocalReminder` / `_persistReminderDoc` extension behind it).
+The task model is **not** a part file any more — `todo_models.dart` is gone and
+`Task`/`SubTask` live in `lib/models/task.dart`, so they can be unit-tested and
+used by the services. `_TodoScreenState`
 keeps all state and orchestration; the tile widgets route mutations back
 through callbacks (they can't call `setState` directly). The screen renders a
 dark theme (gradient app bar, `_kTodoBg` scaffold, `_kTodoCard` tiles) with all
@@ -1194,10 +1290,11 @@ Pick date/time → dialog:
                                    makes it a synced shared task)
 ```
 
-Tasks persist as JSON in SharedPreferences under `todos_v1`
-(`id`, `title`, `done`, `dueDate?`, `sharedId?`, `subtasks[]`).
-`todoRefreshNotifier` (in constants.dart) signals the screen to reload when
-a remote task arrives or the shared-task mirror changes something.
+Tasks persist as JSON in SharedPreferences under **`todos_v2`**, via
+[`TaskStore`](#libservicestask_storedart) — which also migrates the old
+`todos_v1` list on first read. `todoRefreshNotifier` (in constants.dart)
+signals the screen to reload when a remote task arrives or the shared-task
+mirror changes something.
 
 ---
 
@@ -1647,7 +1744,13 @@ test/
 │   └── call_service_test.dart           ← backend selection (agora/webrtc + safe fallback)
 ├── models/
 │   ├── message_test.dart                ← fromMap/toMap, all MessageTypes, legacy iv field
-│   └── recurrence_test.dart             ← storage round-trip, fireDays, shortLabel, abbrev
+│   ├── recurrence_test.dart             ← storage round-trip, fireDays, shortLabel, abbrev
+│   ├── recurrence_rule_test.dart        ← RRULE serialize/parse round-trip, legacy-enum
+│   │                                       bridge both ways, toLegacy() returning null
+│   │                                       for unschedulable rules, BYDAY normalisation
+│   └── task_test.dart                   ← toJson/fromJson round-trip, reading the v1
+│                                           format (dueDate/recurrence), sharedId
+│                                           backfill, duration/backingDocId
 ├── utils/
 │   ├── time_utils_test.dart             ← formatLastSeen, formatDue,
 │   │                                       parseReminderTimestamp (UTC→local regression)
@@ -1663,6 +1766,9 @@ test/
 │   │                                       both id families cancelled),
 │   │                                       insertTodoToPrefs link + repeat carry-over,
 │   │                                       deliveryMapFromDocs (outgoing filter)
+│   ├── task_store_test.dart             ← v1 → v2 migration (format, idempotence,
+│   │                                       nothing lost, legacy key kept), save/load
+│   │                                       round-trip, corrupt JSON throws
 │   ├── agora_token_service_test.dart    ← needsRefresh thresholds, cache behavior,
 │   │                                       fetch-failure fallback
 │   ├── digest_service_test.dart         ← titlesFor (today+not-done filter),
@@ -1958,15 +2064,21 @@ high-priority FCM push (notification + data payload, channel
 app is killed. `scheduledAt` is serialized with `toISOString()` — always
 UTC, which is why the client parses with `parseReminderTimestamp()`.
 
-The payload also carries `recurrence` (`String(data.recurrence || 'none')`) so
-the recipient arms the same repeat rather than a one-shot. Docs written before
-recurrence-sync have no field and send `'none'`, which
-`Recurrence.fromStorage` parses back to "does not repeat".
+The payload also carries the repeat, **dual-written**: `rrule` (the RRULE
+string the current app reads) and `recurrence` (the legacy enum name, so a
+phone still on the previous APK keeps working mid-rollout). Plus `endsAt` and
+`allDay` for the widened schema.
+
+FCM data values are always strings, and absent fields are sent as `''` rather
+than omitted — so the client normalises empty to null before choosing between
+`rrule` and `recurrence`. Getting that wrong would make an empty `rrule` win
+over a valid legacy `recurrence` and silently drop the repeat.
 
 > **Redeploy required** after changing the payload:
 > `firebase deploy --only functions --project my-chat-app-963fa`.
-> Until then recipients keep receiving `recurrence`-less pushes and repeating
-> reminders arrive as one-shots (the shared-task mirror still corrects them).
+> Until then recipients keep receiving pushes without these fields and
+> repeating reminders arrive as one-shots (the shared-task mirror still
+> corrects them, so it degrades rather than breaks).
 
 **Skips `locallyScheduled === true` docs.** "Remind me" self reminders are
 stored as a backup but the creator has already scheduled the local
