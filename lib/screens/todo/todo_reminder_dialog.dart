@@ -11,20 +11,13 @@ extension _TodoReminderActions on _TodoScreenState {
   /// silently degrade to a one-shot, so it is refused and logged until
   /// occurrence expansion lands. Nothing in the repeat picker produces one.
   Future<bool> _armLocalReminder(
-      Task todo, DateTime when, RecurrenceRule recurrence) async {
-    final legacy = recurrence.toLegacy();
-    if (legacy == null) {
-      LogService.e('todo',
-          'repeat "${recurrence.storage}" cannot be scheduled natively yet');
-      return false;
-    }
-    return NotificationService.scheduleReminder(
-      id: todo.id.hashCode,
-      title: todo.title,
-      scheduledTime: when,
-      recurrence: legacy,
-    );
-  }
+          Task todo, DateTime when, Recurrence recurrence) =>
+      NotificationService.scheduleReminder(
+        id: todo.id.hashCode,
+        title: todo.title,
+        scheduledTime: when,
+        recurrence: recurrence,
+      );
 
   /// Create or update the Firestore reminder doc behind [todo] to match the
   /// user's [choice]. Every doc created here is linked back onto the task
@@ -122,7 +115,7 @@ class _ReminderChoice {
   final bool remindSelf;
   final bool remindOther;
   final bool addToList;
-  final RecurrenceRule recurrence;
+  final Recurrence recurrence;
 
   const _ReminderChoice({
     required this.remindSelf,
@@ -132,21 +125,15 @@ class _ReminderChoice {
   });
 }
 
-/// The repeats the picker offers. Every one maps to a native repeating alarm
-/// ([RecurrenceRule.isNativelySchedulable]); richer rules the model can now
-/// express — every N days, monthly, yearly, until-a-date — need occurrence
-/// expansion before they can be offered here.
-final List<RecurrenceRule> _repeatOptions = [
-  RecurrenceRule.none,
-  RecurrenceRule.fromLegacy(Recurrence.daily),
-  RecurrenceRule.fromLegacy(Recurrence.weekly),
-  RecurrenceRule.fromLegacy(Recurrence.weekdays),
-  RecurrenceRule.fromLegacy(Recurrence.weekends),
-];
+/// The repeats the picker offers — every [Recurrence] value. All of them map
+/// to a native repeating alarm, so the OS owns the repeat and it survives
+/// app-kill and reboot. Anything richer ("every N days", monthly) would need
+/// occurrence expansion driven by the background worker, which is deliberately
+/// out of scope.
 
 class _SetReminderDialog extends StatefulWidget {
   /// The task's current repeat, pre-selected in the picker.
-  final RecurrenceRule initialRecurrence;
+  final Recurrence initialRecurrence;
 
   /// The date/time already picked, used to name the weekday of a weekly repeat.
   final DateTime scheduledAt;
@@ -164,14 +151,8 @@ class _SetReminderDialogState extends State<_SetReminderDialog> {
   bool _remindSelf = true;
   bool _remindOther = false;
   bool _addToList = false;
-  late RecurrenceRule _recurrence = widget.initialRecurrence;
+  late Recurrence _recurrence = widget.initialRecurrence;
 
-  /// The dropdown's items. A task whose repeat isn't one of the offered
-  /// options (written by a newer build) keeps its own value rather than
-  /// tripping the DropdownButton's single-match assertion.
-  List<RecurrenceRule> get _options => _repeatOptions.contains(_recurrence)
-      ? _repeatOptions
-      : [_recurrence, ..._repeatOptions];
 
   Widget _check({
     required bool value,
@@ -231,16 +212,16 @@ class _SetReminderDialogState extends State<_SetReminderDialog> {
               Text('Repeat', style: TextStyle(color: _kTodoText)),
             ],
           ),
-          DropdownButton<RecurrenceRule>(
+          DropdownButton<Recurrence>(
             value: _recurrence,
             isExpanded: true,
             dropdownColor: _kTodoCard,
             style: const TextStyle(color: _kTodoText),
             iconEnabledColor: _kTodoAccentLight,
             onChanged: (v) =>
-                setState(() => _recurrence = v ?? RecurrenceRule.none),
+                setState(() => _recurrence = v ?? Recurrence.none),
             items: [
-              for (final r in _options)
+              for (final r in Recurrence.values)
                 DropdownMenuItem(value: r, child: Text(r.label)),
             ],
           ),

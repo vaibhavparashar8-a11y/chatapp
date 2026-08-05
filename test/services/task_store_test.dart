@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:chatapp/models/recurrence.dart';
-import 'package:chatapp/models/recurrence_rule.dart';
 import 'package:chatapp/models/task.dart';
 import 'package:chatapp/services/task_store.dart';
 
@@ -60,7 +59,7 @@ void main() {
       expect(loaded.single.title, 'Old task');
       expect(loaded.single.start, DateTime(2030, 1, 1, 9, 0));
       expect(loaded.single.recurrence,
-          RecurrenceRule.fromLegacy(Recurrence.weekdays));
+          Recurrence.weekdays);
       expect(loaded.single.sharedId, 'doc1');
       expect(loaded.single.subtasks.single.done, isTrue);
 
@@ -68,7 +67,7 @@ void main() {
       final stored =
           jsonDecode(prefs.getString(TaskStore.key)!) as List;
       expect(stored.single['start'], DateTime(2030, 1, 1, 9, 0).toIso8601String());
-      expect(stored.single['rrule'], 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR');
+      expect(stored.single['recurrence'], 'weekdays');
       expect(stored.single.containsKey('dueDate'), isFalse);
     });
 

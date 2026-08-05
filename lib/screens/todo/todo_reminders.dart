@@ -20,7 +20,7 @@ extension _TodoReminders on _TodoScreenState {
       if (due == null || todo.done) continue;
       // A one-shot whose time has passed already fired — leave it. Recurring
       // reminders always re-arm; their future occurrences keep firing.
-      if (!todo.recurrence.repeats && !due.isAfter(now)) continue;
+      if (todo.recurrence == Recurrence.none && !due.isAfter(now)) continue;
       // Clear any stale schedule (incl. weekday-group ids) before re-arming.
       await NotificationService.cancelReminderGroup(todo.id.hashCode);
       // A task received from the other phone was armed by the delivery path

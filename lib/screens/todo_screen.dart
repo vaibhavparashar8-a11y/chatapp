@@ -12,7 +12,7 @@ import '../services/log_service.dart';
 import '../services/digest_service.dart';
 import '../services/task_store.dart';
 import '../models/recurrence.dart';
-import '../models/recurrence_rule.dart';
+
 import '../models/task.dart';
 import '../constants.dart' show mySenderId, todoRefreshNotifier;
 import '../utils/time_utils.dart';
@@ -153,7 +153,8 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
     }
 
     final id = DateTime.now().millisecondsSinceEpoch.toString();
-    final todo = Task(id, text);
+    // Stamp the creator so the calendar's Mine/Theirs filter can place it.
+    final todo = Task(id, text, createdBy: mySenderId);
     setState(() => _todos.insert(0, todo));
     _addCtrl.clear();
     await _saveTodos();
@@ -199,7 +200,7 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       todo.start = remindSelf ? start : null;
-      todo.recurrence = remindSelf ? recurrence : RecurrenceRule.none;
+      todo.recurrence = remindSelf ? recurrence : Recurrence.none;
     });
     await _saveTodos();
 
@@ -207,7 +208,7 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
       final ok = await _armLocalReminder(todo, start, recurrence);
       if (mounted) {
         final repeat =
-            recurrence.repeats ? ' · ${recurrence.shortLabel(start)}' : '';
+            recurrence != Recurrence.none ? ' · ${recurrence.shortLabel(start)}' : '';
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(ok
               ? 'Reminder set for ${formatDue(start)}$repeat'
@@ -346,7 +347,7 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
     // occurrences still fire).
     if (todo.start != null &&
         !todo.done &&
-        (todo.recurrence.repeats || todo.start!.isAfter(DateTime.now()))) {
+        (todo.recurrence != Recurrence.none || todo.start!.isAfter(DateTime.now()))) {
       await NotificationService.cancelReminderGroup(todo.id.hashCode);
       await _armLocalReminder(todo, todo.start!, todo.recurrence);
     }

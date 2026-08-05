@@ -169,7 +169,7 @@ class _TodoTile extends StatelessWidget {
                                                   : FontWeight.normal,
                                             ),
                                           ),
-                                          if (todo.recurrence.repeats) ...[
+                                          if (todo.recurrence != Recurrence.none) ...[
                                             const SizedBox(width: 6),
                                             const Icon(Icons.repeat,
                                                 size: 10,

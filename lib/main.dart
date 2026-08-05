@@ -64,19 +64,11 @@ Future<void> _appMain() async {
   // reminder for us — schedules the local notification immediately instead
   // of waiting for the next WorkManager window (15-30 min).
   ReminderService.pendingStream(mySenderId).listen((r) async {
-    // A rule the OS cannot repeat natively has no schedule path yet — refuse
-    // it rather than silently arming a one-shot (see RecurrenceRule.toLegacy).
-    final repeat = r.recurrence.toLegacy();
-    if (repeat == null) {
-      LogService.e('main',
-          'repeat "${r.recurrence.storage}" cannot be scheduled natively yet');
-      return;
-    }
     final ok = await NotificationService.scheduleReminder(
       id: NotificationService.docNotifId(r.id),
       title: r.title,
       scheduledTime: r.scheduledAt,
-      recurrence: repeat,
+      recurrence: r.recurrence,
     );
     if (!ok) return;
     if (r.addToList) {

@@ -223,26 +223,15 @@ rooms/{chatRoomId}/reminders/
     ├── subtasks: [{id,title,done}]?     ← sub-tasks, synced both ways for shared
     │                                       (addToList) tasks. Absent on docs that
     │                                       predate subtask-sync → "don't touch".
-    ├── rrule: string?                   ← the repeat, as an iCalendar RRULE subset
-    │                                       ("FREQ=WEEKLY;BYDAY=MO,WE"). Absent/empty
-    │                                       = does not repeat. THE field to read.
-    ├── recurrence: string?              ← LEGACY duplicate of the above as the old
-    │                                       enum name ("daily"/"weekdays"/…).
-    │                                       Dual-written by `_repeatFields` so a phone
-    │                                       still on the previous APK keeps working
-    │                                       during a rollout; only set when the enum
-    │                                       can express the rule, else "none" (an old
-    │                                       reader sees "no repeat" rather than a
-    │                                       WRONG repeat). Drop once both phones are
-    │                                       updated. Readers prefer `rrule`.
-    ├── endsAt: Timestamp?               ← when the task ends, if it is a span rather
-    │                                       than a point in time. Stored + synced;
-    │                                       nothing renders it yet.
-    ├── allDay: bool?                    ← occupies whole days. Stored + synced;
-    │                                       nothing renders it yet.
-    ├── alerts: [int]?                   ← lead times in whole minutes before
-    │                                       scheduledAt. Stored + synced but NOT yet
-    │                                       scheduled — see §5 Task.
+    ├── recurrence: string?              ← Recurrence.storage ("daily"/"weekly"/
+    │                                       "weekdays"/"weekends"). Absent = does not
+    │                                       repeat, which is also how docs written
+    │                                       before recurrence-sync parse. Carried in
+    │                                       the FCM payload so the recipient arms the
+    │                                       same repeat, and synced both ways for
+    │                                       shared tasks (updateSharedTask writes it
+    │                                       even for `none`, so clearing a repeat
+    │                                       reaches the other phone).
     ├── locallyScheduled: bool           ← recipient sets true once its notification is
     │                                       scheduled (WorkManager skip guard). Created
     │                                       true for "Remind me" self reminders so the
@@ -436,56 +425,34 @@ Old messages written by the previous app version store AES-GCM ciphertext in `te
 
 `Task` + `SubTask` — one item on the todo list. Promoted out of
 `screens/todo/todo_models.dart`, where it was a private `_Todo` inside a `part`
-file (so neither unit-testable nor reachable from the services), and widened
-with the fields calendar views need.
+file, so neither unit-testable nor reachable from the services.
 
 | Field | Notes |
 |---|---|
 | `id`, `title`, `done`, `subtasks` | unchanged from `_Todo` |
 | `start` | the reminder time. **Was `dueDate`** |
-| `end` | when the task ends; null = a point in time, which is every task today |
-| `allDay` | occupies whole days; `start`'s time component is then not meaningful |
-| `alerts` | `List<Duration>` lead times ("10 min before"), stored as whole minutes |
-| `recurrence` | a full `RecurrenceRule`, replacing the `Recurrence` enum |
+| `recurrence` | a `Recurrence` — the five-value enum |
+| `createdBy` | `'A'` / `'B'`, which role made it. Drives the calendar's Mine/Theirs filter |
 | `sharedId` / `reminderDocId` / `backingDocId` | unchanged — see §4 |
 
-> **`end`, `allDay` and `alerts` round-trip but nothing acts on them yet.** A
-> task with an `end` renders and fires exactly like today's point-in-time
-> reminder, and `alerts` are **stored but never scheduled**. The schema landed
-> ahead of the features so the storage migration only ever happens once —
-> lead-time notifications and the calendar views come next.
+> **A task is a title plus at most one instant.** There are deliberately no
+> start/end spans, durations or all-day flags: the calendar screen renders these
+> same reminders on a month grid rather than introducing a separate event type.
+> An earlier revision (#97) carried `end`/`allDay`/`alerts` and an RRULE-based
+> rule; they were removed in #99 once the calendar scope was settled, before any
+> device had written them.
 
-`Task.fromJson` reads **both** storage formats: v2 (`start`, `rrule`) and v1
-(`dueDate`, `recurrence` as a plain enum name), and backfills `sharedId` from a
-legacy `reminder_<docId>` local id. That tolerance is what lets the Firestore
-todo backup, written at any point in the app's history, always restore.
+**`createdBy` is set in three places** and the filter is only correct if all
+three hold: `_submit` stamps `mySenderId` on new tasks, `insertTodoToPrefs`
+copies the doc's `createdBy` onto a reminder arriving from the other phone, and
+`applySharedSnapshot` backfills it onto copies stored before the field existed.
+`Task.isMine(role)` treats null as *mine* — a task without it can only have been
+written on this phone.
 
-### `lib/models/recurrence_rule.dart`
-
-`RecurrenceRule` — a calendar-style repeat, shaped after the iCalendar RRULE
-subset a Google-Calendar-like picker needs: `freq` (none/daily/weekly/monthly/
-yearly), `interval` (every N), `byWeekday`, `until`, `count`. Serializes to
-`FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE`.
-
-It **replaces** the five-value `Recurrence` enum as the model type, but does not
-delete it: `Recurrence` is still what `NotificationService` schedules with, and
-still sits in stored todos and reminder docs. Two bridges connect them:
-
-| Bridge | Use |
-|---|---|
-| `RecurrenceRule.fromLegacy(Recurrence)` | build the rule for an old value |
-| `rule.toLegacy()` → `Recurrence?` | the enum equivalent, or **null** |
-
-**`toLegacy()` returning null is load-bearing.** Android can repeat daily and
-weekly-on-a-weekday natively, but has no notion of "every 3 days" or "every
-month" — those need occurrence expansion, which is not built. Null means
-*"repeats, but I cannot schedule it"*, which callers must not conflate with
-"does not repeat": doing so is exactly the silent-downgrade bug fixed in #96.
-Every scheduling call site (`_armLocalReminder`, the FCM handler, the
-WorkManager worker, `applySharedSnapshot`) therefore **refuses and logs** a null
-rather than arming a one-shot. Nothing can currently produce one — the repeat
-picker only offers natively-schedulable rules (`_repeatOptions`) — so this is a
-guard for when richer repeats are enabled, not live behaviour.
+`Task.fromJson` reads **both** storage formats: v2 (`start`) and v1 (`dueDate`),
+and backfills `sharedId` from a legacy `reminder_<docId>` local id. That
+tolerance is what lets the Firestore todo backup, written at any point in the
+app's history, always restore.
 
 ### `lib/services/task_store.dart`
 
@@ -1745,12 +1712,9 @@ test/
 ├── models/
 │   ├── message_test.dart                ← fromMap/toMap, all MessageTypes, legacy iv field
 │   ├── recurrence_test.dart             ← storage round-trip, fireDays, shortLabel, abbrev
-│   ├── recurrence_rule_test.dart        ← RRULE serialize/parse round-trip, legacy-enum
-│   │                                       bridge both ways, toLegacy() returning null
-│   │                                       for unschedulable rules, BYDAY normalisation
 │   └── task_test.dart                   ← toJson/fromJson round-trip, reading the v1
-│                                           format (dueDate/recurrence), sharedId
-│                                           backfill, duration/backingDocId
+│                                           format (dueDate), sharedId backfill,
+│                                           isMine (incl. null = mine), backingDocId
 ├── utils/
 │   ├── time_utils_test.dart             ← formatLastSeen, formatDue,
 │   │                                       parseReminderTimestamp (UTC→local regression)
@@ -2064,15 +2028,15 @@ high-priority FCM push (notification + data payload, channel
 app is killed. `scheduledAt` is serialized with `toISOString()` — always
 UTC, which is why the client parses with `parseReminderTimestamp()`.
 
-The payload also carries the repeat, **dual-written**: `rrule` (the RRULE
-string the current app reads) and `recurrence` (the legacy enum name, so a
-phone still on the previous APK keeps working mid-rollout). Plus `endsAt` and
-`allDay` for the widened schema.
+The payload also carries `recurrence` (`String(data.recurrence || 'none')`) so
+the recipient arms the same repeat rather than a one-shot, and `createdBy` so
+the received copy is filed under **Theirs** on the calendar instead of
+defaulting to the recipient's own. Docs written before these existed send
+`'none'` / `''`, which parse back to "does not repeat" / "unknown creator"
+(and unknown counts as mine — see §5 `Task`).
 
 FCM data values are always strings, and absent fields are sent as `''` rather
-than omitted — so the client normalises empty to null before choosing between
-`rrule` and `recurrence`. Getting that wrong would make an empty `rrule` win
-over a valid legacy `recurrence` and silently drop the repeat.
+than omitted, so the client normalises empty to null before using them.
 
 > **Redeploy required** after changing the payload:
 > `firebase deploy --only functions --project my-chat-app-963fa`.
