@@ -13,6 +13,7 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     NotificationService.debugScheduled.clear();
+    NotificationService.debugCancelled.clear();
     NotificationService.testMode = true;
     RemoteConfigService.testMode = true;
     ReminderService.testMode = true;
@@ -630,6 +631,111 @@ void main() {
     expect(titles, isNot(contains('Past one-shot')));
     expect(titles, isNot(contains('Done task')));
     expect(titles, isNot(contains('No reminder')));
+  });
+
+  testWidgets('re-arm cancels the doc-id alarm of a received shared task',
+      (tester) async {
+    // Regression: the delivery path (FCM / WorkManager) arms a received
+    // reminder under docNotifId(docId), but the local copy's id is
+    // "reminder_<docId>". Re-arming on launch used to add a SECOND schedule
+    // under the todo-id hash without clearing the first, so the reminder
+    // fired twice.
+    final future = DateTime.now().add(const Duration(days: 1));
+    SharedPreferences.setMockInitialValues({
+      'todos_v1': jsonEncode([
+        {
+          'id': 'reminder_doc9',
+          'sharedId': 'doc9',
+          'title': 'From them',
+          'done': false,
+          'dueDate': future.toIso8601String(),
+          'subtasks': <dynamic>[],
+        },
+      ]),
+    });
+
+    await tester.pumpWidget(wrap());
+    await tester.pumpAndSettle();
+
+    expect(NotificationService.debugCancelled,
+        contains(NotificationService.docNotifId('doc9')),
+        reason: 'the delivery-path schedule must be cleared');
+    // Exactly one schedule survives, under this device's own todo id.
+    final armed = NotificationService.debugScheduled
+        .where((s) => s.title == 'From them')
+        .toList();
+    expect(armed, hasLength(1));
+    expect(armed.single.id, 'reminder_doc9'.hashCode);
+  });
+
+  // ── Clearing a reminder ──────────────────────────────────────────────────────
+
+  testWidgets('unchecking Remind me clears the existing alarm and due date',
+      (tester) async {
+    // Regression: the cancel + dueDate update lived inside `if (remindSelf)`,
+    // so re-timing a task with "Remind me" off left the OLD alarm armed and
+    // the tile still showing the old time.
+    final future = DateTime.now().add(const Duration(days: 3));
+    SharedPreferences.setMockInitialValues({
+      'todos_v1': jsonEncode([
+        {
+          'id': 't1',
+          'title': 'Old alarm',
+          'done': false,
+          'dueDate': future.toIso8601String(),
+          'subtasks': <dynamic>[],
+        },
+      ]),
+    });
+    await tester.pumpWidget(wrap());
+    await tester.pumpAndSettle();
+    NotificationService.debugCancelled.clear();
+    NotificationService.debugScheduled.clear();
+
+    await tester.tap(find.byIcon(Icons.alarm_on_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // date
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // time
+    await tester.pumpAndSettle();
+
+    // Uncheck "Remind me" (checkbox 1 — 0 is the tile's done box).
+    await tester.tap(find.byType(Checkbox).at(1));
+    await tester.pump();
+    await tester.tap(find.text('Set'));
+    await tester.pumpAndSettle();
+
+    expect(NotificationService.debugCancelled, contains('t1'.hashCode));
+    expect(NotificationService.debugScheduled, isEmpty,
+        reason: 'nothing may be re-armed when Remind me is off');
+    expect(find.text('Reminder cleared'), findsOneWidget);
+
+    final prefs = await SharedPreferences.getInstance();
+    final stored = jsonDecode(prefs.getString('todos_v1')!) as List;
+    expect(stored.first['dueDate'], isNull);
+  });
+
+  testWidgets('ticking neither box reports that nothing was set',
+      (tester) async {
+    // Regression: this combination silently did nothing at all.
+    await tester.pumpWidget(wrap());
+    await tester.pump();
+    await addTask(tester, 'Undecided');
+
+    await tester.tap(find.byIcon(Icons.add_alarm_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // date
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // time
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(Checkbox).at(1)); // uncheck Remind me
+    await tester.pump();
+    await tester.tap(find.text('Set'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Nothing selected'), findsOneWidget);
+    expect(NotificationService.debugScheduled, isEmpty);
   });
 
   // ── Delivery confirmation ────────────────────────────────────────────────────

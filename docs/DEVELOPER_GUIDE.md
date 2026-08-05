@@ -223,6 +223,15 @@ rooms/{chatRoomId}/reminders/
     ├── subtasks: [{id,title,done}]?     ← sub-tasks, synced both ways for shared
     │                                       (addToList) tasks. Absent on docs that
     │                                       predate subtask-sync → "don't touch".
+    ├── recurrence: string?              ← Recurrence.storage ("daily"/"weekly"/
+    │                                       "weekdays"/"weekends"). Absent = does not
+    │                                       repeat, which is also how docs written
+    │                                       before recurrence-sync parse. Carried in
+    │                                       the FCM payload so the recipient arms the
+    │                                       same repeat, and synced both ways for
+    │                                       shared tasks (updateSharedTask writes it
+    │                                       even for `none`, so clearing a repeat
+    │                                       reaches the other phone).
     ├── locallyScheduled: bool           ← recipient sets true once its notification is
     │                                       scheduled (WorkManager skip guard). Created
     │                                       true for "Remind me" self reminders so the
@@ -977,6 +986,7 @@ Local notifications via `flutter_local_notifications` (channel `task_reminders`)
 | `scheduleReminder({id, title, scheduledTime, recurrence})` | Scheduled notification. `recurrence: Recurrence.none` (default) = one-shot; `daily`/`weekly` repeat natively via `matchDateTimeComponents`; `weekdays`/`weekends` schedule one weekly notification per day under ids derived from `id`. Returns `false` if any schedule fails |
 | `cancelReminder(int id)` | Cancels a single scheduled notification |
 | `cancelReminderGroup(int baseId)` | Cancels `baseId` + all 7 weekday-derived ids — use for reminders that may be recurring |
+| `docNotifId(String docId)` | The notification id a Firestore reminder doc is armed under by the delivery paths (`docId.hashCode.abs() % 0x7FFFFFFF`). **Single definition** — see the two-id-families note below |
 | `showDigest({id, title, body})` | BigText checklist notification for the daily digest ([DigestService]) |
 | `showNow({id, title, body})` | Immediate notification — used by the FCM handler for the "Reminder set" confirmation |
 
@@ -986,8 +996,25 @@ Local notifications via `flutter_local_notifications` (channel `task_reminders`)
 (AlarmManager), so it survives app-kill and reboot. The day/time come from the
 task's picked due date. Weekdays/weekends have no native equivalent, so they
 become several `dayOfWeekAndTime` weekly notifications — hence `cancelReminderGroup`.
-Recurrence is a **local** reminder property (stored in the SharedPreferences
-todo list, not Firestore); the cross-device "Notify" push stays one-shot.
+Recurrence is stored both locally (SharedPreferences todo list) **and** on the
+reminder doc, and rides along in the FCM payload — so a repeating reminder sent
+to the other person arms as the same repeat on their phone, and a repeat change
+on either side of a shared task reaches the other.
+
+**Two notification-id families — cancel both.** A reminder can be armed under
+*two different ids*:
+
+| Armed by | Under id |
+|---|---|
+| The todo screen (`_setReminder`, `_rearmReminders`) | `todoId.hashCode` (+ weekday-derived ids) |
+| The delivery paths (FCM handler, WorkManager worker, `pendingStream`) | `NotificationService.docNotifId(reminderDocId)` |
+
+A task received from the other phone hits *both*: the delivery path arms it
+under the doc id, and its local copy (`id = "reminder_<docId>"`) would be armed
+under the todo-id hash on the next launch. So **every** re-arm / re-time /
+delete path must clear both families — `_rearmReminders`, `_setReminder`,
+`_delete` and `ReminderService._cancelNotificationsFor` all do. Missing the
+second cancel is what made received reminders fire twice (§7).
 
 **Re-arm on launch** (`screens/todo/todo_reminders.dart`): Android clears an
 app's scheduled AlarmManager alarms when the APK is **updated** (the boot
@@ -1152,7 +1179,8 @@ setting.
 | Search | AppBar search icon — filters by title and subtask text |
 | Reminders | One alarm button per task → date/time picker → unified dialog (incl. a Repeat picker) |
 | Delivery confirmation | A reminder you send the other person shows **"Not delivered"** → **"Delivered"** once their device receives and arms it (`locallyScheduled` flips true). Both the FCM push handler and the 15-min worker flip it, so "Delivered" appears as soon as their phone processes the push — not only on the next worker run. "Actually fired" isn't tracked — Android has no reliable background "notification shown" callback |
-| Recurring reminders | Repeat = Every day / Every week / Weekdays / Weekends (`Recurrence`); tile shows the repeat label. No "every N days" (needs fragile reschedule-on-fire). Local-only; "done" keeps repeating until Repeat = None or the task is deleted |
+| Recurring reminders | Repeat = Every day / Every week / Weekdays / Weekends (`Recurrence`); tile shows the repeat label. No "every N days" (needs fragile reschedule-on-fire). **Syncs cross-device**: written to the reminder doc, carried in the FCM payload, and mirrored both ways for shared tasks. "done" keeps repeating until Repeat = None or the task is deleted |
+| Clearing a reminder | Re-open the dialog and untick **both** boxes → the local alarm is cancelled and `dueDate`/`recurrence` cleared ("Reminder cleared"). Unticking "Remind me" alone always cancels this phone's alarm, whatever else is ticked |
 | Open chat | Type `flutter` in the add-task field (hidden trigger) |
 | Role reset | Debug builds: double-tap the AppBar title |
 
@@ -1442,6 +1470,10 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Mini bar / video overlay appears with no live call | (Fixed) Visibility trusted `callActiveNotifier` alone, which atypical teardowns left stale-true | Gate on `callActiveNotifier && CallService.inCall`; `leaveCall()` centrally resets the notifier |
 | Reminder for other person never arrives | Recipient's phone has no FCM token registered | Check `rooms/{roomId}/fcmTokens` in Firestore Console — open the app once on that phone to register |
 | Reminder docs pile up in Firestore after deleting tasks | (Fixed) Self reminders were never stored, and "remind them, no list" docs were created but not linked to the local task, so deletion never removed them | Every created doc is linked (`sharedId` or `reminderDocId`) and `_delete` deletes `backingDocId`; self reminders are stored with `locallyScheduled=true` and the Cloud Function skips them |
+| A reminder received from the other person fires **twice** | (Fixed) The delivery path (FCM / WorkManager / `pendingStream`) armed it under `docNotifId(docId)`, but the local copy it inserted has id `reminder_<docId>` — so `_rearmReminders` added a *second* schedule under `'reminder_<docId>'.hashCode` on the next launch, and its `cancelReminderGroup` only cleared the todo-id family | `_rearmReminders` now also cancels `docNotifId(todo.backingDocId)` before re-arming, leaving this device's own id as the single owner. The magic expression is now `NotificationService.docNotifId` in one place so the call sites can't drift apart again — see the two-id-families table in §5 |
+| Re-timing a task with "Remind me" unchecked still fires at the OLD time | (Fixed) The cancel + `dueDate` update lived inside `if (remindSelf)` in `_setReminder`, so unchecking it skipped both — the previous alarm stayed armed and the tile kept showing the old time | The local alarm now always follows the dialog: the old schedule is cancelled unconditionally, and `dueDate`/`recurrence` are cleared when "Remind me" is off |
+| A repeating reminder arrives on the other phone as a one-shot | (Fixed) `recurrence` was a local-only field — `createReminder` never wrote it, the FCM payload never carried it, and `applySharedSnapshot` rescheduled with the default `Recurrence.none`, which *also* silently downgraded your own copy whenever the other side changed the time | `recurrence` is written to the reminder doc, added to the `onReminderCreated` payload, parsed by `PendingReminder`/`SharedTask`, and passed to every `scheduleReminder` call. `applySharedSnapshot` re-arms on a repeat change alone, and no longer drops past-dated repeating reminders (future occurrences still fire) |
+| Picking a reminder date then ticking neither box does nothing | (Fixed) `_setReminder` fell through every branch with no write and no feedback | Reports "Reminder cleared" (if the task had one) or "Nothing selected — tick Remind me or Notify" |
 | Daily summary notification never arrives | Digest is off, or the background worker isn't running (aggressive OEM battery optimization can suspend WorkManager) | Enable it in-app (bell icon → Daily summary) and set a time. The digest fires from the ~15-min WorkManager worker, so whitelist the app from battery optimization; it appears within one worker interval of the set time |
 | Self reminder is missing from Firestore | The self-reminder write is best-effort; a Firestore rule that rejects `forUser == createdBy` writes was previously swallowed silently, so the reminder doc (its cross-device backup) never landed | The write failure is now logged (`LogService.e('todo', 'self reminder Firestore write failed…')` in `_setReminder`) — check `app_logs`. If present, allow self-writes in the Firestore rules |
 | Calls fail with token error | Cached token expired and `getAgoraToken` unreachable at last app open | Open the app once with network (token refreshes), or check function logs: `firebase functions:log` |
@@ -1625,7 +1657,11 @@ test/
 │                                            callerStatusLabel priority (§6.4)
 ├── services/
 │   ├── reminder_service_test.dart       ← applySharedSnapshot reconcile rules
-│   │                                       (incl. subtask sync), insertTodoToPrefs link,
+│   │                                       (incl. subtask sync + recurrence sync:
+│   │                                       repeat-only change re-arms, clearing a
+│   │                                       repeat, past-dated repeat still arms,
+│   │                                       both id families cancelled),
+│   │                                       insertTodoToPrefs link + repeat carry-over,
 │   │                                       deliveryMapFromDocs (outgoing filter)
 │   ├── agora_token_service_test.dart    ← needsRefresh thresholds, cache behavior,
 │   │                                       fetch-failure fallback
@@ -1637,7 +1673,10 @@ test/
 │                                           tappable link spans
 └── screens/
     ├── todo_screen_test.dart            ← add/complete/delete/search tasks, subtasks,
-    │                                       long-press edit dialog, unified reminder dialog
+    │                                       long-press edit dialog, unified reminder dialog,
+    │                                       re-arm clears the received task's doc-id alarm
+    │                                       (no double-fire), unticking "Remind me" clears
+    │                                       the alarm, neither-box-ticked feedback
     ├── calls_screen_test.dart           ← call history rendering
     ├── chat_screen_lifecycle_test.dart  ← background-leave navigation vs live calls
     │                                       (uses DeviceService.testMode seam)
@@ -1658,7 +1697,7 @@ static flag or injectable, set them in `setUp()`:
 
 | Seam | Effect |
 |---|---|
-| `NotificationService.testMode` | schedule/cancel/show become no-ops |
+| `NotificationService.testMode` | schedule/cancel/show become no-ops, but calls are *recorded*: `debugScheduled` (id/title/time/recurrence) and `debugCancelled` (ids). Clear both in `setUp()` |
 | `RemoteConfigService.testMode` | skips fetch, returns defaults |
 | `ReminderService.testMode` | Firestore methods no-op / return null |
 | `DeviceService.testMode` | heartbeat no-op, last-opened stream emits null |
@@ -1918,6 +1957,16 @@ high-priority FCM push (notification + data payload, channel
 `task_reminders`). This is what makes reminders instant when the recipient's
 app is killed. `scheduledAt` is serialized with `toISOString()` — always
 UTC, which is why the client parses with `parseReminderTimestamp()`.
+
+The payload also carries `recurrence` (`String(data.recurrence || 'none')`) so
+the recipient arms the same repeat rather than a one-shot. Docs written before
+recurrence-sync have no field and send `'none'`, which
+`Recurrence.fromStorage` parses back to "does not repeat".
+
+> **Redeploy required** after changing the payload:
+> `firebase deploy --only functions --project my-chat-app-963fa`.
+> Until then recipients keep receiving `recurrence`-less pushes and repeating
+> reminders arrive as one-shots (the shared-task mirror still corrects them).
 
 **Skips `locallyScheduled === true` docs.** "Remind me" self reminders are
 stored as a backup but the creator has already scheduled the local

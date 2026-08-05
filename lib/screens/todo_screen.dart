@@ -135,7 +135,17 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
           );
         }).toList();
       });
-    } catch (_) {}
+    } catch (e, st) {
+      // Corrupt/unreadable todo JSON. Don't wipe it — the Firestore backup may
+      // still restore it — but never fail silently: this used to leave the user
+      // staring at an empty list with no clue why.
+      LogService.e('todo', 'could not parse stored todos: $e\n$st');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Could not load your tasks.'),
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
   }
 
   Future<void> _saveTodos() async {
@@ -318,15 +328,27 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
     );
     if (confirmed != true || !mounted) return;
 
-    if (remindSelf) {
-      if (todo.dueDate != null) {
-        await NotificationService.cancelReminderGroup(todo.id.hashCode);
+    // The local alarm always follows this dialog — including when "Remind me"
+    // is left unchecked, where the previous schedule must be CLEARED. Leaving
+    // it armed meant a task re-timed with "Remind me" off still fired at its
+    // old time, and the tile kept showing the old time too.
+    final hadLocalReminder = todo.dueDate != null;
+    if (hadLocalReminder) {
+      await NotificationService.cancelReminderGroup(todo.id.hashCode);
+      final existingDoc = todo.backingDocId;
+      if (existingDoc != null) {
+        await NotificationService.cancelReminder(
+            NotificationService.docNotifId(existingDoc));
       }
-      setState(() {
-        todo.dueDate = dueDate;
-        todo.recurrence = recurrence;
-      });
-      await _saveTodos();
+    }
+    if (!mounted) return;
+    setState(() {
+      todo.dueDate = remindSelf ? dueDate : null;
+      todo.recurrence = remindSelf ? recurrence : Recurrence.none;
+    });
+    await _saveTodos();
+
+    if (remindSelf) {
       final ok = await NotificationService.scheduleReminder(
         id: todo.id.hashCode,
         title: todo.title,
@@ -344,14 +366,25 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
           behavior: SnackBarBehavior.floating,
         ));
       }
+    } else if (!remindOther && mounted) {
+      // Neither box ticked: previously this fell through and did nothing at
+      // all, with no feedback. Say what happened instead.
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(hadLocalReminder
+            ? 'Reminder cleared'
+            : 'Nothing selected — tick "Remind me" or "Notify"'),
+        behavior: SnackBarBehavior.floating,
+      ));
     }
 
     if (todo.backingDocId != null) {
       // This task already has a Firestore reminder doc (shared, self, or
       // remind-them). Push the new time to it instead of creating a duplicate —
       // for shared tasks the other side's mirror reschedules from it.
-      ReminderService.updateSharedTask(todo.backingDocId!, scheduledAt: dueDate)
-          .catchError((_) {});
+      unawaited(ReminderService.updateSharedTask(todo.backingDocId!,
+              scheduledAt: dueDate, recurrence: recurrence)
+          .catchError(
+              (e) => LogService.w('todo', 'reminder time sync failed: $e')));
     } else if (remindOther) {
       final otherId = mySenderId == 'A' ? 'B' : 'A';
       try {
@@ -360,6 +393,7 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
           title: todo.title,
           scheduledAt: dueDate,
           addToList: addToList,
+          recurrence: recurrence,
           // Mirror any existing sub-tasks so they show up on their phone too.
           subtasks: addToList ? _subtaskPayload(todo) : null,
         );
@@ -398,6 +432,7 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
           scheduledAt: dueDate,
           addToList: false,
           locallyScheduled: true,
+          recurrence: recurrence,
         );
         if (docId != null) {
           todo.reminderDocId = docId;
@@ -421,19 +456,19 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
     setState(() => todo.subtasks
         .add(_SubTodo(DateTime.now().microsecondsSinceEpoch.toString(), text)));
     ctrl.clear();
-    _saveTodos();
+    unawaited(_saveTodos());
     _syncSubtasks(todo);
   }
 
   void _toggleSubtask(_Todo todo, _SubTodo sub, bool? val) {
     setState(() => sub.done = val ?? false);
-    _saveTodos();
+    unawaited(_saveTodos());
     _syncSubtasks(todo);
   }
 
   void _deleteSubtask(_Todo todo, String subId) {
     setState(() => todo.subtasks.removeWhere((s) => s.id == subId));
-    _saveTodos();
+    unawaited(_saveTodos());
     _syncSubtasks(todo);
   }
 
@@ -467,18 +502,22 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
   void _syncSubtasks(_Todo todo) {
     final sid = todo.sharedId;
     if (sid == null) return;
-    ReminderService.updateSharedTask(sid, subtasks: _subtaskPayload(todo))
-        .catchError((e) => LogService.w('todo', 'subtask sync failed: $e'));
+    unawaited(ReminderService.updateSharedTask(sid,
+            subtasks: _subtaskPayload(todo))
+        .catchError((e) => LogService.w('todo', 'subtask sync failed: $e')));
   }
 
   // ── Task management ───────────────────────────────────────────────────────
 
   void _toggleDone(_Todo todo, bool? val) {
     setState(() => todo.done = val ?? false);
-    _saveTodos();
+    unawaited(_saveTodos());
     if (todo.backingDocId != null) {
-      ReminderService.updateSharedTask(todo.backingDocId!, done: todo.done)
-          .catchError((_) {}); // offline edit — Firestore retries when back online
+      // Offline edit — Firestore retries when back online, so this is not
+      // user-facing, but log it rather than swallowing it entirely.
+      unawaited(ReminderService.updateSharedTask(todo.backingDocId!,
+              done: todo.done)
+          .catchError((e) => LogService.w('todo', 'done sync failed: $e')));
     }
   }
 
@@ -491,17 +530,19 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
     if (idx != -1 && _todos[idx].dueDate != null) {
       // Group cancel in case this reminder was recurring (weekdays/weekends
       // schedule several notifications under derived ids).
-      NotificationService.cancelReminderGroup(id.hashCode);
+      unawaited(NotificationService.cancelReminderGroup(id.hashCode));
       if (docId != null) {
-        NotificationService.cancelReminder(docId.hashCode.abs() % 0x7FFFFFFF);
+        unawaited(
+            NotificationService.cancelReminder(NotificationService.docNotifId(docId)));
       }
     }
     _subCtrl.remove(id)?.dispose();
     _expanded.remove(id);
     setState(() => _todos.removeWhere((t) => t.id == id));
-    _saveTodos();
+    unawaited(_saveTodos());
     if (docId != null) {
-      ReminderService.deleteSharedTask(docId).catchError((_) {});
+      unawaited(ReminderService.deleteSharedTask(docId).catchError(
+          (e) => LogService.w('todo', 'shared task delete failed: $e')));
     }
   }
 
@@ -534,8 +575,9 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
       );
     }
     if (todo.backingDocId != null) {
-      ReminderService.updateSharedTask(todo.backingDocId!, title: trimmed)
-          .catchError((_) {});
+      unawaited(ReminderService.updateSharedTask(todo.backingDocId!,
+              title: trimmed)
+          .catchError((e) => LogService.w('todo', 'title sync failed: $e')));
     }
   }
 

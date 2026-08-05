@@ -4,6 +4,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
+import '../models/recurrence.dart';
 import '../utils/time_utils.dart';
 import 'notification_service.dart';
 import 'reminder_service.dart';
@@ -29,6 +30,7 @@ Future<void> _processReminderPayload(Map<String, dynamic> data) async {
       : 'Reminder';
   final scheduledAtStr = data['scheduledAt'] as String?;
   final addToList = data['addToList'] == 'true';
+  final recurrence = Recurrence.fromStorage(data['recurrence'] as String?);
 
   if (reminderId == null || scheduledAtStr == null) return;
 
@@ -36,14 +38,16 @@ Future<void> _processReminderPayload(Map<String, dynamic> data) async {
   final scheduledAt = parseReminderTimestamp(scheduledAtStr);
   if (scheduledAt == null) return;
 
-  // Skip if the reminder time has already passed.
-  if (scheduledAt.isBefore(DateTime.now().subtract(const Duration(minutes: 1)))) {
+  // Skip if the reminder time has already passed — but a repeating reminder
+  // still has future occurrences, so a late-delivered push must not drop it.
+  if (recurrence == Recurrence.none &&
+      scheduledAt.isBefore(DateTime.now().subtract(const Duration(minutes: 1)))) {
     return;
   }
 
   await NotificationService.init();
 
-  final notifId = reminderId.hashCode.abs() % 0x7FFFFFFF;
+  final notifId = NotificationService.docNotifId(reminderId);
 
   // Immediate confirmation — tells B right now that a reminder has been set,
   // exactly as if B had set it themselves.
@@ -69,6 +73,7 @@ Future<void> _processReminderPayload(Map<String, dynamic> data) async {
     id: notifId,
     title: title,
     scheduledTime: scheduledAt,
+    recurrence: recurrence,
   );
 
   // Confirm delivery back to the sender NOW (not only when the 15-min worker
@@ -88,6 +93,7 @@ Future<void> _processReminderPayload(Map<String, dynamic> data) async {
           title: title,
           scheduledAt: scheduledAt,
           addToList: true,
+          recurrence: recurrence,
         ),
       );
       // Signal TodoScreen to reload — only meaningful in the foreground path.

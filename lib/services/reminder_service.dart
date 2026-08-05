@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
+import '../models/recurrence.dart';
 import 'notification_service.dart';
 
 /// A reminder fetched from Firestore that hasn't been locally scheduled yet.
@@ -11,11 +12,16 @@ class PendingReminder {
   final String title;
   final DateTime scheduledAt;
   final bool addToList;
+
+  /// How the reminder repeats, as set by the creator. Carried across so the
+  /// recipient's phone arms the same repeat instead of a one-shot.
+  final Recurrence recurrence;
   const PendingReminder({
     required this.id,
     required this.title,
     required this.scheduledAt,
     required this.addToList,
+    this.recurrence = Recurrence.none,
   });
 }
 
@@ -31,12 +37,17 @@ class SharedTask {
   /// Sub-tasks as stored on the doc: `[{id, title, done}, …]`. null on docs
   /// that predate subtask-sync — means "unknown, don't touch the local copy".
   final List<Map<String, dynamic>>? subtasks;
+
+  /// How the reminder repeats. Docs written before recurrence-sync carry no
+  /// field and parse back as [Recurrence.none] — matching their old behaviour.
+  final Recurrence recurrence;
   const SharedTask({
     required this.id,
     required this.title,
     required this.scheduledAt,
     this.done,
     this.subtasks,
+    this.recurrence = Recurrence.none,
   });
 }
 
@@ -108,6 +119,7 @@ class ReminderService {
     required bool addToList,
     bool locallyScheduled = false,
     List<Map<String, dynamic>>? subtasks,
+    Recurrence recurrence = Recurrence.none,
   }) async {
     if (testMode) return null;
     final doc = await _col(chatRoomId).add({
@@ -117,6 +129,7 @@ class ReminderService {
       'addToList': addToList,
       'locallyScheduled': locallyScheduled,
       'done': false,
+      if (recurrence != Recurrence.none) 'recurrence': recurrence.storage,
       if (subtasks != null && subtasks.isNotEmpty) 'subtasks': subtasks,
       'createdBy': mySenderId,
       'createdAt': FieldValue.serverTimestamp(),
@@ -137,6 +150,7 @@ class ReminderService {
     DateTime? scheduledAt,
     bool? done,
     List<Map<String, dynamic>>? subtasks,
+    Recurrence? recurrence,
   }) async {
     if (testMode) return;
     final data = <String, dynamic>{
@@ -144,6 +158,8 @@ class ReminderService {
       if (scheduledAt != null) 'scheduledAt': Timestamp.fromDate(scheduledAt),
       if (done != null) 'done': done,
       if (subtasks != null) 'subtasks': subtasks,
+      // Written even for `none` so clearing a repeat reaches the other phone.
+      if (recurrence != null) 'recurrence': recurrence.storage,
       'updatedBy': mySenderId,
       'updatedAt': FieldValue.serverTimestamp(),
     };
@@ -225,6 +241,7 @@ class ReminderService {
           : 'Reminder',
       scheduledAt: (data['scheduledAt'] as Timestamp).toDate(),
       done: data['done'] as bool?,
+      recurrence: Recurrence.fromStorage(data['recurrence'] as String?),
       subtasks: (data['subtasks'] as List?)
           ?.map((s) => {
                 'id': (s as Map)['id'] as String,
@@ -315,22 +332,37 @@ class ReminderService {
         m['subtasks'] = doc.subtasks;
         changed = true;
       }
-      // Due date: only synced onto tasks that already track one. The creator
-      // may have declined "Remind me" — their copy has no dueDate and must
-      // not start firing notifications because the other side changed the time.
+      // Due date + repeat: only synced onto tasks that already track a due
+      // date. The creator may have declined "Remind me" — their copy has no
+      // dueDate and must not start firing notifications because the other side
+      // changed the time.
       final localDue = m['dueDate'] as String?;
-      if (localDue != null &&
-          DateTime.parse(localDue) != doc.scheduledAt) {
-        m['dueDate'] = doc.scheduledAt.toIso8601String();
-        changed = true;
-        await _cancelNotificationsFor(localId, sid);
-        if (!(m['done'] as bool? ?? false) &&
-            doc.scheduledAt.isAfter(DateTime.now())) {
-          await NotificationService.scheduleReminder(
-            id: localId.hashCode,
-            title: doc.title,
-            scheduledTime: doc.scheduledAt,
-          );
+      if (localDue != null) {
+        final localRecurrence =
+            Recurrence.fromStorage(m['recurrence'] as String?);
+        final dueChanged = DateTime.parse(localDue) != doc.scheduledAt;
+        final repeatChanged = localRecurrence != doc.recurrence;
+        if (dueChanged || repeatChanged) {
+          m['dueDate'] = doc.scheduledAt.toIso8601String();
+          if (doc.recurrence == Recurrence.none) {
+            m.remove('recurrence');
+          } else {
+            m['recurrence'] = doc.recurrence.storage;
+          }
+          changed = true;
+          await _cancelNotificationsFor(localId, sid);
+          // A repeating reminder re-arms even when this occurrence has already
+          // passed — its future occurrences still fire. One-shots do not.
+          final stillFires = doc.recurrence != Recurrence.none ||
+              doc.scheduledAt.isAfter(DateTime.now());
+          if (!(m['done'] as bool? ?? false) && stillFires) {
+            await NotificationService.scheduleReminder(
+              id: localId.hashCode,
+              title: doc.title,
+              scheduledTime: doc.scheduledAt,
+              recurrence: doc.recurrence,
+            );
+          }
         }
       }
     }
@@ -367,8 +399,10 @@ class ReminderService {
   /// todo ID hash (self-set via the alarm button) or the doc-ID hash (set by
   /// the FCM/WorkManager delivery path) — cancel both.
   static Future<void> _cancelNotificationsFor(String localId, String sid) async {
-    await NotificationService.cancelReminder(localId.hashCode);
-    await NotificationService.cancelReminder(sid.hashCode.abs() % 0x7FFFFFFF);
+    // Group-cancel the local family: a repeating reminder (weekdays/weekends)
+    // is armed under several weekday-derived ids, not just the base one.
+    await NotificationService.cancelReminderGroup(localId.hashCode);
+    await NotificationService.cancelReminder(NotificationService.docNotifId(sid));
   }
 
   /// Fetch reminders addressed to [forUser] that haven't been locally
@@ -382,18 +416,20 @@ class ReminderService {
         .where('forUser', isEqualTo: forUser)
         .where('locallyScheduled', isEqualTo: false)
         .get();
-    return snap.docs.map((d) {
-      final data = d.data();
-      return PendingReminder(
-        id: d.id,
+    return snap.docs.map((d) => _pendingFromDoc(d.id, d.data())).toList();
+  }
+
+  static PendingReminder _pendingFromDoc(
+          String id, Map<String, dynamic> data) =>
+      PendingReminder(
+        id: id,
         title: (data['title'] as String?)?.trim().isNotEmpty == true
             ? data['title'] as String
             : 'Reminder',
         scheduledAt: (data['scheduledAt'] as Timestamp).toDate(),
         addToList: (data['addToList'] as bool?) ?? false,
+        recurrence: Recurrence.fromStorage(data['recurrence'] as String?),
       );
-    }).toList();
-  }
 
   /// Mark a reminder as locally scheduled so the background worker skips it
   /// on subsequent runs.
@@ -420,17 +456,7 @@ class ReminderService {
         .snapshots()
         .expand((snap) => snap.docChanges
             .where((c) => c.type == DocumentChangeType.added)
-            .map((c) {
-              final data = c.doc.data()!;
-              return PendingReminder(
-                id: c.doc.id,
-                title: (data['title'] as String?)?.trim().isNotEmpty == true
-                    ? data['title'] as String
-                    : 'Reminder',
-                scheduledAt: (data['scheduledAt'] as Timestamp).toDate(),
-                addToList: (data['addToList'] as bool?) ?? false,
-              );
-            }));
+            .map((c) => _pendingFromDoc(c.doc.id, c.doc.data()!)));
   }
 
   static const _todosKey = 'todos_v1';
@@ -450,6 +476,7 @@ class ReminderService {
       'title': r.title,
       'done': false,
       'dueDate': r.scheduledAt.toIso8601String(),
+      if (r.recurrence != Recurrence.none) 'recurrence': r.recurrence.storage,
       'subtasks': <dynamic>[],
     });
     await prefs.setString(_todosKey, jsonEncode(list));

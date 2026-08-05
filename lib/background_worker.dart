@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
 import 'constants.dart';
+import 'models/recurrence.dart';
 import 'services/notification_service.dart';
 import 'services/reminder_service.dart';
 import 'services/digest_service.dart';
@@ -51,10 +52,16 @@ void callbackDispatcher() {
     }
 
     for (final r in pending) {
-      // Skip reminders already in the past (more than 1 min ago).
-      if (r.scheduledAt.isBefore(DateTime.now().subtract(const Duration(minutes: 1)))) {
+      // Skip reminders already in the past (more than 1 min ago) — but a
+      // repeating reminder still has future occurrences, so never drop those.
+      if (r.recurrence == Recurrence.none &&
+          r.scheduledAt.isBefore(DateTime.now().subtract(const Duration(minutes: 1)))) {
         // Still mark it so we don't keep re-fetching it.
-        try { await ReminderService.markScheduled(r.id, chatRoomId); } catch (_) {}
+        try {
+          await ReminderService.markScheduled(r.id, chatRoomId);
+        } catch (e) {
+          LogService.w('worker', 'markScheduled (elapsed reminder) failed: $e');
+        }
         continue;
       }
 
@@ -63,9 +70,10 @@ void callbackDispatcher() {
       bool scheduled = false;
       try {
         scheduled = await NotificationService.scheduleReminder(
-          id: r.id.hashCode.abs() % 0x7FFFFFFF,
+          id: NotificationService.docNotifId(r.id),
           title: r.title,
           scheduledTime: r.scheduledAt,
+          recurrence: r.recurrence,
         );
       } catch (_) {
         continue; // leave locallyScheduled=false so we retry next interval

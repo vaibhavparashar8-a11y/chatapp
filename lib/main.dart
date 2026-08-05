@@ -65,9 +65,10 @@ Future<void> _appMain() async {
   // of waiting for the next WorkManager window (15-30 min).
   ReminderService.pendingStream(mySenderId).listen((r) async {
     final ok = await NotificationService.scheduleReminder(
-      id: r.id.hashCode.abs() % 0x7FFFFFFF,
+      id: NotificationService.docNotifId(r.id),
       title: r.title,
       scheduledTime: r.scheduledAt,
+      recurrence: r.recurrence,
     );
     if (!ok) return;
     if (r.addToList) {
