@@ -90,10 +90,17 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
   /// Tasks passing the Mine/Theirs filter. Only reminders already on this
   /// device are ever considered — your own tasks plus ones explicitly shared —
-  /// so "Theirs" means "shared with me", not the other person's whole list.
+  /// so "Theirs" means "involves the other person", not their whole list.
+  ///
+  /// The two boxes are not exclusive: a reminder you set **for** them can ring
+  /// on your phone *and* live on their list, so it shows under either. Filing
+  /// each task under exactly one box hid such reminders whenever you looked at
+  /// Theirs, which is precisely where you would go to check them.
   List<Task> get _visible => _tasks.where((t) {
         if (!t.hasReminder) return false;
-        return t.isMine(mySenderId) ? _showMine : _showTheirs;
+        if (_showMine && t.isMine(mySenderId)) return true;
+        if (_showTheirs && t.involvesOther(mySenderId)) return true;
+        return false;
       }).toList();
 
   /// Visible reminders falling on [day], earliest first.

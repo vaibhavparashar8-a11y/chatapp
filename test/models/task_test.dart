@@ -126,6 +126,36 @@ void main() {
     });
   });
 
+  group('involvesOther — drives the calendar Theirs filter', () {
+    Task t({String? createdBy, String? sharedId, bool remindsMe = true}) =>
+        Task('t1', 'Task',
+            createdBy: createdBy, sharedId: sharedId, remindsMe: remindsMe);
+
+    test('a reminder they created involves them', () {
+      expect(t(createdBy: 'B').involvesOther('A'), isTrue);
+    });
+
+    test('a reminder I mirrored onto their list involves them', () {
+      // Both mine and theirs — it rings here AND lives on their list.
+      final task = t(createdBy: 'A', sharedId: 'doc1');
+      expect(task.involvesOther('A'), isTrue);
+      expect(task.isMine('A'), isTrue);
+    });
+
+    test('a notify-only reminder involves them', () {
+      expect(t(createdBy: 'A', remindsMe: false).involvesOther('A'), isTrue);
+    });
+
+    test('a purely personal reminder does not', () {
+      expect(t(createdBy: 'A').involvesOther('A'), isFalse);
+    });
+
+    test('a legacy task with no creator does not', () {
+      // Only this phone could have written it, and it never left.
+      expect(t().involvesOther('A'), isFalse);
+    });
+  });
+
   group('occursOn — which calendar days a reminder is drawn on', () {
     // Mon 2026-08-03 .. Sun 2026-08-09.
     final mon = DateTime(2026, 8, 3);

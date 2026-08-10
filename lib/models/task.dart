@@ -91,6 +91,24 @@ class Task {
   /// before `createdBy` existed count as mine.
   bool isMine(String me) => createdBy == null || createdBy == me;
 
+  /// True when this reminder concerns the **other** person — either they made
+  /// it, or [me] made it *for* them.
+  ///
+  /// Deliberately not the negation of [isMine]. A reminder you set for the
+  /// other person is both: it may ring on your phone (so it belongs under
+  /// "Mine") **and** it lives on their list (so it belongs under "Theirs").
+  /// Filing it only by its creator meant "Drink water", set by A for B, was
+  /// invisible whenever A looked at Theirs — which is where you would go to
+  /// check what you had set for them.
+  ///
+  /// Three ways a task qualifies:
+  ///  * they created it (it arrived from their phone);
+  ///  * [sharedId] is set — it was mirrored onto their task list;
+  ///  * it does not ring here ([remindsMe] false) — the only reason to set a
+  ///    time you are not reminded of is to remind them.
+  bool involvesOther(String me) =>
+      (createdBy != null && createdBy != me) || sharedId != null || !remindsMe;
+
   /// Whether this task's reminder falls on the calendar day [day].
   ///
   /// A one-shot occurs only on its own date; a repeating one occurs on every
