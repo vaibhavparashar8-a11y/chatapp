@@ -196,6 +196,21 @@ class NotificationService {
             match: DateTimeComponents.dayOfWeekAndTime,
           )
         ];
+      case Recurrence.hourly:
+      case Recurrence.every90m:
+      case Recurrence.every2h:
+        // One ordinary daily notification per slot — the OS repeats each one,
+        // so an interval reminder is as durable as any other. Slots stop at
+        // Recurrence.dayEndMinutes so it never fires overnight.
+        final slots = recurrence.daySlotMinutes(h, m);
+        jobs = [
+          for (var i = 0; i < slots.length && i < maxDailySlots; i++)
+            (
+              id: _slotNotifId(id, i),
+              when: _nextInstanceOfTime(slots[i] ~/ 60, slots[i] % 60),
+              match: DateTimeComponents.time,
+            )
+        ];
       case Recurrence.weekdays:
       case Recurrence.weekends:
         jobs = [
@@ -292,6 +307,17 @@ class NotificationService {
   static int _weekdayNotifId(int baseId, int weekday) =>
       (baseId.abs() % 100000000) * 10 + weekday;
 
+  /// Hard cap on the notifications one interval reminder may occupy. Hourly
+  /// from midnight would want 23; this bounds both the schedule and the
+  /// group-cancel below, and stays well inside the 32-bit notification id space.
+  static const int maxDailySlots = 24;
+
+  /// Id for slot [i] of an interval reminder. A different shape from
+  /// [_weekdayNotifId] so the two families can never be confused for the same
+  /// base id — both are cancelled explicitly by [cancelReminderGroup].
+  static int _slotNotifId(int baseId, int i) =>
+      (baseId.abs() % 1000000) * 1000 + 100 + i;
+
   static Future<void> cancelReminder(int id) async {
     if (testMode) {
       debugCancelled.add(id);
@@ -305,13 +331,20 @@ class NotificationService {
     }
   }
 
-  /// Cancel a reminder that may be recurring: the base [baseId] plus every
-  /// weekday-derived id a weekdays/weekends schedule could have used. Cheap
-  /// (8 cancels) and safe regardless of the actual recurrence.
+  /// Cancel a reminder that may be recurring: the base [baseId], every
+  /// weekday-derived id a weekdays/weekends schedule could have used, and every
+  /// slot id an interval schedule could have used. Cheap (32 cancels) and safe
+  /// regardless of the actual recurrence — which matters because the caller
+  /// often no longer knows what the reminder used to be. Missing the interval
+  /// family here would leave an "every 90 minutes" reminder firing all day
+  /// after the user cleared it.
   static Future<void> cancelReminderGroup(int baseId) async {
     await cancelReminder(baseId);
     for (var wd = 1; wd <= 7; wd++) {
       await cancelReminder(_weekdayNotifId(baseId, wd));
+    }
+    for (var i = 0; i < maxDailySlots; i++) {
+      await cancelReminder(_slotNotifId(baseId, i));
     }
   }
 

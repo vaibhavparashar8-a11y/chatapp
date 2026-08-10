@@ -127,6 +127,13 @@ class Task {
       case Recurrence.none:
         return target == first;
       case Recurrence.daily:
+      // Interval rules run every day too; they differ only in how many times
+      // they fire *within* a day. The calendar draws one row per day at the
+      // first slot, labelled with the repeat ("Every 90m"), rather than ten
+      // near-identical rows — the alarms are still all scheduled.
+      case Recurrence.hourly:
+      case Recurrence.every90m:
+      case Recurrence.every2h:
         return true;
       case Recurrence.weekly:
         return target.weekday == first.weekday;
