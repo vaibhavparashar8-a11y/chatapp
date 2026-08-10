@@ -75,6 +75,9 @@ class DigestService {
     final out = <String>[];
     for (final t in tasks) {
       if (t.done) continue;
+      // A time set only to notify the other person is not something this phone
+      // pings about — the digest is a ping, so leave it out.
+      if (!t.remindsMe) continue;
       final d = t.start;
       if (d == null) continue;
       if (d.year == day.year && d.month == day.month && d.day == day.day) {

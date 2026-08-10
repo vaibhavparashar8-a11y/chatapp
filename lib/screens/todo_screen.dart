@@ -197,7 +197,7 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
     // The local alarm always follows this dialog — including when "Remind me"
     // is left unchecked, where the previous schedule must be CLEARED. Leaving
     // it armed meant a task re-timed with "Remind me" off still fired at its
-    // old time, and the tile kept showing the old time too.
+    // old time.
     final hadLocalReminder = todo.start != null;
     if (hadLocalReminder) {
       await NotificationService.cancelReminderGroup(todo.id.hashCode);
@@ -208,9 +208,16 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
       }
     }
     if (!mounted) return;
+    // The task keeps the time whenever the dialog set one for ANYONE — a
+    // reminder you set for the other person is still an entry in your day, so
+    // it belongs on your calendar and tile. `remindsMe` records whether this
+    // phone actually rings for it; only that gates the alarm below. Ticking
+    // neither box means "clear it", so the time goes.
+    final keepsTime = remindSelf || remindOther;
     setState(() {
-      todo.start = remindSelf ? start : null;
-      todo.recurrence = remindSelf ? recurrence : Recurrence.none;
+      todo.start = keepsTime ? start : null;
+      todo.recurrence = keepsTime ? recurrence : Recurrence.none;
+      todo.remindsMe = remindSelf;
     });
     await _saveTodos();
 
@@ -356,6 +363,7 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
     // reminders reschedule even when the original due date has passed (future
     // occurrences still fire).
     if (todo.start != null &&
+        todo.remindsMe && // notify-only tasks have no alarm on this phone
         !todo.done &&
         (todo.recurrence != Recurrence.none || todo.start!.isAfter(DateTime.now()))) {
       await NotificationService.cancelReminderGroup(todo.id.hashCode);

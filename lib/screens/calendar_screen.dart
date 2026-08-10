@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart' show mySenderId, todoRefreshNotifier;
@@ -185,7 +186,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
           ),
           const Divider(height: 1, color: kAppDivider),
           Expanded(
-            child: _DayList(
+            child: _DayTimeline(
+              // Rebuild the timeline from scratch when the day changes, so it
+              // re-anchors its scroll on the new day's "now" / first reminder.
+              key: ValueKey(_selected),
               day: _selected,
               tasks: dayTasks,
               onToggleDone: _toggleDone,

@@ -599,6 +599,43 @@ void main() {
     expect(find.text('Notified'), findsOneWidget);
   });
 
+  testWidgets('Notify without Remind me keeps the time but arms no alarm',
+      (tester) async {
+    // Regression: a reminder set for the OTHER person cleared `start` on this
+    // phone, so the task the user had just scheduled was invisible on their
+    // own calendar. The time now stays; only the local alarm is skipped.
+    await tester.pumpWidget(wrap());
+    await tester.pump();
+    await addTask(tester, 'Their errand');
+    NotificationService.debugScheduled.clear();
+
+    await tester.tap(find.byIcon(Icons.add_alarm_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // date
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK')); // time
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(Checkbox).at(1)); // uncheck Remind me
+    await tester.pump();
+    await tester.tap(find.byType(Checkbox).last); // check Notify
+    await tester.pump();
+    await tester.tap(find.text('Set'));
+    await tester.pumpAndSettle();
+
+    expect(NotificationService.debugScheduled, isEmpty,
+        reason: 'no alarm on this phone when Remind me is off');
+
+    final prefs = await SharedPreferences.getInstance();
+    final stored = jsonDecode(prefs.getString(TaskStore.key)!) as List;
+    expect(stored.single['start'], isNotNull,
+        reason: 'the time must survive so the calendar can draw it');
+    expect(stored.single['remindsMe'], isFalse);
+    // The tile says so rather than pretending an alarm is armed.
+    expect(find.text('· no alarm here'), findsOneWidget);
+    expect(find.byIcon(Icons.alarm_on_rounded), findsNothing);
+  });
+
   // ── Re-arm on launch (survives APK update) ───────────────────────────────────
 
   testWidgets('re-arms pending reminders on launch, skipping elapsed/done',
@@ -617,6 +654,8 @@ void main() {
         {'id': 'd', 'title': 'Done task', 'done': true,
           'dueDate': future.toIso8601String(), 'subtasks': []},
         {'id': 'e', 'title': 'No reminder', 'done': false, 'subtasks': []},
+        {'id': 'f', 'title': 'Notify only', 'done': false, 'remindsMe': false,
+          'dueDate': future.toIso8601String(), 'subtasks': []},
       ]),
     });
     NotificationService.debugScheduled.clear();
@@ -632,6 +671,8 @@ void main() {
     expect(titles, isNot(contains('Past one-shot')));
     expect(titles, isNot(contains('Done task')));
     expect(titles, isNot(contains('No reminder')));
+    // A time set only to notify the other person must not ring here.
+    expect(titles, isNot(contains('Notify only')));
   });
 
   testWidgets('re-arm cancels the doc-id alarm of a received shared task',

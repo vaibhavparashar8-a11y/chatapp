@@ -7,6 +7,7 @@ import 'package:chatapp/screens/calendar_screen.dart';
 import 'package:chatapp/services/notification_service.dart';
 import 'package:chatapp/services/reminder_service.dart';
 import 'package:chatapp/services/task_store.dart';
+import 'package:chatapp/theme/app_palette.dart' show kAppNow;
 import 'package:chatapp/utils/time_utils.dart';
 
 void main() {
@@ -95,6 +96,98 @@ void main() {
     await tester.pumpWidget(wrap());
     await tester.pumpAndSettle();
     expect(find.text('Take pills'), findsOneWidget);
+  });
+
+  testWidgets('a reminder set only to notify the other person is still drawn',
+      (tester) async {
+    // Regression: setting a reminder for the other person with "Remind me"
+    // unticked cleared `start`, so it never appeared on the setter's calendar.
+    await seed([
+      {...task('t1', 'Their errand', today), 'remindsMe': false},
+    ]);
+    await tester.pumpWidget(wrap());
+    await tester.pumpAndSettle();
+    expect(find.text('Their errand'), findsOneWidget);
+    expect(find.byIcon(Icons.notifications_off_outlined), findsOneWidget);
+  });
+
+  // ── Day timeline ───────────────────────────────────────────────────────────
+
+  group('day timeline', () {
+    testWidgets('rules the day in hours and marks the current time',
+        (tester) async {
+      await tester.pumpWidget(wrap());
+      await tester.pumpAndSettle();
+      // Hour labels exist for the whole day, not just the busy part.
+      expect(find.text('00:00'), findsOneWidget);
+      expect(find.text('23:00'), findsOneWidget);
+      // The now line is drawn for today.
+      expect(
+          find.byWidgetPredicate((w) => w is ColoredBox && w.color == kAppNow),
+          findsWidgets);
+    });
+
+    testWidgets('opens scrolled to the current hour', (tester) async {
+      await tester.pumpWidget(wrap());
+      await tester.pumpAndSettle();
+
+      final now = DateTime.now();
+      final label = find.text('${now.hour.toString().padLeft(2, '0')}:00');
+      final scroller = find.byType(SingleChildScrollView);
+      final viewport = tester.getRect(scroller);
+      final labelRect = tester.getRect(label);
+      expect(labelRect.top, greaterThanOrEqualTo(viewport.top - 8));
+      expect(labelRect.bottom, lessThanOrEqualTo(viewport.bottom));
+    });
+
+    testWidgets('another day opens on its first reminder', (tester) async {
+      // Not today, so there is no now line to anchor on — the earliest
+      // reminder is what the user came to see.
+      final other = today.add(const Duration(days: 2));
+      await seed([task('t1', 'Dentist', other)]);
+      await tester.pumpWidget(wrap());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('${other.day}').last);
+      await tester.pumpAndSettle();
+
+      final viewport = tester.getRect(find.byType(SingleChildScrollView));
+      final card = tester.getRect(find.text('Dentist'));
+      expect(card.top, greaterThanOrEqualTo(viewport.top));
+      expect(card.bottom, lessThanOrEqualTo(viewport.bottom));
+    });
+
+    testWidgets('reminders at the same time sit side by side', (tester) async {
+      // Stacking them would hide one behind the other.
+      await seed([
+        task('t1', 'Standup', today),
+        task('t2', 'Call mum', today),
+      ]);
+      await tester.pumpWidget(wrap());
+      await tester.pumpAndSettle();
+
+      final a = tester.getRect(find.text('Standup'));
+      final b = tester.getRect(find.text('Call mum'));
+      expect(a.left, isNot(b.left));
+      expect(a.top, b.top); // same time → same height on the ruler
+    });
+
+    testWidgets('a later reminder is drawn further down the day',
+        (tester) async {
+      await seed([
+        task('t1', 'Morning', today),
+        {
+          ...task('t2', 'Evening', today),
+          'start': DateTime(today.year, today.month, today.day, 20)
+              .toIso8601String(),
+        },
+      ]);
+      await tester.pumpWidget(wrap());
+      await tester.pumpAndSettle();
+
+      expect(tester.getRect(find.text('Evening')).top,
+          greaterThan(tester.getRect(find.text('Morning')).top));
+    });
   });
 
   // ── Mine / Theirs filter ───────────────────────────────────────────────────
@@ -245,6 +338,10 @@ void main() {
     NotificationService.debugScheduled.clear();
     NotificationService.debugCancelled.clear();
 
+    // The timeline anchors on the current time, so a 09:00 card may be off
+    // screen — scroll it in first, exactly as the user would.
+    await tester.ensureVisible(find.text('Old title'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Old title'));
     await tester.pumpAndSettle();
     expect(find.text('Edit reminder'), findsOneWidget);
@@ -266,6 +363,8 @@ void main() {
     await tester.pumpWidget(wrap());
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.text('Finish it'));
+    await tester.pumpAndSettle();
     await tester.tap(find.byType(Checkbox).last);
     await tester.pumpAndSettle();
 
@@ -279,6 +378,8 @@ void main() {
     await tester.pumpWidget(wrap());
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.text('Remove me'));
+    await tester.pumpAndSettle();
     await tester.drag(find.text('Remove me'), const Offset(-600, 0));
     await tester.pumpAndSettle();
 

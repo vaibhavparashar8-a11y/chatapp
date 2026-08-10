@@ -28,6 +28,19 @@ void main() {
       expect(DigestService.titlesFor(json, day), ['Due today']);
     });
 
+    test('leaves out a task set only to notify the other person', () {
+      // It has a time (so the calendar draws it) but this phone never pings
+      // for it — and the digest is a ping.
+      final json = todosJson([
+        task('Mine', due: DateTime(2026, 7, 15, 9)),
+        {
+          ...task('Theirs', due: DateTime(2026, 7, 15, 10)),
+          'remindsMe': false,
+        },
+      ]);
+      expect(DigestService.titlesFor(json, day), ['Mine']);
+    });
+
     test('matches by calendar day regardless of time', () {
       final json = todosJson([
         task('Early', due: DateTime(2026, 7, 15, 0, 1)),

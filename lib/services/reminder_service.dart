@@ -347,10 +347,8 @@ class ReminderService {
         task.createdBy = doc.createdBy;
         changed = true;
       }
-      // Start + repeat: only synced onto tasks that already track a start.
-      // The creator may have declined "Remind me" — their copy has no start
-      // and must not begin firing notifications because the other side
-      // changed the time.
+      // Start + repeat: only synced onto tasks that already track a start —
+      // a copy with no time never grows one from the other side.
       if (task.start != null) {
         final startChanged = task.start != doc.scheduledAt;
         final repeatChanged = task.recurrence != doc.recurrence;
@@ -363,7 +361,10 @@ class ReminderService {
           // passed — its future occurrences still fire. One-shots do not.
           final stillFires = doc.recurrence != Recurrence.none ||
               doc.scheduledAt.isAfter(DateTime.now());
-          if (!task.done && stillFires) {
+          // The creator may have declined "Remind me" (`remindsMe == false`):
+          // their copy tracks the time so the calendar can draw it, but it
+          // must not start firing because the other side changed that time.
+          if (!task.done && stillFires && task.remindsMe) {
             await NotificationService.scheduleReminder(
               id: task.id.hashCode,
               title: doc.title,
