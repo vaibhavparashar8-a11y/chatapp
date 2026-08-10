@@ -1066,7 +1066,7 @@ Local notifications via `flutter_local_notifications` (channel `task_reminders`)
 | `init()` | Creates the channel, requests permission, sets up timezone data |
 | `scheduleReminder({id, title, scheduledTime, recurrence})` | Scheduled notification. `recurrence: Recurrence.none` (default) = one-shot; `daily`/`weekly` repeat natively via `matchDateTimeComponents`; `weekdays`/`weekends` schedule one weekly notification per day under ids derived from `id`. Returns `false` if any schedule fails |
 | `cancelReminder(int id)` | Cancels a single scheduled notification |
-| `cancelReminderGroup(int baseId)` | Cancels `baseId` + all 7 weekday-derived ids — use for reminders that may be recurring |
+| `cancelReminderGroup(int baseId)` | Cancels `baseId` + all 7 weekday-derived ids + all `maxDailySlots` interval slot ids — use for reminders that may be recurring |
 | `docNotifId(String docId)` | The notification id a Firestore reminder doc is armed under by the delivery paths (`docId.hashCode.abs() % 0x7FFFFFFF`). **Single definition** — see the two-id-families note below |
 | `showDigest({id, title, body})` | BigText checklist notification for the daily digest ([DigestService]) |
 | `showNow({id, title, body})` | Immediate notification — used by the FCM handler for the "Reminder set" confirmation |
@@ -1087,8 +1087,14 @@ on either side of a shared task reaches the other.
 
 | Armed by | Under id |
 |---|---|
-| The todo screen (`_setReminder`, `_rearmReminders`) | `todoId.hashCode` (+ weekday-derived ids) |
+| The todo screen (`_setReminder`, `_rearmReminders`) | `todoId.hashCode`, **plus** derived ids: weekday `(base % 1e8) * 10 + wd` for weekdays/weekends, and slot `(base % 1e6) * 1000 + 100 + i` for interval rules |
 | The delivery paths (FCM handler, WorkManager worker, `pendingStream`) | `NotificationService.docNotifId(reminderDocId)` |
+
+`cancelReminderGroup(baseId)` clears the base plus **both** derived families
+(7 weekday ids + `maxDailySlots` slot ids) precisely because the caller usually
+no longer knows what the reminder used to be. Missing the slot family would
+leave an "every 90 minutes" reminder nagging all day after it was cleared —
+covered by `test/services/notification_service_test.dart`.
 
 A task received from the other phone hits *both*: the delivery path arms it
 under the doc id, and its local copy (`id = "reminder_<docId>"`) would be armed
@@ -1281,7 +1287,8 @@ setting.
 | Search | AppBar search icon — filters by title and subtask text |
 | Reminders | One alarm button per task → date/time picker → unified dialog (incl. a Repeat picker) |
 | Delivery confirmation | A reminder you send the other person shows **"Not delivered"** → **"Delivered"** once their device receives and arms it (`locallyScheduled` flips true). Both the FCM push handler and the 15-min worker flip it, so "Delivered" appears as soon as their phone processes the push — not only on the next worker run. "Actually fired" isn't tracked — Android has no reliable background "notification shown" callback |
-| Recurring reminders | Repeat = Every day / Every week / Weekdays / Weekends (`Recurrence`); tile shows the repeat label. No "every N days" (needs fragile reschedule-on-fire). **Syncs cross-device**: written to the reminder doc, carried in the FCM payload, and mirrored both ways for shared tasks. "done" keeps repeating until Repeat = None or the task is deleted |
+| Recurring reminders | Repeat = Every day / **Every hour** / **Every 90 minutes** / **Every 2 hours** / Every week / Weekdays / Weekends (`Recurrence`); tile shows the repeat label. Still no "every N *days*" or monthly (those need reschedule-on-fire). **Syncs cross-device**: written to the reminder doc, carried in the FCM payload, and mirrored both ways for shared tasks. "done" keeps repeating until Repeat = None or the task is deleted |
+| Intra-day intervals | An interval rule is **not** a new kind of alarm. `Recurrence.daySlotMinutes(h, m)` expands it into one *ordinary daily* notification per slot — 08:00 with `every90m` gives 08:00, 09:30 … 21:30 — each repeating natively, so the OS still owns every repeat and they survive reboot and app-kill like any other. Slots stop at `Recurrence.dayEndMinutes` (22:00) so nothing fires overnight; a time picked past the cutoff still fires once rather than scheduling nothing |
 | Clearing a reminder | Re-open the dialog and untick **both** boxes → the local alarm is cancelled and `start`/`recurrence` cleared ("Reminder cleared") |
 | Notify without "Remind me" | The task **keeps the time** (so your calendar shows the reminder you set for them) but `remindsMe` goes false: no alarm on this phone, no daily-digest entry, and the tile reads "· no alarm here" instead of showing an armed bell |
 | Calendar | AppBar calendar icon → [`CalendarScreen`](#libscreenscalendar_screendart-and-part-files), a month view over these same reminders. The list reloads on return, since the calendar can add/edit/delete |
@@ -1872,7 +1879,9 @@ test/
 │   └── call_service_test.dart           ← backend selection (agora/webrtc + safe fallback)
 ├── models/
 │   ├── message_test.dart                ← fromMap/toMap, all MessageTypes, legacy iv field
-│   ├── recurrence_test.dart             ← storage round-trip, fireDays, shortLabel, abbrev
+│   ├── recurrence_test.dart             ← storage round-trip, fireDays, shortLabel, abbrev,
+│   │                                       daySlotMinutes (interval expansion, 22:00 cutoff,
+│   │                                       past-cutoff time still fires once)
 │   └── task_test.dart                   ← toJson/fromJson round-trip, reading the v1
 │                                           format (dueDate), sharedId backfill,
 │                                           isMine (incl. null = mine), backingDocId,
@@ -1899,6 +1908,8 @@ test/
 │   │                                       copy takes the time but no alarm),
 │   │                                       insertTodoToPrefs link + repeat carry-over,
 │   │                                       deliveryMapFromDocs (outgoing filter)
+│   ├── notification_service_test.dart   ← cancelReminderGroup covers all three id
+│   │                                       families (base, weekday, interval slots)
 │   ├── task_store_test.dart             ← v1 → v2 migration (format, idempotence,
 │   │                                       nothing lost, legacy key kept), save/load
 │   │                                       round-trip, corrupt JSON throws
