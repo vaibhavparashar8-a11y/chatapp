@@ -18,6 +18,10 @@ extension _TodoReminders on _TodoScreenState {
     for (final todo in _todos) {
       final due = todo.start;
       if (due == null || todo.done) continue;
+      // A time set only to notify the other person ("Remind me" unticked) has
+      // no alarm on this phone — re-arming would ring for a reminder the user
+      // deliberately kept off their own device.
+      if (!todo.remindsMe) continue;
       // A one-shot whose time has passed already fired — leave it. Recurring
       // reminders always re-arm; their future occurrences keep firing.
       if (todo.recurrence == Recurrence.none && !due.isAfter(now)) continue;

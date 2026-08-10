@@ -85,7 +85,9 @@ extension _CalendarEditing on _CalendarScreenState {
       await NotificationService.cancelReminder(
           NotificationService.docNotifId(docId));
     }
-    if (!task.done) {
+    // A notify-only task (set with "Remind me" unticked on the todo screen)
+    // has no alarm here; editing its time on the calendar must not create one.
+    if (!task.done && task.remindsMe) {
       await NotificationService.scheduleReminder(
         id: task.id.hashCode,
         title: task.title,

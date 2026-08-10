@@ -29,6 +29,18 @@ void main() {
       expect(back.recurrence, Recurrence.weekdays);
     });
 
+    test('remindsMe survives the round-trip and defaults to true', () {
+      // A reminder set only to notify the other person keeps its time but is
+      // not armed on this phone — the flag is what tells the two apart.
+      final t = Task('t1', 'Their errand',
+          start: DateTime(2030, 5, 1, 9), remindsMe: false);
+      expect(Task.fromJson(t.toJson()).remindsMe, isFalse);
+      // Tasks stored before the field existed were always armed here.
+      expect(
+          Task.fromJson({'id': 't2', 'title': 'Old', 'subtasks': []}).remindsMe,
+          isTrue);
+    });
+
     test('empty optional fields are omitted from the JSON', () {
       final json = Task('t1', 'Bare').toJson();
       for (final key in [
@@ -36,7 +48,8 @@ void main() {
         'recurrence',
         'createdBy',
         'sharedId',
-        'reminderDocId'
+        'reminderDocId',
+        'remindsMe'
       ]) {
         expect(json.containsKey(key), isFalse, reason: key);
       }

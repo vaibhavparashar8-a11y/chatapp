@@ -40,6 +40,15 @@ class Task {
   /// How the reminder repeats.
   Recurrence recurrence;
 
+  /// Whether **this phone** rings for [start] — the "Remind me" tick box.
+  ///
+  /// False means the time is still the task's time (so it is drawn on the
+  /// calendar and shown on the tile) but no local alarm is armed for it: the
+  /// task was set up only to notify the other person. Before this field
+  /// existed, un-ticking "Remind me" cleared [start] outright, which made a
+  /// reminder you set *for them* invisible on your own calendar.
+  bool remindsMe;
+
   /// Which role created this task — `'A'` or `'B'`. Set from `mySenderId` for
   /// tasks made on this phone, and from the reminder doc's `createdBy` for
   /// shared tasks that arrived from the other phone. Drives the calendar's
@@ -67,6 +76,7 @@ class Task {
     this.sharedId,
     this.reminderDocId,
     this.recurrence = Recurrence.none,
+    this.remindsMe = true,
   }) : subtasks = subtasks ?? [];
 
   /// The Firestore reminder doc backing this task, if any (mirrored or not).
@@ -127,6 +137,9 @@ class Task {
         if (reminderDocId != null) 'reminderDocId': reminderDocId,
         if (start != null) 'start': start!.toIso8601String(),
         if (recurrence != Recurrence.none) 'recurrence': recurrence.storage,
+        // Only written when off — every task stored before this field existed
+        // was one this phone rang for.
+        if (!remindsMe) 'remindsMe': false,
         'subtasks': subtasks.map((s) => s.toJson()).toList(),
       };
 
@@ -155,6 +168,7 @@ class Task {
               : null),
       reminderDocId: json['reminderDocId'] as String?,
       recurrence: Recurrence.fromStorage(json['recurrence'] as String?),
+      remindsMe: json['remindsMe'] as bool? ?? true,
     );
   }
 }

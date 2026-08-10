@@ -19,6 +19,7 @@ const Color kAppAccent = Color(0xFF7C3AED); // primary violet
 const Color kAppAccentDeep = Color(0xFF6D28D9); // buttons / FAB
 const Color kAppAccentLight = Color(0xFFA78BFA); // light violet — meta / labels
 const Color kAppEmerald = Color(0xFF34D399); // success / "theirs" accent
+const Color kAppNow = Color(0xFFF87171); // the calendar's current-time line
 
 const Color kAppText = Colors.white;
 const Color kAppTextDim = Colors.white70;

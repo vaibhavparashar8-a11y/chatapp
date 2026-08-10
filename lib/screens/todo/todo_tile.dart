@@ -46,8 +46,11 @@ class _TodoTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasReminder = todo.start != null;
+    // A time set only to notify the other person still shows on the tile, but
+    // nothing rings here — so it must not look armed or go red as it passes.
+    final ringsHere = hasReminder && todo.remindsMe;
     final isOverdue =
-        hasReminder && todo.start!.isBefore(DateTime.now()) && !todo.done;
+        ringsHere && todo.start!.isBefore(DateTime.now()) && !todo.done;
 
     Color accent;
     if (todo.done) {
@@ -183,6 +186,13 @@ class _TodoTile extends StatelessWidget {
                                                   color: _kTodoAccentLight),
                                             ),
                                           ],
+                                          if (!todo.remindsMe) ...[
+                                            const SizedBox(width: 6),
+                                            const Text('· no alarm here',
+                                                style: TextStyle(
+                                                    fontSize: 11,
+                                                    color: _kTodoTextDim)),
+                                          ],
                                         ]),
                                       ],
                                       if (outgoingDelivered != null) ...[
@@ -246,7 +256,7 @@ class _TodoTile extends StatelessWidget {
                                 // Unified reminder button — opens Set Reminder dialog
                                 IconButton(
                                   icon: Icon(
-                                    hasReminder
+                                    ringsHere
                                         ? Icons.alarm_on_rounded
                                         : Icons.add_alarm_rounded,
                                     size: 19,

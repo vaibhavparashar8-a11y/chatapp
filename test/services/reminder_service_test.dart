@@ -136,6 +136,33 @@ void main() {
           reason: 'creator opted out of Remind me — no due date is forced on');
     });
 
+    test('a remote time change never arms a notify-only copy', () async {
+      // The creator declined "Remind me": their copy keeps the time (so the
+      // calendar can draw it) but must stay silent when the other side moves
+      // the reminder.
+      final newDue = DateTime(2030, 2, 2, 12, 0);
+      SharedPreferences.setMockInitialValues({
+        todosKey: jsonEncode([
+          {
+            ...localTask('theirs',
+                sharedId: 'doc1', dueDate: due.toIso8601String()),
+            'remindsMe': false,
+          },
+        ]),
+      });
+      final prefs = await SharedPreferences.getInstance();
+      await ReminderService.applySharedSnapshot(
+        prefs,
+        [SharedTask(id: 'doc1', title: 'Task', scheduledAt: newDue)],
+        applyDeletes: true,
+      );
+      final stored = storedTasks(prefs);
+      expect(stored.first['start'], newDue.toIso8601String(),
+          reason: 'the calendar must show the new time');
+      expect(NotificationService.debugScheduled, isEmpty,
+          reason: 'no surprise alarm on a copy that opted out');
+    });
+
     test('backfills sharedId on legacy reminder_ entries', () async {
       // Pre-sync entries created on the recipient side carry the doc id inside
       // their local id. Task.fromJson now backfills the link when the list is

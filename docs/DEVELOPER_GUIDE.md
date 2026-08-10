@@ -433,6 +433,7 @@ file, so neither unit-testable nor reachable from the services.
 | `start` | the reminder time. **Was `dueDate`** |
 | `recurrence` | a `Recurrence` — the five-value enum |
 | `createdBy` | `'A'` / `'B'`, which role made it. Drives the calendar's Mine/Theirs filter |
+| `remindsMe` | whether **this phone** rings for `start` — the "Remind me" tick box. Defaults true (and is only written to JSON when false, so older stored tasks read as true). False = the time is real and is drawn on the calendar / tile, but no local alarm is armed and the daily digest skips it: the reminder exists to notify the *other* person |
 | `sharedId` / `reminderDocId` / `backingDocId` | unchanged — see §4 |
 
 > **A task is a title plus at most one instant.** There are deliberately no
@@ -1125,8 +1126,10 @@ via a `sharedId` field (legacy `reminder_*` IDs are backfilled automatically).
 **Reconcile safety rules:**
 - Deletions apply only from **server-confirmed** snapshots (`applyDeletes` =
   `!snapshot.isFromCache`) — an offline cache can never mass-delete tasks
-- Remote due-date changes apply only to copies that already track a due date
-  (a creator who declined "Remind me" never gets surprise alarms)
+- Remote due-date changes apply only to copies that already track a due date,
+  and only a copy with `remindsMe` re-arms an alarm — a creator who declined
+  "Remind me" sees the new time on their calendar but never gets a surprise
+  notification when the other side moves it
 - Docs without a `done` field (pre-feature) never revert local done state
 
 ---
@@ -1245,7 +1248,8 @@ setting.
 | Reminders | One alarm button per task → date/time picker → unified dialog (incl. a Repeat picker) |
 | Delivery confirmation | A reminder you send the other person shows **"Not delivered"** → **"Delivered"** once their device receives and arms it (`locallyScheduled` flips true). Both the FCM push handler and the 15-min worker flip it, so "Delivered" appears as soon as their phone processes the push — not only on the next worker run. "Actually fired" isn't tracked — Android has no reliable background "notification shown" callback |
 | Recurring reminders | Repeat = Every day / Every week / Weekdays / Weekends (`Recurrence`); tile shows the repeat label. No "every N days" (needs fragile reschedule-on-fire). **Syncs cross-device**: written to the reminder doc, carried in the FCM payload, and mirrored both ways for shared tasks. "done" keeps repeating until Repeat = None or the task is deleted |
-| Clearing a reminder | Re-open the dialog and untick **both** boxes → the local alarm is cancelled and `dueDate`/`recurrence` cleared ("Reminder cleared"). Unticking "Remind me" alone always cancels this phone's alarm, whatever else is ticked |
+| Clearing a reminder | Re-open the dialog and untick **both** boxes → the local alarm is cancelled and `start`/`recurrence` cleared ("Reminder cleared") |
+| Notify without "Remind me" | The task **keeps the time** (so your calendar shows the reminder you set for them) but `remindsMe` goes false: no alarm on this phone, no daily-digest entry, and the tile reads "· no alarm here" instead of showing an armed bell |
 | Calendar | AppBar calendar icon → [`CalendarScreen`](#libscreenscalendar_screendart-and-part-files), a month view over these same reminders. The list reloads on return, since the calendar can add/edit/delete |
 | Open chat | Type `flutter` in the add-task field (hidden trigger) |
 | Role reset | Debug builds: double-tap the AppBar title |
@@ -1278,18 +1282,41 @@ times, durations or all-day events; a task is a title plus one instant.
 
 Split into `part` files under `screens/calendar/`: `calendar_grid.dart` (the
 `_OwnerFilter` tick boxes + `_MonthGrid`), `calendar_day_list.dart` (the
-selected day's rows), and `calendar_edit.dart` (the add/edit/delete mutations
-as an extension, plus the `_TaskEditDialog` widget).
+selected day's `_DayTimeline`), and `calendar_edit.dart` (the add/edit/delete
+mutations as an extension, plus the `_TaskEditDialog` widget).
 
 | Feature | How |
 |---|---|
 | Month grid | Monday-first, built from `monthCells()`. Up to three dots per day for the reminders on it; today is outlined, the selected day filled |
-| Day list | Tap a day → its reminders, earliest first, with time and repeat label |
+| Day timeline | Tap a day → a 24-hour ruler with each reminder drawn at its own time (`_DayTimeline`) |
 | Add | FAB → title / time / repeat → creates a task on the **selected** day, stamped `createdBy: mySenderId` |
 | Edit | Tap a row → same dialog. Re-arms the alarm and writes through to the reminder doc for shared tasks |
 | Complete / delete | Checkbox / swipe-left — both write through, exactly like the todo screen |
 | Month navigation | Chevrons step a month; **Today** returns to the current month and selects today |
 | Mine / Theirs | Tick boxes filtering by `Task.isMine(mySenderId)` |
+
+**The day view is a timeline, not a list.** `_DayTimeline` draws a 24-hour
+ruler (`_kHourHeight` = 64 px per hour, hour labels in a `_kGutter`-wide left
+column) and positions every reminder at `(hour * 60 + minute)` on it, so the
+time is spatial and the shape of the day is visible at a glance. Details worth
+knowing before editing it:
+
+- **Auto-scroll on open.** `_scrollToAnchor` (post-frame, so the scroll view
+  has clients) lands on *now* for today, the first reminder for any other day,
+  else 08:00 — anchored a third of the way down the viewport so what is coming
+  next is on screen. The screen keys `_DayTimeline` on the selected day, so
+  choosing another day remounts it and re-anchors.
+- **A live now line**, redrawn by a one-minute `Timer.periodic` (cancelled in
+  `dispose`). Both it and the hour ruler sit inside a `Positioned.fill`
+  `IgnorePointer` — they span the full width and would otherwise swallow taps
+  meant for the cards they cross.
+- **Overlapping reminders split into lanes.** `_layoutDay` groups cards whose
+  fixed `_kCardHeight` boxes overlap into clusters and hands each a lane,
+  reusing a lane as soon as its previous card ends — so two reminders at the
+  same time sit side by side instead of one hiding the other. Tasks have no
+  duration, so every card is the same height; only its position means anything.
+- Tap edits, swipe-left deletes, the checkbox completes — the same gestures as
+  the todo tiles. A `remindsMe: false` reminder carries a muted-bell icon.
 
 **Repeating reminders are expanded for display only.** `Task.occursOn(day)`
 decides which days a task is drawn on (daily → every day from its start;
@@ -1595,7 +1622,8 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Reminder for other person never arrives | Recipient's phone has no FCM token registered | Check `rooms/{roomId}/fcmTokens` in Firestore Console — open the app once on that phone to register |
 | Reminder docs pile up in Firestore after deleting tasks | (Fixed) Self reminders were never stored, and "remind them, no list" docs were created but not linked to the local task, so deletion never removed them | Every created doc is linked (`sharedId` or `reminderDocId`) and `_delete` deletes `backingDocId`; self reminders are stored with `locallyScheduled=true` and the Cloud Function skips them |
 | A reminder received from the other person fires **twice** | (Fixed) The delivery path (FCM / WorkManager / `pendingStream`) armed it under `docNotifId(docId)`, but the local copy it inserted has id `reminder_<docId>` — so `_rearmReminders` added a *second* schedule under `'reminder_<docId>'.hashCode` on the next launch, and its `cancelReminderGroup` only cleared the todo-id family | `_rearmReminders` now also cancels `docNotifId(todo.backingDocId)` before re-arming, leaving this device's own id as the single owner. The magic expression is now `NotificationService.docNotifId` in one place so the call sites can't drift apart again — see the two-id-families table in §5 |
-| Re-timing a task with "Remind me" unchecked still fires at the OLD time | (Fixed) The cancel + `dueDate` update lived inside `if (remindSelf)` in `_setReminder`, so unchecking it skipped both — the previous alarm stayed armed and the tile kept showing the old time | The local alarm now always follows the dialog: the old schedule is cancelled unconditionally, and `dueDate`/`recurrence` are cleared when "Remind me" is off |
+| Re-timing a task with "Remind me" unchecked still fires at the OLD time | (Fixed) The cancel + `dueDate` update lived inside `if (remindSelf)` in `_setReminder`, so unchecking it skipped both — the previous alarm stayed armed and the tile kept showing the old time | The local alarm now always follows the dialog: the old schedule is cancelled unconditionally, and the alarm is re-armed only when "Remind me" is on (`Task.remindsMe`) |
+| A reminder you set **for the other person** is missing from your own calendar | (Fixed) `_setReminder` cleared `start` whenever "Remind me" was unchecked, so a task set up with **Notify (+ add to their list)** had no time at all on this phone — the calendar only draws tasks with one | The time now survives whenever the dialog set one for *anyone*; the new `Task.remindsMe` flag records whether **this** phone rings for it. Only that gates arming (`_setReminder`, `_rearmReminders`, calendar `_editTask`) and the daily digest. Ticking neither box still clears the time |
 | A repeating reminder arrives on the other phone as a one-shot | (Fixed) `recurrence` was a local-only field — `createReminder` never wrote it, the FCM payload never carried it, and `applySharedSnapshot` rescheduled with the default `Recurrence.none`, which *also* silently downgraded your own copy whenever the other side changed the time | `recurrence` is written to the reminder doc, added to the `onReminderCreated` payload, parsed by `PendingReminder`/`SharedTask`, and passed to every `scheduleReminder` call. `applySharedSnapshot` re-arms on a repeat change alone, and no longer drops past-dated repeating reminders (future occurrences still fire) |
 | Picking a reminder date then ticking neither box does nothing | (Fixed) `_setReminder` fell through every branch with no write and no feedback | Reports "Reminder cleared" (if the task had one) or "Nothing selected — tick Remind me or Notify" |
 | Daily summary notification never arrives | Digest is off, or the background worker isn't running (aggressive OEM battery optimization can suspend WorkManager) | Enable it in-app (bell icon → Daily summary) and set a time. The digest fires from the ~15-min WorkManager worker, so whitelist the app from battery optimization; it appears within one worker interval of the set time |
@@ -1775,7 +1803,8 @@ test/
 │   └── task_test.dart                   ← toJson/fromJson round-trip, reading the v1
 │                                           format (dueDate), sharedId backfill,
 │                                           isMine (incl. null = mine), backingDocId,
-│                                           occursOn/occurrenceOn per recurrence
+│                                           occursOn/occurrenceOn per recurrence,
+│                                           remindsMe (default true, round-trip)
 ├── utils/
 │   ├── time_utils_test.dart             ← formatLastSeen, formatDue,
 │   │                                       parseReminderTimestamp (UTC→local regression)
@@ -1791,7 +1820,8 @@ test/
 │   │                                       (incl. subtask sync + recurrence sync:
 │   │                                       repeat-only change re-arms, clearing a
 │   │                                       repeat, past-dated repeat still arms,
-│   │                                       both id families cancelled),
+│   │                                       both id families cancelled, a notify-only
+│   │                                       copy takes the time but no alarm),
 │   │                                       insertTodoToPrefs link + repeat carry-over,
 │   │                                       deliveryMapFromDocs (outgoing filter)
 │   ├── task_store_test.dart             ← v1 → v2 migration (format, idempotence,
@@ -1799,7 +1829,8 @@ test/
 │   │                                       round-trip, corrupt JSON throws
 │   ├── agora_token_service_test.dart    ← needsRefresh thresholds, cache behavior,
 │   │                                       fetch-failure fallback
-│   ├── digest_service_test.dart         ← titlesFor (today+not-done filter),
+│   ├── digest_service_test.dart         ← titlesFor (today+not-done filter, skips
+│   │                                       notify-only tasks),
 │   │                                       buildBody checklist, DigestPrefs defaults
 │   └── call_log_service_test.dart       ← docIdFor stability / dedup key, shouldSync throttle
 ├── widgets/
@@ -1810,12 +1841,15 @@ test/
     │                                       long-press edit dialog, unified reminder dialog,
     │                                       re-arm clears the received task's doc-id alarm
     │                                       (no double-fire), unticking "Remind me" clears
-    │                                       the alarm, neither-box-ticked feedback
+    │                                       the alarm, Notify-without-Remind-me keeps the
+    │                                       time but arms nothing, neither-box-ticked feedback
     ├── calendar_screen_test.dart        ← month rendering, day selection, repeats drawn
     │                                       on every occurrence, Mine/Theirs filter
     │                                       (incl. last-box-cannot-clear and
     │                                       null-creator-is-mine), month navigation,
-    │                                       add/edit/complete/delete write-through
+    │                                       add/edit/complete/delete write-through,
+    │                                       day timeline (hour ruler, now line, scrolled
+    │                                       to the current hour, same-time lanes, order)
     ├── calls_screen_test.dart           ← call history rendering
     ├── chat_screen_lifecycle_test.dart  ← background-leave navigation vs live calls
     │                                       (uses DeviceService.testMode seam)
