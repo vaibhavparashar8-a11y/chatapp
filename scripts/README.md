@@ -1,4 +1,27 @@
-# Firestore cleanup tool
+# Firestore admin tools
+
+Two scripts, same auth: **`peek.js`** (read-only diagnostic) and
+**`cleanup.js`** (bulk delete).
+
+## `peek.js` — read-only diagnostic
+
+```bash
+cd scripts
+node peek.js
+```
+
+Prints, and changes nothing: the newest `app_logs` entries with ages, every
+message doc (flagging any with **no timestamp** — the app's
+`orderBy('timestamp')` query drops those silently), the room doc's
+`presence` / `presenceAt` / `readAt` / `lastSeen` / `callSignal` / `fcmTokens`,
+and the deployed Firestore security rules.
+
+Use it when one phone stops receiving. The signature of a **wedged Firestore
+connection** on the sending phone is: `presence.X == true`, `presenceAt.X`
+frozen minutes ago, and no `lastSeen.X` — that phone's writes are queued
+locally and never sent. See the matching row in `docs/DEVELOPER_GUIDE.md` §7.
+
+## `cleanup.js` — bulk delete
 
 Selectively bulk-deletes the Firestore collections that pile up over time, so
 you don't have to select-and-delete documents one by one in the console.

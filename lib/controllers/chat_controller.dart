@@ -28,12 +28,22 @@ class ChatController extends ChangeNotifier {
   /// Injectable so tests don't wait the real delay.
   final Duration messageResubscribeDelay;
 
+  /// How long writes may go unacknowledged before the connection is treated as
+  /// wedged. Three missed heartbeats by default.
+  final Duration stuckWriteAfter;
+
+  /// Floor on how often the connection may be reset, so a phone that is simply
+  /// offline doesn't thrash it.
+  final Duration connectionResetCooldown;
+
   ChatController(
     this._repo, {
     this.onUploadError,
     this.presenceRefreshInterval = const Duration(seconds: 20),
     this.presenceStaleAfter = const Duration(seconds: 45),
     this.messageResubscribeDelay = const Duration(seconds: 2),
+    this.stuckWriteAfter = const Duration(seconds: 60),
+    this.connectionResetCooldown = const Duration(seconds: 60),
   });
 
   // ── Private state ────────────────────────────────────────────────────────
@@ -41,6 +51,13 @@ class ChatController extends ChangeNotifier {
   List<Message> _streamMessages = [];     // real-time latest N
   List<Message> _olderMessages = [];      // paginated history
   final List<_PendingEntry> _pendingEntries = []; // optimistic + failed
+
+  /// When a write was last acknowledged by the backend — the liveness signal
+  /// behind [_checkWriteWatchdog]. Starts optimistic: nothing has failed yet.
+  DateTime _lastWriteAckAt = DateTime.now();
+
+  /// When the connection was last reset, for the cooldown.
+  DateTime? _lastResetAt;
 
   DateTime? _clearedAt;
   Set<String> _hiddenIds = {};
@@ -266,10 +283,49 @@ class ChatController extends ChangeNotifier {
     _presenceTimer?.cancel();
     _presenceTimer = Timer.periodic(presenceRefreshInterval, (_) {
       if (!_didLeave) {
-        _repo.refreshPresence();
+        unawaited(_refreshPresenceAcked());
       }
       _recomputeOnline();
+      _checkWriteWatchdog();
     });
+  }
+
+  // ── Stuck-write watchdog ─────────────────────────────────────────────────
+  //
+  // The listener self-heal (see _subscribeMessages and ChatService._listenRoom)
+  // only fires on an *error*. A wedged connection is worse than an error: it
+  // goes silent. Writes are accepted into the local queue and never sent, their
+  // futures never complete, and no callback fires — so this phone keeps showing
+  // its own messages from cache while the other phone receives nothing at all,
+  // not even the presence heartbeat. Only a relaunch recovered it.
+  //
+  // The heartbeat doubles as the liveness probe: it runs every
+  // [presenceRefreshInterval] whether or not the user does anything, so
+  // `_lastWriteAckAt` stops advancing the moment the connection dies.
+
+  /// Heartbeat write plus its acknowledgement. Note that a *failed* write still
+  /// counts as alive — ChatService swallows its own errors and returns — since
+  /// what matters here is whether the connection answers at all.
+  Future<void> _refreshPresenceAcked() async {
+    await _repo.refreshPresence();
+    _lastWriteAckAt = DateTime.now();
+  }
+
+  void _checkWriteWatchdog() {
+    final now = DateTime.now();
+    final silentFor = now.difference(_lastWriteAckAt);
+    if (silentFor < stuckWriteAfter) return;
+    final last = _lastResetAt;
+    if (last != null && now.difference(last) < connectionResetCooldown) return;
+
+    _lastResetAt = now;
+    LogService.w('ChatController',
+        'no write acknowledged for ${silentFor.inSeconds}s — resetting connection');
+    // Treat the reset itself as an ack so a slow reset doesn't immediately
+    // re-trigger; if the connection is still dead the next tick catches it.
+    _lastWriteAckAt = now;
+    unawaited(_repo.resetConnection().catchError(
+        (Object e) => LogService.e('ChatController', 'reset failed: $e')));
   }
 
   void _recomputeOnline() {
@@ -391,6 +447,7 @@ class ChatController extends ChangeNotifier {
         replyToSender: reply?.sender,
         clientId: clientId,
       );
+      _lastWriteAckAt = DateTime.now(); // the backend answered — still alive
       // Stream listener removes the entry once clientId is confirmed
     } catch (e) {
       LogService.e('ChatController', 'sendText failed: $e');

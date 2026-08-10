@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../constants.dart';
@@ -60,6 +61,39 @@ class ChatService {
   /// Publicly exposed so [DeviceService] and other callers outside this file
   /// can fan out from the same single Firestore listener.
   static Stream<Map<String, dynamic>> get roomDataStream => _sharedRoomData();
+
+  /// Skips the Firestore calls in [resetConnection] under test.
+  static bool testMode = false;
+
+  /// How many times [resetConnection] has run — asserted in tests.
+  @visibleForTesting
+  static int debugConnectionResets = 0;
+
+  /// Tear the Firestore connection down and bring it back up, flushing the
+  /// queued writes with it.
+  ///
+  /// The listener self-heal in [_listenRoom] only fires on an *error*. A
+  /// wedged gRPC stream — the state the client lands in after a bulk
+  /// server-side deletion, or when the OS suspends the socket — goes **silent**
+  /// instead: no error, no snapshots, and every write sits in the local queue
+  /// unsent. The other phone then sees nothing at all (no messages, no
+  /// presence heartbeat) while this one shows its own messages happily from
+  /// cache. Nothing in the SDK recovers from that on its own; disable/enable
+  /// forces a fresh connection and the pending writes go out.
+  static Future<void> resetConnection() async {
+    if (testMode) {
+      debugConnectionResets++;
+      return;
+    }
+    try {
+      await _db.disableNetwork();
+      await _db.enableNetwork();
+      debugConnectionResets++;
+      LogService.w('ChatService', 'connection reset — flushing pending writes');
+    } catch (e) {
+      LogService.e('ChatService', 'connection reset failed: $e');
+    }
+  }
 
   static CollectionReference get _messages =>
       _db.collection('rooms').doc(chatRoomId).collection('messages');

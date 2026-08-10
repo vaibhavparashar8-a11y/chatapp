@@ -48,6 +48,9 @@ class FirebaseChatRepository implements IChatRepository {
   Future<void> markRead() => ChatService.markRead();
 
   @override
+  Future<void> resetConnection() => ChatService.resetConnection();
+
+  @override
   Future<String?> getLastReadMsgId() => ChatService.getLastReadMsgId();
 
   @override

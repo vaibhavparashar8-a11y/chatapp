@@ -28,6 +28,12 @@ class FakeChatRepository implements IChatRepository {
   int markReadCount = 0;
   int enterCount = 0;
   int leaveCount = 0;
+  int resetConnectionCount = 0;
+
+  /// Simulates a wedged client: writes are accepted but their futures never
+  /// complete, exactly as a silently dead Firestore connection behaves. The
+  /// controller's watchdog should notice and call [resetConnection].
+  bool wedged = false;
   final List<bool> typingLog = [];
   final List<String> sentTexts = [];
 
@@ -134,7 +140,19 @@ class FakeChatRepository implements IChatRepository {
   Stream<DateTime?> myPresenceAtStream() => _myPresenceAtCtrl.stream;
 
   @override
-  Future<void> refreshPresence() async => refreshPresenceCount++;
+  Future<void> refreshPresence() {
+    refreshPresenceCount++;
+    // A wedged connection never acknowledges the write — the future hangs
+    // rather than throwing, which is precisely why nothing self-heals today.
+    if (wedged) return Completer<void>().future;
+    return Future.value();
+  }
+
+  @override
+  Future<void> resetConnection() async {
+    resetConnectionCount++;
+    wedged = false; // the reset is what unblocks the queue
+  }
 
   @override
   Stream<DateTime?> otherLastSeenStream() => const Stream.empty();
