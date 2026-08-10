@@ -432,7 +432,8 @@ file, so neither unit-testable nor reachable from the services.
 | `id`, `title`, `done`, `subtasks` | unchanged from `_Todo` |
 | `start` | the reminder time. **Was `dueDate`** |
 | `recurrence` | a `Recurrence` — the five-value enum |
-| `createdBy` | `'A'` / `'B'`, which role made it. Drives the calendar's Mine/Theirs filter |
+| `createdBy` | `'A'` / `'B'`, which role made it. Drives `isMine` — the calendar's **Mine** box |
+| `involvesOther(me)` | derived, not stored: they made it, **or** it is mirrored to their list (`sharedId`), **or** it doesn't ring here (`remindsMe` false). Drives the **Theirs** box. Not the negation of `isMine` — see the calendar section |
 | `remindsMe` | whether **this phone** rings for `start` — the "Remind me" tick box. Defaults true (and is only written to JSON when false, so older stored tasks read as true). False = the time is real and is drawn on the calendar / tile, but no local alarm is armed and the daily digest skips it: the reminder exists to notify the *other* person |
 | `sharedId` / `reminderDocId` / `backingDocId` | unchanged — see §4 |
 
@@ -1367,11 +1368,29 @@ viewing would silently move the series to that day.
 
 **The Mine/Theirs filter only spans what is already on this device**: your own
 tasks plus ones explicitly shared ("Add to notify task list"). Ticking
-**Theirs** shows reminders the other person shared with you — *not* their whole
+**Theirs** shows reminders that *involve the other person* — **not** their whole
 list, which this device never receives. The last ticked box cannot be cleared,
 so the calendar is never inexplicably empty. `isMine` treats a null `createdBy`
 as mine (see §5 `Task`), so tasks stored before that field existed don't vanish
 under the filter.
+
+**The two boxes overlap on purpose.** A task is matched by `isMine` *and*
+`involvesOther` independently, and shows if **either** ticked box matches:
+
+| Reminder | Mine | Theirs |
+|---|:--:|:--:|
+| Set for yourself | ✓ | |
+| Set for them, added to their list (`sharedId`) | ✓ | ✓ |
+| Set for them, "Remind me" off (`remindsMe` false) | ✓ | ✓ |
+| Arrived from their phone (`createdBy` is them) | | ✓ |
+
+Filing each task under exactly one box — by its **creator** — meant a reminder
+you set *for* them was Mine only, so unticking Mine to review what you had set
+for them showed nothing. That is the one place you would look, so it read as
+the reminder never having been created. `involvesOther` is deliberately not the
+negation of `isMine`: a reminder you set for them rings on your phone *and*
+lives on their list, so it genuinely belongs to both. The day row says which —
+**· for them** when you set it, **· from them** when they did.
 
 ---
 
@@ -1672,6 +1691,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Reminder docs pile up in Firestore after deleting tasks | (Fixed) Self reminders were never stored, and "remind them, no list" docs were created but not linked to the local task, so deletion never removed them | Every created doc is linked (`sharedId` or `reminderDocId`) and `_delete` deletes `backingDocId`; self reminders are stored with `locallyScheduled=true` and the Cloud Function skips them |
 | A reminder received from the other person fires **twice** | (Fixed) The delivery path (FCM / WorkManager / `pendingStream`) armed it under `docNotifId(docId)`, but the local copy it inserted has id `reminder_<docId>` — so `_rearmReminders` added a *second* schedule under `'reminder_<docId>'.hashCode` on the next launch, and its `cancelReminderGroup` only cleared the todo-id family | `_rearmReminders` now also cancels `docNotifId(todo.backingDocId)` before re-arming, leaving this device's own id as the single owner. The magic expression is now `NotificationService.docNotifId` in one place so the call sites can't drift apart again — see the two-id-families table in §5 |
 | Re-timing a task with "Remind me" unchecked still fires at the OLD time | (Fixed) The cancel + `dueDate` update lived inside `if (remindSelf)` in `_setReminder`, so unchecking it skipped both — the previous alarm stayed armed and the tile kept showing the old time | The local alarm now always follows the dialog: the old schedule is cancelled unconditionally, and the alarm is re-armed only when "Remind me" is on (`Task.remindsMe`) |
+| A reminder you set for the other person is missing when you tick only **Theirs** | (Fixed) The filter placed each task under exactly one box, chosen by its **creator** — so "Drink Water", set by A for B and added to B's list, counted as *Mine*. Unticking Mine to review what you had set for them showed nothing, which reads as the reminder never having been created | `Task.involvesOther(me)` is now evaluated independently of `isMine`, and a task shows if **either** ticked box matches. A reminder you set for them rings on your phone *and* lives on their list, so it belongs to both. The day row distinguishes **· for them** from **· from them** |
 | A reminder you set **for the other person** is missing from your own calendar | (Fixed) `_setReminder` cleared `start` whenever "Remind me" was unchecked, so a task set up with **Notify (+ add to their list)** had no time at all on this phone — the calendar only draws tasks with one | The time now survives whenever the dialog set one for *anyone*; the new `Task.remindsMe` flag records whether **this** phone rings for it. Only that gates arming (`_setReminder`, `_rearmReminders`, calendar `_editTask`) and the daily digest. Ticking neither box still clears the time |
 | A repeating reminder arrives on the other phone as a one-shot | (Fixed) `recurrence` was a local-only field — `createReminder` never wrote it, the FCM payload never carried it, and `applySharedSnapshot` rescheduled with the default `Recurrence.none`, which *also* silently downgraded your own copy whenever the other side changed the time | `recurrence` is written to the reminder doc, added to the `onReminderCreated` payload, parsed by `PendingReminder`/`SharedTask`, and passed to every `scheduleReminder` call. `applySharedSnapshot` re-arms on a repeat change alone, and no longer drops past-dated repeating reminders (future occurrences still fire) |
 | Picking a reminder date then ticking neither box does nothing | (Fixed) `_setReminder` fell through every branch with no write and no feedback | Reports "Reminder cleared" (if the task had one) or "Nothing selected — tick Remind me or Notify" |
@@ -1857,7 +1877,9 @@ test/
 │                                           format (dueDate), sharedId backfill,
 │                                           isMine (incl. null = mine), backingDocId,
 │                                           occursOn/occurrenceOn per recurrence,
-│                                           remindsMe (default true, round-trip)
+│                                           remindsMe (default true, round-trip),
+│                                           involvesOther (drives the Theirs box),
+│                                           involvesOther (drives the Theirs box)
 ├── utils/
 │   ├── time_utils_test.dart             ← formatLastSeen, formatDue,
 │   │                                       parseReminderTimestamp (UTC→local regression)

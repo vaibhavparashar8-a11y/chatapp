@@ -127,17 +127,21 @@ void main() {
           findsWidgets);
     });
 
-    testWidgets('opens scrolled to the current hour', (tester) async {
+    testWidgets('opens scrolled to the current time', (tester) async {
+      // Assert on the now line, not the hour label: the view anchors on the
+      // current *time*, so the hour label above it drifts off screen as the
+      // minutes pass — which made an earlier version of this test pass at
+      // 09:05 and fail at 09:45.
       await tester.pumpWidget(wrap());
       await tester.pumpAndSettle();
 
-      final now = DateTime.now();
-      final label = find.text('${now.hour.toString().padLeft(2, '0')}:00');
-      final scroller = find.byType(SingleChildScrollView);
-      final viewport = tester.getRect(scroller);
-      final labelRect = tester.getRect(label);
-      expect(labelRect.top, greaterThanOrEqualTo(viewport.top - 8));
-      expect(labelRect.bottom, lessThanOrEqualTo(viewport.bottom));
+      final viewport = tester.getRect(find.byType(SingleChildScrollView));
+      final nowLine = tester
+          .getRect(find.byWidgetPredicate(
+              (w) => w is ColoredBox && w.color == kAppNow))
+          .center;
+      expect(nowLine.dy, greaterThanOrEqualTo(viewport.top));
+      expect(nowLine.dy, lessThanOrEqualTo(viewport.bottom));
     });
 
     testWidgets('another day opens on its first reminder', (tester) async {
@@ -251,6 +255,75 @@ void main() {
 
       // Theirs was the only one left, so it stays on and Mine comes back off.
       expect(find.text('Their thing'), findsOneWidget);
+    });
+
+    testWidgets('a reminder I set FOR them shows under Theirs', (tester) async {
+      // The reported bug: A sets "Drink Water" for B and adds it to B's list,
+      // then unticks Mine to check what they set for B — and sees nothing,
+      // because the task was filed by its creator (A) alone.
+      await seed([
+        {
+          ...task('t1', 'Drink Water', today, createdBy: 'A'),
+          'sharedId': 'doc1',
+        },
+      ]);
+      await tester.pumpWidget(wrap());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Mine')); // Theirs only
+      await tester.pumpAndSettle();
+
+      expect(find.text('Drink Water'), findsOneWidget);
+      expect(find.text('· for them'), findsOneWidget,
+          reason: 'it must read as set for them, not received from them');
+    });
+
+    testWidgets('a reminder I set for them ALSO shows under Mine',
+        (tester) async {
+      // It still rings on this phone, so it belongs under both boxes.
+      await seed([
+        {
+          ...task('t1', 'Drink Water', today, createdBy: 'A'),
+          'sharedId': 'doc1',
+        },
+      ]);
+      await tester.pumpWidget(wrap());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Theirs')); // Mine only
+      await tester.pumpAndSettle();
+
+      expect(find.text('Drink Water'), findsOneWidget);
+    });
+
+    testWidgets('a notify-only reminder counts as theirs', (tester) async {
+      // No sharedId (not added to their list), but it does not ring here —
+      // the only reason to set such a time is to remind them.
+      await seed([
+        {
+          ...task('t1', 'Their errand', today, createdBy: 'A'),
+          'remindsMe': false,
+        },
+      ]);
+      await tester.pumpWidget(wrap());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Mine')); // Theirs only
+      await tester.pumpAndSettle();
+
+      expect(find.text('Their errand'), findsOneWidget);
+    });
+
+    testWidgets('a purely personal reminder stays out of Theirs',
+        (tester) async {
+      await seed([task('t1', 'My own thing', today, createdBy: 'A')]);
+      await tester.pumpWidget(wrap());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Mine')); // Theirs only
+      await tester.pumpAndSettle();
+
+      expect(find.text('My own thing'), findsNothing);
     });
 
     testWidgets('a task with no creator counts as mine', (tester) async {

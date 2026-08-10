@@ -400,9 +400,15 @@ class _TimelineCard extends StatelessWidget {
           ),
         ),
       ],
+      // "from them" (they made it) reads differently from "for them" (I set it
+      // on their list) — both live under Theirs, so the row has to say which.
       if (!mine) ...[
         const SizedBox(width: 5),
-        const Text('· shared',
+        const Text('· from them',
+            style: TextStyle(fontSize: 11, color: kAppEmerald)),
+      ] else if (task.involvesOther(mySenderId)) ...[
+        const SizedBox(width: 5),
+        const Text('· for them',
             style: TextStyle(fontSize: 11, color: kAppEmerald)),
       ],
       if (!task.remindsMe) ...[
