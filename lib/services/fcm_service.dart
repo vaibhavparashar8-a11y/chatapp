@@ -18,6 +18,11 @@ Future<void> _onBackgroundMessage(RemoteMessage message) async {
   if (message.data['type'] == 'reminder') {
     await _processReminderPayload(message.data);
   }
+  // `type == 'message'` deliberately does nothing here. Delivering the push at
+  // all is the point: it wakes a killed process, and the message itself is
+  // already in Firestore for the UI isolate to read on open. There is no
+  // notification to show (discreteness), and `chatRefreshNotifier` belongs to
+  // the UI isolate, so bumping it from this one would have no effect.
 }
 
 /// Shared logic for handling an incoming FCM reminder payload, called from
@@ -146,6 +151,11 @@ class FcmService {
       dev.log('foreground FCM: ${message.data}', name: _tag);
       if (message.data['type'] == 'reminder') {
         await _processReminderPayload(message.data);
+      } else if (message.data['type'] == 'message') {
+        // Silent by design — nothing is shown. This only tells the chat to
+        // re-subscribe and pull the latest, which recovers a `messages` watch
+        // target that died without ever raising an error.
+        chatRefreshNotifier.value++;
       }
     });
   }

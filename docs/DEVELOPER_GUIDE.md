@@ -1171,7 +1171,19 @@ the app is killed.
   notification for the exact time, and inserts the task into the local list
   when `addToList` is true
 
-The push itself is sent by the `onReminderCreated` Cloud Function (§11).
+Two payload types arrive here:
+
+| `data.type` | Foreground | Background isolate |
+|---|---|---|
+| `reminder` | `_processReminderPayload` — confirmation + schedule + optional list insert | same |
+| `message` | Bumps `chatRefreshNotifier` → `ChatController` re-subscribes its stream if the listener didn't deliver (see §11 `onMessageCreated`) | Nothing, by design — waking the process is the point; the notifier belongs to the UI isolate |
+
+A `message` push **never displays anything** (no `notification` block is sent)
+and carries no text or sender. It exists so chat delivery does not depend on a
+live Firestore listener inside a live process.
+
+The pushes themselves are sent by the `onReminderCreated` and
+`onMessageCreated` Cloud Functions (§11).
 
 ---
 
@@ -1648,6 +1660,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Sender sees "Read HH:mm" advance while the reader is away (offline) | (Fixed) `leave()` (app backgrounded) cleared presence but did not pause read receipts, and the message stream stays live — so an incoming message hit `_subscribeMessages` and advanced `readAt` even though the reader had left | Gate auto-mark-read on `!_didLeave` too; `enter()` calls `_markReadLatestIfNew()` to mark the missed message read on return |
 | Presence flips offline during WhatsApp call overlay | Some devices fire only `inactive` for overlays | 8s debounce timer on `inactive` (`??=` so it never restarts mid-sequence) |
 | "online" stuck forever after force-kill / crash | (Fixed) `presence` boolean was only cleared by in-memory debounce timers; a killed process never runs them, and Firestore has no onDisconnect | `presenceAt` heartbeat re-stamped every 20s while chat open; reader shows "online" only while heartbeats keep arriving (45s stale window, measured by local receive time — clock-skew immune). `ChatController.dispose()` also leaves as defense-in-depth |
+| One phone receives no messages for minutes; `readAt` frozen, `presenceAt` updating only sporadically, `typing` still working | The app's process is being **killed by the OS** (OEM battery management), or its `messages` watch target died silently. Chat had no push path at all — delivery depended entirely on a live listener in a live process, so a killed app received nothing until reopened. **How to confirm:** `node scripts/peek.js` — repeated `App: Started — role: X` lines minutes apart in `app_logs` mean the process is being killed, not that Firestore is broken | `onMessageCreated` (§11) sends a silent, data-only FCM push to the other phone on every message: it wakes a killed process, and in the foreground it makes `ChatController` re-subscribe a stream that stopped delivering. **Also exempt the app from battery optimisation on that phone** (Settings → Apps → Battery → Unrestricted) — no code can keep a killed process alive |
 | One phone's messages never reach the other, and its presence heartbeat stops, with no error anywhere | (Fixed) The self-heal in the row below only fires on a listener **error**. A wedged Firestore connection instead goes *silent*: writes queue locally and are never sent, their futures never complete, and no callback runs — so the sending phone shows its own messages from cache and looks fine. Seen again right after a bulk deletion of `messages` / `app_call_log_*`. **Signature in the room doc:** `presence.X == true`, `presenceAt.X` frozen minutes ago, no `lastSeen.X` | `ChatController` watches whether writes are still being acknowledged (the presence heartbeat is the probe) and calls `ChatService.resetConnection()` — `disableNetwork()` + `enableNetwork()` — after `stuckWriteAfter`, which rebuilds the connection and flushes the queue. Cooldown-limited so an offline phone doesn't thrash it. Diagnose with `node scripts/peek.js` |
 | Messages and call signals arrive ~10 s late, everywhere, regardless of screen | (Fixed) `CallLogService.sync()` ran on **every app resume, throttled only to 1/min**, and each run did a 30-day Firestore read (hundreds of docs) plus — right after the cleanup script deleted `app_call_log_*` — a several-hundred-document batch write. Firestore commits pending writes **in order on one queue per client**, so a chat message sent during that window waited behind the batch | Ordinary syncs run at most every 6 h from a persisted high-water mark and do **no** Firestore read; the full 30-day reconcile that restores externally deleted logs runs at most daily. See the CallLogService section in §5 |
 | Chat frozen (no new messages / presence / read receipts) until app restart — often after a bulk server-side deletion | (Fixed) A Firestore listener error was fatal: the room stream did `_roomBcast.addError(...)`, which cancelled the presence/typing/readAt listeners (they have no `onError`), and the message stream had no `onError` either — so any listener drop wedged the chat permanently | Both streams now **self-heal**: `ChatService._listenRoom()` logs and re-subscribes instead of forwarding the error downstream; `ChatController._subscribeMessages` re-subscribes after `messageResubscribeDelay` (2s, injectable). No restart needed |
@@ -1832,7 +1845,9 @@ test/
 │                                           hideMessage, editMessage, deleteMessage, presence
 │                                           (heartbeat staleness, legacy peer, dispose guard),
 │                                           stuck-write watchdog (wedged connection is reset,
-│                                           cooldown holds, a live send counts as an ack)
+│                                           cooldown holds, a live send counts as an ack),
+│                                           silent-push recovery (dead stream re-subscribes,
+│                                           healthy one does not, listener dropped on dispose)
 ├── features/call/
 │   └── call_service_test.dart           ← backend selection (agora/webrtc + safe fallback)
 ├── models/
@@ -2156,7 +2171,8 @@ Or transfer the APK file directly to the phone via USB/cloud and open it.
 Four 1st-gen Node 20 functions live in `functions/` (firebase-functions v4 —
 1st gen deliberately, to avoid the Eventarc permission delay 2nd-gen deploys
 hit on first use). Deployed to `us-central1` on project `my-chat-app-963fa`:
-`onReminderCreated` (Firestore trigger) and `getAgoraToken` (HTTPS callable).
+`onReminderCreated` and `onMessageCreated` (Firestore triggers) and
+`getAgoraToken` (HTTPS callable).
 
 **Requires the Blaze plan** (pay-as-you-go), but this app's usage is far
 inside the free tier: ~tens of invocations/day vs 2M/month free, and
@@ -2191,6 +2207,50 @@ than omitted, so the client normalises empty to null before using them.
 stored as a backup but the creator has already scheduled the local
 notification, so pushing to them (`forUser === createdBy`) would duplicate it.
 The guard at the top of the trigger returns early for these.
+
+### `onMessageCreated` — Firestore trigger (silent)
+
+Fires when a doc is created in `rooms/{roomId}/messages/{messageId}` and wakes
+the **other** phone (`sender` is `'A'`/`'B'`; the push goes to the opposite
+role's token).
+
+**Why it exists.** Chat delivery otherwise depends entirely on a live Firestore
+listener inside a live app process, and two production failures break that:
+
+1. the OS kills the app (OEM battery management), so there is no listener at
+   all — the app-startup lines in `app_logs` are how this was identified;
+2. the process survives but its `messages` watch target dies **silently** — no
+   error, so the resubscribe-on-error self-heal (#80) never fires, and the
+   write-stall watchdog (#102) does not see it either because writes still work.
+
+This push is a delivery channel independent of Firestore, so it can notice
+both.
+
+**It is data-only and deliberately shows nothing.** There is no `notification`
+block, so Android displays no notification whatsoever — discreteness is a
+product requirement, and a chat notification would reveal chat activity outside
+the app. `android.priority: 'high'` is required for delivery to a dozing or
+killed app.
+
+**The payload carries no content** — only `type: 'message'` and the message id.
+The phone already has Firestore access and fetches the text itself, so there is
+nothing in the push for a notification listener or a device log to leak.
+
+On the client (`FcmService`): the **foreground** handler bumps
+`chatRefreshNotifier`; `ChatController._onPushedMessage` then waits
+`pushGraceWindow` (3 s) and re-subscribes the message stream **only if no
+snapshot arrived in the meantime** — so a healthy conversation never
+re-subscribes per message, while a silently dead stream is recovered. The
+**background** handler deliberately does nothing: waking the process is the
+whole point, the message is already in Firestore for the UI isolate to read on
+open, and the notifier lives in a different isolate.
+
+A send failure (stale token after a reinstall) is caught and logged, never
+rethrown — the message is in Firestore either way.
+
+> **Redeploy required**: `firebase deploy --only functions --project my-chat-app-963fa`.
+> Until then nothing regresses — delivery simply stays dependent on the
+> listener, exactly as before.
 
 ### `getAgoraToken` — HTTPS callable
 

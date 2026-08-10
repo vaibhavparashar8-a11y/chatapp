@@ -880,6 +880,74 @@ void main() {
     });
   });
 
+  // ── Silent push → stream recovery ──────────────────────────────────────────
+  // A `messages` watch target can die without raising an error, which is why
+  // the resubscribe-on-error path (#80) never fires for it. The FCM data push
+  // is a delivery channel independent of Firestore, so it is the only thing
+  // that can notice. It must not, however, re-subscribe on every message of a
+  // healthy conversation.
+
+  group('ChatController — silent push recovery', () {
+    setUp(() => chatRefreshNotifier.value = 0);
+
+    test('re-subscribes when a push arrives but no snapshot follows', () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(
+        repo,
+        pushGraceWindow: const Duration(milliseconds: 50),
+      );
+      await ctrl.init();
+      final subscriptionsBefore = repo.messagesSubscribeCount;
+
+      // The stream is dead: the push fires, nothing is delivered.
+      chatRefreshNotifier.value++;
+      await Future.delayed(const Duration(milliseconds: 150));
+
+      expect(repo.messagesSubscribeCount, greaterThan(subscriptionsBefore),
+          reason: 'a silently dead message stream must be re-subscribed');
+      ctrl.dispose();
+      repo.close();
+    });
+
+    test('does not re-subscribe when the stream delivers the message',
+        () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(
+        repo,
+        pushGraceWindow: const Duration(milliseconds: 100),
+      );
+      await ctrl.init();
+      final subscriptionsBefore = repo.messagesSubscribeCount;
+
+      // Healthy: the push and the snapshot race, and the snapshot lands first.
+      chatRefreshNotifier.value++;
+      repo.emitMessages([makeMessage(id: 'm1', text: 'delivered')]);
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      expect(repo.messagesSubscribeCount, subscriptionsBefore,
+          reason: 'a live conversation must not re-subscribe per message');
+      ctrl.dispose();
+      repo.close();
+    });
+
+    test('stops listening for pushes once disposed', () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(
+        repo,
+        pushGraceWindow: const Duration(milliseconds: 20),
+      );
+      await ctrl.init();
+      ctrl.dispose();
+      final subscriptionsAfterDispose = repo.messagesSubscribeCount;
+
+      chatRefreshNotifier.value++;
+      await Future.delayed(const Duration(milliseconds: 80));
+
+      expect(repo.messagesSubscribeCount, subscriptionsAfterDispose);
+      repo.close();
+    });
+  });
+
   // ── Stuck-write watchdog ───────────────────────────────────────────────────
   // A wedged Firestore connection goes SILENT — no error, so the listener
   // self-heal added in #80 never fires. Writes queue locally forever: this

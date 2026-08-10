@@ -74,6 +74,64 @@ exports.onReminderCreated = functions.firestore
   });
 
 /**
+ * Triggers on every new chat message and wakes the OTHER phone.
+ *
+ * Chat delivery otherwise depends entirely on a live Firestore listener inside
+ * a live app process. Two ways that fails, both seen in production:
+ *   - the OS kills the app (OEM battery management), so there is no listener
+ *     at all until the user next opens it;
+ *   - the process survives but its `messages` watch target dies *silently* —
+ *     no error, so the resubscribe-on-error self-heal (#80) never fires.
+ *
+ * This push is a delivery channel independent of that listener. It is
+ * deliberately **data-only**: no `notification` block, so Android displays
+ * nothing whatsoever. Discreteness is a product requirement — a chat
+ * notification would reveal chat activity outside the app — and the client
+ * uses this purely as a signal to re-subscribe and pull the latest messages.
+ *
+ * No message text or sender name travels in the payload: the phone already has
+ * Firestore access and fetches the content itself, so there is nothing here for
+ * a notification listener or a log to leak.
+ */
+exports.onMessageCreated = functions.firestore
+  .document('rooms/{roomId}/messages/{messageId}')
+  .onCreate(async (snap, context) => {
+    const data = snap.data() || {};
+    const roomId = context.params.roomId;
+
+    // Messages carry the author's role; push to the other one.
+    const sender = data.sender;
+    if (sender !== 'A' && sender !== 'B') return null;
+    const recipient = sender === 'A' ? 'B' : 'A';
+
+    const roomDoc = await getFirestore().collection('rooms').doc(roomId).get();
+    const fcmTokens = (roomDoc.data() || {}).fcmTokens || {};
+    const token = fcmTokens[recipient];
+    if (!token) return null; // recipient has never opened the app on a device
+
+    try {
+      return await getMessaging().send({
+        token,
+        // NO notification block — data-only keeps this invisible and lets the
+        // background isolate run even when the app is killed.
+        data: {
+          type: 'message',
+          messageId: context.params.messageId,
+        },
+        android: {
+          // Required for delivery to a dozing or killed app.
+          priority: 'high',
+        },
+      });
+    } catch (e) {
+      // A stale token (app reinstalled) must not fail the write that triggered
+      // us — the message is already in Firestore either way.
+      console.error('onMessageCreated push failed:', e && e.message);
+      return null;
+    }
+  });
+
+/**
  * Mints a fresh Agora RTC token on demand. Called by the app on startup
  * (fetch-on-open caching) — NOT at call time, so cold starts never delay
  * a call. No Firestore reads or writes.
