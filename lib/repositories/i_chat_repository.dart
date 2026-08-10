@@ -29,6 +29,13 @@ abstract class IChatRepository {
   Future<void> leaveChat();
   Future<void> markRead();
 
+  /// Rebuild the backend connection, flushing any queued writes.
+  ///
+  /// Called by the controller's watchdog when writes stop being acknowledged —
+  /// a silently wedged connection produces no error to react to, so nothing
+  /// else would ever recover it.
+  Future<void> resetConnection();
+
   /// ID of the newest message from the other person already marked read on this
   /// device. Persisted so a chat re-open after an app restart does not re-stamp
   /// `readAt` (which would change the read time of already-read messages).

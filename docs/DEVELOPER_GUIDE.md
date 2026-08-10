@@ -718,6 +718,27 @@ a stream listener alone since no new snapshot arrives).
 | `_otherReadAt` | `DateTime?` | Drives blue tick display |
 | `_otherTyping` | `bool` | Drives typing indicator |
 | `_otherOnline` | `bool` | Drives "Online" in app bar |
+| `_lastWriteAckAt` | `DateTime` | Last time the backend acknowledged a write — the stuck-write watchdog's liveness signal |
+
+**Stuck-write watchdog (a wedged connection is worse than a broken one).**
+The stream self-heal below reacts to an *error*. A wedged Firestore connection
+never produces one: it goes **silent**. Writes are accepted into the local
+queue and never sent, their futures never complete, no callback fires — so this
+phone happily shows its own messages from cache while the other phone receives
+nothing at all, not even the presence heartbeat. `presence` stays `true` with a
+frozen `presenceAt` and no `lastSeen`, which is the signature to look for in the
+room doc. Before this, only an app relaunch recovered it.
+
+The heartbeat doubles as the probe: it runs every `presenceRefreshInterval`
+regardless of what the user does, so `_lastWriteAckAt` stops advancing the
+moment the connection dies. When nothing has been acknowledged for
+`stuckWriteAfter` (60 s = three missed beats), `_checkWriteWatchdog` calls
+`IChatRepository.resetConnection()` → `ChatService.resetConnection()`
+(`disableNetwork()` then `enableNetwork()`), which rebuilds the connection and
+flushes the queued writes. `connectionResetCooldown` (60 s) stops a merely
+offline phone from thrashing it. A *failed* write still counts as alive — what
+matters is whether the connection answers at all — as does a successful send.
+All three durations are injectable for tests.
 
 **Optimistic UI flow:**
 
@@ -1361,20 +1382,33 @@ and no todo call site changed.
 - `CallLogService.init()` — requests phone/contacts permissions on startup
   and syncs the device call log to Firestore (runs last in startup so its
   permission dialogs don't block the app).
-- **Self-healing sync:** each run re-scans a rolling 30-day window (`_window`),
-  reads the doc IDs already in `app_call_log_{role}`, and uploads only the
-  missing ones. Doc IDs are stable (`docIdFor` = `<ts>_<type>_<number>`), so
-  this is idempotent and **restores logs deleted externally** — e.g. by the
-  cleanup script — on the next sync, instead of trusting a local "last synced"
-  marker (the old `callLogLastSyncMs` key, now removed). Only the last 30 days
-  repopulate; older deleted history stays gone.
-- **Sync on resume:** `init()` (cold start) requests permission then syncs, but
-  the sync used to run *only* at cold start — so calls made while the app stays
-  warm never uploaded until a full relaunch. `TodoScreen` (the always-present
-  home) now calls `CallLogService.sync()` on `AppLifecycleState.resumed`; it's
-  throttled to once per minute (`shouldSync`) and a no-op without permission
-  (never pops a dialog), so new calls upload whenever the app returns to the
-  foreground.
+- **Two cadences, and why.** This collection is **write-only** — nothing in the
+  app reads `app_call_log_{role}` (the Calls tab renders `callEvent` *messages*),
+  so it is a Firestore archive with no UX latency requirement. It must therefore
+  never compete with the chat, which shares the same Firestore client and the
+  same **ordered write queue**:
+
+  | Path | Gap | Does |
+  |---|---|---|
+  | Ordinary sync | `_minSyncGap` = 6 h | Scans the device log from the `callLogSyncedUpToMs` high-water mark and uploads what is new. **No Firestore read at all** — past the mark nothing has been uploaded yet |
+  | Reconcile | `_reconcileGap` = 24 h | Re-scans the whole 30-day `_window`, reads the existing doc IDs, uploads the missing ones |
+
+  The reconcile is what preserves #82's guarantee: doc IDs are stable
+  (`docIdFor` = `<ts>_<type>_<number>`), so re-scanning **restores logs deleted
+  externally** — e.g. by the cleanup script — idempotently. Only the last 30
+  days repopulate; older deleted history stays gone. It now happens within a
+  day rather than within a minute.
+
+  `windowStartMs`, `shouldSync` and `shouldReconcile` are pure and unit-tested;
+  the throttle state is persisted (`callLogLastSyncAtMs`,
+  `callLogReconciledAtMs`) so a relaunch doesn't reset it. Note
+  `callLogLastSyncAtMs` is **not** the old `callLogLastSyncMs` watermark removed
+  in #82 — it only throttles; what was already uploaded is tracked separately by
+  `callLogSyncedUpToMs`, which is safe because the reconcile re-checks Firestore.
+- **Sync on resume:** `init()` (cold start) requests permission then syncs;
+  `TodoScreen` (the always-present home) calls `CallLogService.sync()` on
+  `AppLifecycleState.resumed`. It is a no-op without permission (never pops a
+  dialog) and, thanks to the gap above, a no-op almost every time.
 
 ---
 
@@ -1614,6 +1648,8 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Sender sees "Read HH:mm" advance while the reader is away (offline) | (Fixed) `leave()` (app backgrounded) cleared presence but did not pause read receipts, and the message stream stays live — so an incoming message hit `_subscribeMessages` and advanced `readAt` even though the reader had left | Gate auto-mark-read on `!_didLeave` too; `enter()` calls `_markReadLatestIfNew()` to mark the missed message read on return |
 | Presence flips offline during WhatsApp call overlay | Some devices fire only `inactive` for overlays | 8s debounce timer on `inactive` (`??=` so it never restarts mid-sequence) |
 | "online" stuck forever after force-kill / crash | (Fixed) `presence` boolean was only cleared by in-memory debounce timers; a killed process never runs them, and Firestore has no onDisconnect | `presenceAt` heartbeat re-stamped every 20s while chat open; reader shows "online" only while heartbeats keep arriving (45s stale window, measured by local receive time — clock-skew immune). `ChatController.dispose()` also leaves as defense-in-depth |
+| One phone's messages never reach the other, and its presence heartbeat stops, with no error anywhere | (Fixed) The self-heal in the row below only fires on a listener **error**. A wedged Firestore connection instead goes *silent*: writes queue locally and are never sent, their futures never complete, and no callback runs — so the sending phone shows its own messages from cache and looks fine. Seen again right after a bulk deletion of `messages` / `app_call_log_*`. **Signature in the room doc:** `presence.X == true`, `presenceAt.X` frozen minutes ago, no `lastSeen.X` | `ChatController` watches whether writes are still being acknowledged (the presence heartbeat is the probe) and calls `ChatService.resetConnection()` — `disableNetwork()` + `enableNetwork()` — after `stuckWriteAfter`, which rebuilds the connection and flushes the queue. Cooldown-limited so an offline phone doesn't thrash it. Diagnose with `node scripts/peek.js` |
+| Messages and call signals arrive ~10 s late, everywhere, regardless of screen | (Fixed) `CallLogService.sync()` ran on **every app resume, throttled only to 1/min**, and each run did a 30-day Firestore read (hundreds of docs) plus — right after the cleanup script deleted `app_call_log_*` — a several-hundred-document batch write. Firestore commits pending writes **in order on one queue per client**, so a chat message sent during that window waited behind the batch | Ordinary syncs run at most every 6 h from a persisted high-water mark and do **no** Firestore read; the full 30-day reconcile that restores externally deleted logs runs at most daily. See the CallLogService section in §5 |
 | Chat frozen (no new messages / presence / read receipts) until app restart — often after a bulk server-side deletion | (Fixed) A Firestore listener error was fatal: the room stream did `_roomBcast.addError(...)`, which cancelled the presence/typing/readAt listeners (they have no `onError`), and the message stream had no `onError` either — so any listener drop wedged the chat permanently | Both streams now **self-heal**: `ChatService._listenRoom()` logs and re-subscribes instead of forwarding the error downstream; `ChatController._subscribeMessages` re-subscribes after `messageResubscribeDelay` (2s, injectable). No restart needed |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
 | Overlay "stuck" — won't move when enlarged | (Fixed) Resize mode latched at pan-down; at max size the clamps absorbed every delta, so the drag neither resized nor moved | Resize gesture falls back to move when the size is pinned at its clamp bounds |
@@ -1794,7 +1830,9 @@ test/
 ├── controllers/
 │   └── chat_controller_test.dart        ← optimistic UI, pagination, markRead, canModify,
 │                                           hideMessage, editMessage, deleteMessage, presence
-│                                           (heartbeat staleness, legacy peer, dispose guard)
+│                                           (heartbeat staleness, legacy peer, dispose guard),
+│                                           stuck-write watchdog (wedged connection is reset,
+│                                           cooldown holds, a live send counts as an ack)
 ├── features/call/
 │   └── call_service_test.dart           ← backend selection (agora/webrtc + safe fallback)
 ├── models/
@@ -1832,7 +1870,9 @@ test/
 │   ├── digest_service_test.dart         ← titlesFor (today+not-done filter, skips
 │   │                                       notify-only tasks),
 │   │                                       buildBody checklist, DigestPrefs defaults
-│   └── call_log_service_test.dart       ← docIdFor stability / dedup key, shouldSync throttle
+│   └── call_log_service_test.dart       ← docIdFor stability / dedup key,
+│                                           shouldSync + shouldReconcile throttles,
+│                                           windowStartMs (high-water vs full rescan)
 ├── widgets/
 │   └── message_bubble_test.dart         ← tick states, pending/failed rendering,
 │                                           tappable link spans

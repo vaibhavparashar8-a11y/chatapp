@@ -3,20 +3,42 @@ import 'package:call_log/call_log.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'device_service.dart';
 import 'log_service.dart';
 
 class CallLogService {
   static const _tag = 'CallLogService';
 
-  /// How far back each sync re-scans the device call log. A rolling window (not
-  /// an incremental "since last sync") means logs deleted from Firestore
-  /// externally — e.g. by the cleanup script — repopulate on the next sync.
+  /// How far back a *reconcile* re-scans the device call log. A rolling window
+  /// (not an incremental "since last sync") means logs deleted from Firestore
+  /// externally — e.g. by the cleanup script — repopulate (see #82).
   static const _window = Duration(days: 30);
 
-  /// Minimum gap between syncs so calling [sync] on every app resume is cheap.
-  static const _minSyncGap = Duration(minutes: 1);
-  static DateTime? _lastSyncAt;
+  /// Minimum gap between syncs.
+  ///
+  /// This used to be one minute, which put a 30-day Firestore read — and, right
+  /// after an external deletion, a several-hundred-document batch write — on
+  /// the same client, and therefore the same ordered write queue, as the chat.
+  /// Messages and call signals queued behind it and arrived seconds late. The
+  /// collection is write-only (nothing in the app reads `app_call_log_{role}`;
+  /// the Calls tab renders `callEvent` messages), so there is no reason for it
+  /// to be anywhere near the chat's critical path.
+  static const _minSyncGap = Duration(hours: 6);
+
+  /// Minimum gap between full 30-day reconciles — the expensive path that reads
+  /// every existing doc in the window. Restoring externally deleted history a
+  /// day later is fine; doing it every minute is what caused the lag.
+  static const _reconcileGap = Duration(hours: 24);
+
+  /// Newest device-call timestamp already uploaded. Lets an ordinary sync scan
+  /// only what is new instead of the whole window.
+  static const _syncedUpToKey = 'callLogSyncedUpToMs';
+  // Deliberately NOT the old `callLogLastSyncMs`: that key was a watermark of
+  // "everything up to here is uploaded" (removed in #82 because it wrongly
+  // assumed the Firestore data still existed). This one only throttles.
+  static const _lastSyncKey = 'callLogLastSyncAtMs';
+  static const _reconciledKey = 'callLogReconciledAtMs';
 
   static final _db = FirebaseFirestore.instance;
 
@@ -25,16 +47,33 @@ class CallLogService {
   static bool shouldSync(DateTime? last, DateTime now) =>
       last == null || now.difference(last) >= _minSyncGap;
 
-  /// Sync now if the phone permission is already granted — safe to call on
-  /// every app resume. Throttled to at most once per [_minSyncGap], and a
-  /// silent no-op without permission (never pops a dialog). The cold-start
-  /// [init] path requests permission and syncs; this keeps new calls flowing
-  /// while the app is used without a full relaunch.
+  /// True if the expensive full-window reconcile is due. Pure/testable.
+  @visibleForTesting
+  static bool shouldReconcile(DateTime? lastReconcile, DateTime now) =>
+      lastReconcile == null || now.difference(lastReconcile) >= _reconcileGap;
+
+  /// Where a scan starts: the whole [_window] for a reconcile, otherwise just
+  /// past what was already uploaded (never further back than the window, and
+  /// never before it for a first run). Pure/testable.
+  @visibleForTesting
+  static int windowStartMs(int nowMs, int? syncedUpToMs, bool reconcile) {
+    final windowMs = nowMs - _window.inMilliseconds;
+    if (reconcile || syncedUpToMs == null) return windowMs;
+    return syncedUpToMs > windowMs ? syncedUpToMs : windowMs;
+  }
+
+  /// Sync if due — safe to call on every app resume; it is a no-op almost every
+  /// time. Silent no-op without the phone permission (never pops a dialog); the
+  /// cold-start [init] path is what requests it.
   static Future<void> sync() async {
-    if (!shouldSync(_lastSyncAt, DateTime.now())) return;
+    final prefs = await SharedPreferences.getInstance();
+    final lastMs = prefs.getInt(_lastSyncKey);
+    final last =
+        lastMs != null ? DateTime.fromMillisecondsSinceEpoch(lastMs) : null;
+    if (!shouldSync(last, DateTime.now())) return;
     try {
       if (!await Permission.phone.isGranted) return;
-      await _sync();
+      await _sync(prefs);
     } catch (e, st) {
       LogService.e(_tag, 'sync failed: $e\n$st');
     }
@@ -65,16 +104,24 @@ class CallLogService {
         return;
       }
 
-      await _sync();
+      await _sync(await SharedPreferences.getInstance());
     } catch (e, st) {
       LogService.e(_tag, 'init failed: $e\n$st');
     }
   }
 
-  static Future<void> _sync() async {
-    _lastSyncAt = DateTime.now();
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final dateFrom = now - _window.inMilliseconds;
+  static Future<void> _sync(SharedPreferences prefs) async {
+    final nowDt = DateTime.now();
+    final now = nowDt.millisecondsSinceEpoch;
+    await prefs.setInt(_lastSyncKey, now);
+
+    final reconciledMs = prefs.getInt(_reconciledKey);
+    final reconcile = shouldReconcile(
+        reconciledMs != null
+            ? DateTime.fromMillisecondsSinceEpoch(reconciledMs)
+            : null,
+        nowDt);
+    final dateFrom = windowStartMs(now, prefs.getInt(_syncedUpToKey), reconcile);
 
     Iterable<CallLogEntry> entries;
     try {
@@ -83,33 +130,39 @@ class CallLogService {
       LogService.e(_tag, 'CallLog.query failed: $e\n$st');
       return;
     }
+    if (reconcile) await prefs.setInt(_reconciledKey, now);
     if (entries.isEmpty) return;
 
     final role = DeviceService.role; // 'A' or 'B'
     final collection = _db.collection('app_call_log_$role');
 
-    // Which docs are already in Firestore for this window? Uploading only the
-    // missing ones keeps a normal sync cheap (writes just new calls) while
-    // restoring anything that was deleted externally. If the lookup fails
-    // (e.g. offline) we fall back to writing the whole window — idempotent,
-    // since doc IDs are stable.
+    // Which docs are already in Firestore? Only a reconcile needs to ask: it
+    // re-scans the whole window to restore externally deleted history, so it
+    // must know what is already there. An ordinary sync starts past the
+    // high-water mark, where by definition nothing has been uploaded yet — so
+    // it skips the read entirely. That read was hundreds of documents every
+    // resume, on the same client as the chat.
     var existing = <String>{};
-    try {
-      final snap = await collection
-          .where('timestamp',
-              isGreaterThanOrEqualTo:
-                  DateTime.fromMillisecondsSinceEpoch(dateFrom))
-          .get();
-      existing = snap.docs.map((d) => d.id).toSet();
-    } catch (e) {
-      LogService.w(_tag, 'existing-log lookup failed; writing full window: $e');
+    if (reconcile) {
+      try {
+        final snap = await collection
+            .where('timestamp',
+                isGreaterThanOrEqualTo:
+                    DateTime.fromMillisecondsSinceEpoch(dateFrom))
+            .get();
+        existing = snap.docs.map((d) => d.id).toSet();
+      } catch (e) {
+        LogService.w(_tag, 'existing-log lookup failed; writing full window: $e');
+      }
     }
 
     var batch = _db.batch();
     var pending = 0;
     var uploaded = 0;
+    var newestTs = 0;
     for (final entry in entries) {
       final ts = entry.timestamp ?? 0;
+      if (ts > newestTs) newestTs = ts;
       final docId = docIdFor(ts, entry.callType, entry.number);
       if (existing.contains(docId)) continue; // already synced
 
@@ -132,6 +185,10 @@ class CallLogService {
       }
     }
     if (pending > 0) await batch.commit();
+
+    // Only advance the mark once the writes are committed — a crash mid-batch
+    // must leave the entries eligible for the next run rather than skipping them.
+    if (newestTs > 0) await prefs.setInt(_syncedUpToKey, newestTs);
 
     dev.log('synced $uploaded new/restored entries to app_call_log_$role',
         name: _tag);

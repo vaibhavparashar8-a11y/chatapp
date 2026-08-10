@@ -879,4 +879,83 @@ void main() {
       repo.close();
     });
   });
+
+  // ── Stuck-write watchdog ───────────────────────────────────────────────────
+  // A wedged Firestore connection goes SILENT — no error, so the listener
+  // self-heal added in #80 never fires. Writes queue locally forever: this
+  // phone keeps showing its own messages from cache while the other phone gets
+  // nothing, not even the presence heartbeat. Only a relaunch used to fix it.
+
+  group('ChatController — stuck-write watchdog', () {
+    test('resets the connection when writes stop being acknowledged', () async {
+      final repo = FakeChatRepository();
+      // The margins here are deliberately wide: these are wall-clock timers, so
+      // a starved tick must not be mistakable for a wedged connection.
+      final ctrl = ChatController(
+        repo,
+        presenceRefreshInterval: const Duration(milliseconds: 20),
+        stuckWriteAfter: const Duration(milliseconds: 200),
+        connectionResetCooldown: const Duration(milliseconds: 500),
+      );
+      await ctrl.init();
+
+      // Healthy: heartbeats are acknowledged, so nothing is reset.
+      await Future.delayed(const Duration(milliseconds: 100));
+      expect(repo.resetConnectionCount, 0,
+          reason: 'a live connection must never be reset');
+
+      // The connection wedges: writes are accepted but never acknowledged.
+      repo.wedged = true;
+      await Future.delayed(const Duration(milliseconds: 600));
+
+      expect(repo.resetConnectionCount, greaterThanOrEqualTo(1),
+          reason: 'a silently dead connection must be rebuilt');
+      ctrl.dispose();
+      repo.close();
+    });
+
+    test('holds off re-resetting while the cooldown is running', () async {
+      // A phone that is simply offline would otherwise thrash the connection.
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(
+        repo,
+        presenceRefreshInterval: const Duration(milliseconds: 20),
+        stuckWriteAfter: const Duration(milliseconds: 100),
+        connectionResetCooldown: const Duration(seconds: 30),
+      );
+      await ctrl.init();
+
+      repo.wedged = true;
+      // Keep it wedged: the fake clears the flag on reset, so re-arm it.
+      for (var i = 0; i < 20; i++) {
+        await Future.delayed(const Duration(milliseconds: 20));
+        repo.wedged = true;
+      }
+
+      expect(repo.resetConnectionCount, 1,
+          reason: 'the cooldown allows exactly one reset in this window');
+      ctrl.dispose();
+      repo.close();
+    });
+
+    test('a successful send counts as proof the connection is alive', () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(
+        repo,
+        presenceRefreshInterval: const Duration(milliseconds: 20),
+        stuckWriteAfter: const Duration(seconds: 2),
+        connectionResetCooldown: const Duration(milliseconds: 500),
+      );
+      await ctrl.init();
+
+      for (var i = 0; i < 6; i++) {
+        await ctrl.sendText('still here $i');
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+
+      expect(repo.resetConnectionCount, 0);
+      ctrl.dispose();
+      repo.close();
+    });
+  });
 }
