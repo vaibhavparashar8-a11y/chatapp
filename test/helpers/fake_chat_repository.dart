@@ -54,8 +54,15 @@ class FakeChatRepository implements IChatRepository {
 
   // ── IChatRepository ───────────────────────────────────────────────────────
 
+  /// How many times the controller has subscribed to the message stream —
+  /// re-subscription is the recovery for a silently dead listener.
+  int messagesSubscribeCount = 0;
+
   @override
-  Stream<List<Message>> messagesStream({int limit = 50}) => _msgsCtrl.stream;
+  Stream<List<Message>> messagesStream({int limit = 50}) {
+    messagesSubscribeCount++;
+    return _msgsCtrl.stream;
+  }
 
   @override
   Future<void> sendText(

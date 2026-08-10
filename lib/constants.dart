@@ -53,3 +53,11 @@ const String otherDisplayName = 'Them';
 // Incremented whenever a remote reminder adds a task to the local todo list,
 // so TodoScreen knows to reload from SharedPreferences immediately.
 final ValueNotifier<int> todoRefreshNotifier = ValueNotifier(0);
+
+// ── New-message signal (FCM, independent of the Firestore listener) ──────────
+// Incremented when a silent data push says the other phone wrote a message.
+// ChatController re-subscribes its message stream on this, which is the only
+// thing that recovers a `messages` watch target that died *silently* — no
+// error, so the resubscribe-on-error self-heal (#80) never fires. The push
+// carries no text or sender: it is a nudge, not a payload.
+final ValueNotifier<int> chatRefreshNotifier = ValueNotifier(0);

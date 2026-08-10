@@ -36,6 +36,12 @@ class ChatController extends ChangeNotifier {
   /// offline doesn't thrash it.
   final Duration connectionResetCooldown;
 
+  /// How long a silent "you have a new message" push waits for the Firestore
+  /// listener to deliver that message before the stream is treated as dead and
+  /// re-subscribed. Long enough that a healthy listener always wins the race,
+  /// so an active conversation never re-subscribes.
+  final Duration pushGraceWindow;
+
   ChatController(
     this._repo, {
     this.onUploadError,
@@ -44,6 +50,7 @@ class ChatController extends ChangeNotifier {
     this.messageResubscribeDelay = const Duration(seconds: 2),
     this.stuckWriteAfter = const Duration(seconds: 60),
     this.connectionResetCooldown = const Duration(seconds: 60),
+    this.pushGraceWindow = const Duration(seconds: 3),
   });
 
   // ── Private state ────────────────────────────────────────────────────────
@@ -58,6 +65,13 @@ class ChatController extends ChangeNotifier {
 
   /// When the connection was last reset, for the cooldown.
   DateTime? _lastResetAt;
+
+  /// Counts snapshots delivered by the message stream — used to tell a dead
+  /// listener from a merely quiet one when a push arrives. A counter, not a
+  /// timestamp: the two events can land in the same clock tick (coarse on some
+  /// platforms), which would make a delivered message look undelivered.
+  int _messagesSnapshotSeq = 0;
+  Timer? _pushCheckTimer;
 
   DateTime? _clearedAt;
   Set<String> _hiddenIds = {};
@@ -157,6 +171,11 @@ class ChatController extends ChangeNotifier {
 
     _subscribeMessages();
 
+    // A silent FCM push is a delivery channel independent of Firestore, so it
+    // is the one signal that can reveal a message stream which died without
+    // erroring. See [_onPushedMessage].
+    chatRefreshNotifier.addListener(_onPushedMessage);
+
     _readAtSub = _repo.otherReadAtStream().listen((ts) {
       if (ts != _otherReadAt) {
         _otherReadAt = ts;
@@ -221,7 +240,27 @@ class ChatController extends ChangeNotifier {
     });
   }
 
+  /// A silent push says the other phone wrote a message. If the listener is
+  /// healthy it will deliver that message within a moment on its own — so wait
+  /// out [pushGraceWindow] and only act if nothing arrived. That keeps an
+  /// active conversation from re-subscribing on every single message, while
+  /// still recovering a `messages` watch target that has died silently (no
+  /// error, so the resubscribe-on-error path in [_subscribeMessages] never
+  /// runs). The push carries no content: re-subscribing is what fetches it.
+  void _onPushedMessage() {
+    final seqAtPush = _messagesSnapshotSeq;
+    _pushCheckTimer?.cancel();
+    _pushCheckTimer = Timer(pushGraceWindow, () {
+      if (_disposed) return;
+      if (_messagesSnapshotSeq != seqAtPush) return; // it arrived
+      LogService.w('ChatController',
+          'push announced a message but the stream delivered nothing — resubscribing');
+      _subscribeMessages();
+    });
+  }
+
   void _onMessages(List<Message> msgs) {
+    _messagesSnapshotSeq++; // proof the listener is alive
     _streamMessages = msgs;
 
       final confirmedClientIds = msgs
@@ -647,6 +686,8 @@ class ChatController extends ChangeNotifier {
     _markReadTimer?.cancel();
     _presenceTimer?.cancel();
     _resubscribeTimer?.cancel();
+    _pushCheckTimer?.cancel();
+    chatRefreshNotifier.removeListener(_onPushedMessage);
     _messagesSub?.cancel();
     _readAtSub?.cancel();
     _typingSub?.cancel();
