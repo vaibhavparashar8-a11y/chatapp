@@ -188,6 +188,7 @@ class ChatService {
     MessageType type, {
     String? fileName,
     void Function(double)? onProgress,
+    String? clientId,
   }) async {
     final rawBytes = await file.readAsBytes();
     final name = fileName ?? file.path.split('/').last;
@@ -223,6 +224,7 @@ class ChatService {
       'fileName': name,
       'fileSize': rawBytes.length,
       'timestamp': FieldValue.serverTimestamp(),
+      if (clientId != null) 'clientId': clientId,
     };
     await _messages.add(map);
     LogService.i('Upload', 'Message saved to Firestore');

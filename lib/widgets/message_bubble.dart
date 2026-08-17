@@ -1,3 +1,4 @@
+import 'dart:io' show File;
 import 'package:flutter/gestures.dart' show TapGestureRecognizer;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
@@ -20,6 +21,7 @@ part 'bubbles/download_button.dart';
 part 'bubbles/video_player.dart';
 part 'bubbles/file_tile.dart';
 part 'bubbles/audio_tile.dart';
+part 'bubbles/upload_preview.dart';
 
 class MessageBubble extends StatefulWidget {
   final Message message;
@@ -27,6 +29,11 @@ class MessageBubble extends StatefulWidget {
   final void Function(Message)? onReply;
   final bool isPending;
   final bool isFailed;
+
+  /// 0–1 while this message's media is uploading; null otherwise. Drives the
+  /// ring drawn over the local preview.
+  final double? uploadProgress;
+
   final VoidCallback? onRetry;
   final bool showReadTime;
   final VoidCallback? onLongPress;
@@ -38,6 +45,7 @@ class MessageBubble extends StatefulWidget {
     this.onReply,
     this.isPending = false,
     this.isFailed = false,
+    this.uploadProgress,
     this.onRetry,
     this.showReadTime = false,
     this.onLongPress,
@@ -433,6 +441,18 @@ class _MessageBubbleState extends State<MessageBubble>
 
   Widget _buildContent(BuildContext context, Color textColor) {
     final msg = widget.message;
+    // Still uploading (or failed): there is no download URL yet, so show the
+    // local preview with its progress ring instead of the remote media.
+    if (msg.mediaUrl == null &&
+        (msg.type == MessageType.image ||
+            msg.type == MessageType.gif ||
+            msg.type == MessageType.video)) {
+      return _UploadPreview(
+        previewPath: msg.previewPath,
+        type: msg.type,
+        progress: widget.uploadProgress,
+      );
+    }
     switch (msg.type) {
       case MessageType.text:
         return Padding(

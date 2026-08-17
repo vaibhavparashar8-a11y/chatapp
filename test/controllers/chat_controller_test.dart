@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:chatapp/constants.dart';
 import 'package:chatapp/controllers/chat_controller.dart';
@@ -99,6 +100,116 @@ void main() {
       expect(ctrl.failedIds, isNotEmpty);
       expect(ctrl.pendingIds, isEmpty);
       expect(ctrl.messages.any((m) => m.text == 'fail me'), true);
+      ctrl.dispose();
+      repo.close();
+    });
+  });
+
+  group('ChatController — media upload', () {
+    // The composer used to be disabled for the whole upload, with only a
+    // banner to show for it. The bubble now carries the preview and progress.
+    test('the bubble appears before the upload starts, with a local preview',
+        () async {
+      final repo = FakeChatRepository()..mediaProgressGate = Completer<void>();
+      final ctrl = ChatController(repo);
+      await ctrl.init();
+
+      final future = ctrl.sendMedia(File('/pics/cat.jpg'), MessageType.image);
+
+      expect(ctrl.messages.length, 1);
+      final bubble = ctrl.messages.single;
+      expect(bubble.type, MessageType.image);
+      expect(bubble.previewPath, '/pics/cat.jpg');
+      expect(bubble.mediaUrl, isNull); // nothing uploaded yet
+      expect(ctrl.pendingIds, contains(bubble.id));
+
+      repo.mediaProgressGate!.complete();
+      await future;
+      ctrl.dispose();
+      repo.close();
+    });
+
+    test('progress is reported against that one message id', () async {
+      final repo = FakeChatRepository()..mediaProgressGate = Completer<void>();
+      final ctrl = ChatController(repo);
+      await ctrl.init();
+
+      final future = ctrl.sendMedia(File('/pics/cat.jpg'), MessageType.image);
+      final id = ctrl.messages.single.id;
+      expect(ctrl.uploadProgressFor(id), 0.5);
+      expect(ctrl.uploadProgressFor('some-other-message'), isNull);
+
+      repo.mediaProgressGate!.complete();
+      await future;
+      ctrl.dispose();
+      repo.close();
+    });
+
+    test('the optimistic bubble is replaced by the confirmed message',
+        () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(repo);
+      await ctrl.init();
+
+      await ctrl.sendMedia(File('/pics/cat.jpg'), MessageType.image,
+          fileName: 'cat.jpg');
+      await Future.delayed(Duration.zero);
+
+      expect(repo.sentMedia, ['cat.jpg']);
+      // The clientId is what lets the stream retire the optimistic copy —
+      // without it the sender would see the photo twice.
+      expect(repo.mediaClientIds.single, isNotNull);
+      expect(ctrl.pendingIds, isEmpty);
+      expect(ctrl.messages.single.mediaUrl, isNotNull);
+      expect(ctrl.uploadProgressFor(ctrl.messages.single.id), isNull);
+
+      ctrl.dispose();
+      repo.close();
+    });
+
+    test('a failed upload keeps its bubble and can be retried', () async {
+      final repo = FakeChatRepository()..throwOnSend = true;
+      final errors = <String>[];
+      final ctrl = ChatController(repo, onUploadError: errors.add);
+      await ctrl.init();
+
+      await ctrl.sendMedia(File('/pics/cat.jpg'), MessageType.image,
+          fileName: 'cat.jpg');
+
+      final failedId = ctrl.failedIds.single;
+      expect(errors, isNotEmpty);
+      expect(ctrl.messages.single.previewPath, '/pics/cat.jpg');
+      expect(ctrl.uploadProgressFor(failedId), isNull); // ring gone, not stuck
+
+      repo.throwOnSend = false;
+      await ctrl.retryMessage(failedId);
+      await Future.delayed(Duration.zero);
+
+      expect(repo.sentMedia, ['cat.jpg', 'cat.jpg']); // re-uploaded, not re-sent as text
+      expect(ctrl.failedIds, isEmpty);
+      expect(ctrl.pendingIds, isEmpty);
+      ctrl.dispose();
+      repo.close();
+    });
+
+    test('a second upload runs alongside the first, each with its own ring',
+        () async {
+      final repo = FakeChatRepository()..mediaProgressGate = Completer<void>();
+      final ctrl = ChatController(repo);
+      await ctrl.init();
+
+      final first = ctrl.sendMedia(File('/pics/one.jpg'), MessageType.image);
+      await Future.delayed(Duration.zero);
+      final second = ctrl.sendMedia(File('/pics/two.jpg'), MessageType.image);
+      await Future.delayed(Duration.zero);
+
+      expect(ctrl.messages.length, 2);
+      final ids = ctrl.messages.map((m) => m.id).toList();
+      expect(ctrl.uploadProgressFor(ids[0]), 0.5);
+      expect(ctrl.uploadProgressFor(ids[1]), 0.5);
+
+      repo.mediaProgressGate!.complete();
+      await Future.wait([first, second]);
       ctrl.dispose();
       repo.close();
     });

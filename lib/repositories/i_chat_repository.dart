@@ -23,6 +23,8 @@ abstract class IChatRepository {
     MessageType type, {
     String? fileName,
     void Function(double progress)? onProgress,
+    // Same role as in [sendText]: confirms the optimistic upload bubble.
+    String? clientId,
   });
 
   Future<void> enterChat();

@@ -268,4 +268,64 @@ void main() {
           reason: 'link recognizers must not swallow long-presses');
     });
   });
+
+  group('MessageBubble — uploading media', () {
+    Message uploading(MessageType type, {String? previewPath}) => Message(
+          id: 'pending_1',
+          sender: 'A',
+          text: '',
+          type: type,
+          previewPath: previewPath,
+          timestamp: DateTime(2024, 1, 1, 12, 0),
+        );
+
+    testWidgets('a photo with no mediaUrl shows its local file, not the network',
+        (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(
+        message: uploading(MessageType.image, previewPath: '/pics/cat.jpg'),
+        isPending: true,
+        uploadProgress: 0.4,
+      )));
+
+      final image = tester.widget<Image>(find.byType(Image));
+      expect(image.image, isA<FileImage>());
+      expect((image.image as FileImage).file.path, '/pics/cat.jpg');
+      expect(find.text('40%'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    });
+
+    testWidgets('a video with no thumbnail yet still shows a progress ring',
+        (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(
+        message: uploading(MessageType.video),
+        isPending: true,
+        uploadProgress: 0,
+      )));
+
+      expect(find.byIcon(Icons.videocam_rounded), findsOneWidget);
+      // Indeterminate at 0 — a determinate ring would look frozen.
+      expect(
+        tester
+            .widget<CircularProgressIndicator>(
+                find.byType(CircularProgressIndicator))
+            .value,
+        isNull,
+      );
+    });
+
+    // Regression: _buildContent used to dereference mediaUrl! for image/video,
+    // which threw for a bubble that had not finished uploading.
+    testWidgets('a failed upload renders without a ring and without throwing',
+        (tester) async {
+      await tester.pumpWidget(wrap(MessageBubble(
+        message: uploading(MessageType.image, previewPath: '/pics/cat.jpg'),
+        isFailed: true,
+        uploadProgress: null,
+      )));
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.byIcon(Icons.error_outline), findsOneWidget);
+    });
+  });
 }

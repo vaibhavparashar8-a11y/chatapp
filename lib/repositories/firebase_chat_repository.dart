@@ -35,8 +35,10 @@ class FirebaseChatRepository implements IChatRepository {
     MessageType type, {
     String? fileName,
     void Function(double)? onProgress,
+    String? clientId,
   }) =>
-      ChatService.sendMedia(file, type, fileName: fileName, onProgress: onProgress);
+      ChatService.sendMedia(file, type,
+          fileName: fileName, onProgress: onProgress, clientId: clientId);
 
   @override
   Future<void> enterChat() => ChatService.enterChat();

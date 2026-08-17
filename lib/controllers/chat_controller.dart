@@ -79,7 +79,6 @@ class ChatController extends ChangeNotifier {
   bool _otherTyping = false;
   bool _otherOnline = false;
   DateTime? _otherLastSeen;
-  double? _uploadProgress;
 
   // Presence staleness state. Firestore has no onDisconnect, so a force-killed
   // app leaves `presence=true` behind forever. The writer re-stamps
@@ -146,8 +145,13 @@ class ChatController extends ChangeNotifier {
   bool get otherTyping => _otherTyping;
   bool get otherOnline => _otherOnline;
   DateTime? get otherLastSeen => _otherLastSeen;
-  double? get uploadProgress => _uploadProgress;
-  bool get sending => _uploadProgress != null;
+  /// Upload progress (0–1) of the message with [messageId], or null when it is
+  /// not an upload in flight. Drives the ring on that one bubble — uploads no
+  /// longer block the whole composer, so there can be several at once.
+  double? uploadProgressFor(String messageId) => _pendingEntries
+      .where((e) => e.message.id == messageId)
+      .firstOrNull
+      ?.progress;
   bool get hasMoreMessages => _hasMoreMessages;
   bool get loadingMore => _loadingMore;
   Message? get replyingTo => _replyingTo;
@@ -496,9 +500,53 @@ class ChatController extends ChangeNotifier {
     }
   }
 
+  /// Sends a photo/video/file optimistically: the bubble (with a local preview
+  /// and its own progress ring) appears immediately and the upload runs behind
+  /// it, so the composer stays usable — it used to be disabled app-wide until
+  /// the upload finished.
   Future<void> sendMedia(File file, MessageType type, {String? fileName}) async {
-    _uploadProgress = 0;
-    notifyListeners();
+    final clientId = 'pending_${DateTime.now().microsecondsSinceEpoch}';
+    final entry = _PendingEntry(
+      clientId: clientId,
+      message: _mediaMessage(
+        clientId: clientId,
+        type: type,
+        fileName: fileName ?? file.path.split('/').last,
+        // A photo previews from the picked file itself; a video has no image to
+        // show until a thumbnail is generated below.
+        previewPath: type == MessageType.image || type == MessageType.gif
+            ? file.path
+            : null,
+      ),
+      sourceFile: file,
+    );
+    entry.progress = 0;
+    _pendingEntries.add(entry);
+    notifyListeners(); // bubble appears before any encoding/upload work starts
+
+    if (type == MessageType.video) {
+      final thumb = await _videoThumbnail(file);
+      if (thumb != null && _pendingEntries.contains(entry)) {
+        entry.message = _mediaMessage(
+          clientId: clientId,
+          type: type,
+          fileName: entry.message.fileName,
+          previewPath: thumb,
+          timestamp: entry.message.timestamp,
+        );
+        notifyListeners();
+      }
+    }
+
+    await _upload(entry);
+  }
+
+  /// Compress (video only) and upload the file behind [entry], keeping its
+  /// progress ring current. Shared by [sendMedia] and [retryMessage].
+  Future<void> _upload(_PendingEntry entry) async {
+    final file = entry.sourceFile;
+    if (file == null) return;
+    final type = entry.message.type;
     try {
       File uploadFile = file;
       if (type == MessageType.video) {
@@ -522,22 +570,56 @@ class ChatController extends ChangeNotifier {
       await _repo.sendMedia(
         uploadFile,
         type,
-        fileName: fileName,
+        fileName: entry.message.fileName,
+        clientId: entry.clientId,
         onProgress: (p) {
-          _uploadProgress = p;
+          entry.progress = p;
           notifyListeners();
         },
       );
+      _lastWriteAckAt = DateTime.now(); // the backend answered — still alive
+      // The stream listener drops the entry once the clientId comes back.
     } catch (e) {
       LogService.e('ChatController', 'sendMedia failed: $e');
-      onUploadError?.call(e.toString().split(']').last.trim());
-    } finally {
-      _uploadProgress = null;
+      entry.failed = true;
+      entry.progress = null;
       notifyListeners();
+      onUploadError?.call(e.toString().split(']').last.trim());
     }
   }
 
-  /// Re-send a failed text message identified by its [clientId].
+  /// First frame of [file] as an image, for the uploading bubble. Best-effort:
+  /// a failure just means the bubble shows a neutral placeholder instead.
+  Future<String?> _videoThumbnail(File file) async {
+    try {
+      final thumb = await VideoCompress.getFileThumbnail(file.path, quality: 50);
+      return thumb.path;
+    } catch (e) {
+      LogService.w('ChatController', 'video thumbnail failed: $e');
+      return null;
+    }
+  }
+
+  Message _mediaMessage({
+    required String clientId,
+    required MessageType type,
+    String? fileName,
+    String? previewPath,
+    DateTime? timestamp,
+  }) =>
+      Message(
+        id: clientId,
+        sender: mySenderId,
+        text: '',
+        type: type,
+        fileName: fileName,
+        previewPath: previewPath,
+        timestamp: timestamp ?? DateTime.now(),
+        clientId: clientId,
+      );
+
+  /// Re-send a failed message identified by its [clientId] — a text message,
+  /// or a media upload from the file it was picked from.
   Future<void> retryMessage(String clientId) async {
     final entry = _pendingEntries
         .where((e) => e.message.id == clientId)
@@ -545,6 +627,12 @@ class ChatController extends ChangeNotifier {
     if (entry == null || !entry.failed) return;
     entry.failed = false;
     notifyListeners();
+
+    if (entry.sourceFile != null) {
+      entry.progress = 0;
+      await _upload(entry);
+      return;
+    }
 
     try {
       await _repo.sendText(
@@ -699,13 +787,26 @@ class ChatController extends ChangeNotifier {
   }
 }
 
-// Holds an outgoing text message in the optimistic (pending) or failed state.
+// Holds an outgoing message in the optimistic (pending) or failed state.
 class _PendingEntry {
   final String clientId;
-  final Message message;
+
+  /// Replaced (not mutated — [Message] is immutable) when a video's preview
+  /// thumbnail finishes generating after the bubble is already on screen.
+  Message message;
+
   final String? replyToId;
   final String? replyToText;
   final String? replyToSender;
+
+  /// The picked file, for media entries only. Kept so a failed upload can be
+  /// retried from the same source.
+  final File? sourceFile;
+
+  /// Upload progress 0–1 while the file is going up; null for text messages
+  /// and for a media entry whose upload has failed.
+  double? progress;
+
   bool failed = false;
 
   _PendingEntry({
@@ -714,5 +815,6 @@ class _PendingEntry {
     this.replyToId,
     this.replyToText,
     this.replyToSender,
+    this.sourceFile,
   });
 }
