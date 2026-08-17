@@ -97,6 +97,7 @@ Set these in Firebase Console → Remote Config → Add parameter:
 | `webrtc_turn_url` | `turn:openrelay.metered.ca:80` | TURN relay for the WebRTC backend. Empty = STUN only, which fails whenever either phone is behind carrier-grade/symmetric NAT. Currently set to the free Open Relay Project — swap for self-hosted coturn if you need something you don't depend on a third party for |
 | `webrtc_turn_username` | `openrelayproject` | TURN credential (must be a static, non-expiring credential — the engine has no code path to refresh time-limited tokens) |
 | `webrtc_turn_credential` | `openrelayproject` | TURN credential |
+| `giphy_api_key` | *(empty)* | API key for the in-app GIF picker (free at developers.giphy.com). Empty disables **only** the GIF tab, which then shows a "not set up" note — emoji, keyboard stickers and everything else keep working. Note this is the one feature that sends user input (search terms) to a third party |
 | `todo_input_text_color` | `#ADADAD` | Hex color of the to-do input hint text |
 | `enable_firestore_logging` | `false` | When true, LogService also writes to Firestore `app_logs/` |
 
@@ -609,6 +610,36 @@ ValueListenableBuilder<int>(
 
 ---
 
+### `lib/services/giphy_service.dart`
+
+Backs the GIF tab of the composer panel. Trending by default,
+`/search` once the user types (debounced 450 ms in `_GifPicker`, so a word is
+one request rather than one per letter).
+
+- **Key**: Remote Config `giphy_api_key`. `isConfigured` is false when it is
+  blank, and the tab renders a "not set up" note instead of an error — every
+  other part of the composer is unaffected.
+- **`parseResponse` is pure and lenient** (unit-tested): Giphy omits `images`
+  variants unpredictably, so it walks a preference list — small preview for the
+  grid, `downsized` for the send — and skips unusable entries rather than
+  dropping the whole grid.
+- **Sending**: the picker never posts a Giphy URL into the chat. The GIF is
+  downloaded to the cache and sent through `ChatController.sendMedia` as a
+  normal `MessageType.gif`, so it lives in Firebase Storage like any other
+  media and the other phone needs nothing from Giphy.
+- **Test seam**: `GiphyService.testMode = true` returns `searchResults`.
+
+**Emoji and stickers need no service.** Emoji come from
+`lib/utils/emoji_data.dart` — a curated, categorised list, deliberately not the
+full Unicode set (no dependency, no font-coverage surprises). Stickers and GIFs
+sent from the system keyboard (Gboard's GIF/sticker key, and any sticker pack
+installed from the Play Store) arrive through Android's `commitContent` API,
+surfaced by the message field's `contentInsertionConfiguration` and handled by
+`_onKeyboardContent` — without that configuration the keyboard greys those keys
+out as "not supported".
+
+---
+
 ### `lib/services/media_store_service.dart`
 
 Puts every downloaded chat file in one place the user can actually find:
@@ -839,7 +870,9 @@ if (ChatController.canModify(msg)) {
 |---|---|
 | `chat_screen.dart` | State class, lifecycle, `build()` scaffold |
 | `screens/chat/load_more_indicator.dart` | Scroll-triggered history loader |
-| `screens/chat/attach_option.dart` | Attach menu item widget |
+| `screens/chat/attach_option.dart` | Attach sheet: the rounded card (`_AttachSheet`) and its gradient tiles (`_AttachOption`) |
+| `screens/chat/emoji_panel.dart` | Emoji grid + GIF picker behind two tabs (`_EmojiGifPanel`, `_GifPicker`) |
+| `screens/chat/composer_input.dart` | `extension ChatComposerInput` — emoji insert/backspace, GIF send, keyboard sticker handling |
 | `screens/chat/typing_indicator.dart` | Three-dot animated bubble |
 | `screens/chat/floating_video_overlay.dart` | Minimized call pip overlay |
 
@@ -1789,6 +1822,8 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Messages and call signals arrive ~10 s late, everywhere, regardless of screen | (Fixed) `CallLogService.sync()` ran on **every app resume, throttled only to 1/min**, and each run did a 30-day Firestore read (hundreds of docs) plus — right after the cleanup script deleted `app_call_log_*` — a several-hundred-document batch write. Firestore commits pending writes **in order on one queue per client**, so a chat message sent during that window waited behind the batch | Ordinary syncs run at most every 6 h from a persisted high-water mark and do **no** Firestore read; the full 30-day reconcile that restores externally deleted logs runs at most daily. See the CallLogService section in §5 |
 | Chat frozen (no new messages / presence / read receipts) until app restart — often after a bulk server-side deletion | (Fixed) A Firestore listener error was fatal: the room stream did `_roomBcast.addError(...)`, which cancelled the presence/typing/readAt listeners (they have no `onError`), and the message stream had no `onError` either — so any listener drop wedged the chat permanently | Both streams now **self-heal**: `ChatService._listenRoom()` logs and re-subscribes instead of forwarding the error downstream; `ChatController._subscribeMessages` re-subscribes after `messageResubscribeDelay` (2s, injectable). No restart needed |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
+| No way to send emoji, GIFs or Play Store stickers | (Added) The composer had a text field and an attach menu, nothing else. Flutter text fields also reject keyboard-inserted images unless configured, so Gboard greyed out its GIF/sticker keys | Emoji/GIF panel behind a smiley button (`_EmojiGifPanel`), and `contentInsertionConfiguration` on the message field so keyboard stickers/GIFs insert and send. GIF search needs `giphy_api_key` in Remote Config |
+| Attach sheet tiles are enormous / the sheet overflows the composer | (Fixed) `GridView.count` with `childAspectRatio` derives tile **height** from screen width, so a wide layout produced 226 px tiles and a RenderFlex overflow | `SliverGridDelegateWithMaxCrossAxisExtent` with an explicit `mainAxisExtent` pins row height independently of width. Tile labels are `maxLines: 1` |
 | A downloaded photo/video/file cannot be found anywhere on the phone | (Fixed) Downloads went to `getExternalStorageDirectory()` = `Android/data/com.example.chatapp/files/`, which modern Android hides from file managers and wipes on uninstall. Only images/videos escaped it, via `gal`, into the Gallery | Everything is exported to **Download/MyTask** through MediaStore (`MediaStoreService` → `MyTaskStorage.java`). The cache copy is kept only so `OpenFile` has a real path to open. A failed export now says "Download failed" instead of silently reporting success |
 | Grabbing the pip's resize corner opens the full-screen call instead | (Fixed) The corner was only a painted hint; the parent `GestureDetector` hit-tested the whole overlay, so a touch there that didn't travel far enough to win the pan arena was delivered as a tap → restore | The handle is its own opaque `GestureDetector` owning the resize pan, with an empty `onTap` that absorbs the touch, and is 36×36 instead of 24×24. The parent additionally refuses to restore when the gesture moved the overlay (`_moved`) |
 | Overlay "stuck" — won't move when enlarged | (Fixed) Resize mode latched at pan-down; at max size the clamps absorbed every delta, so the drag neither resized nor moved | Resize gesture falls back to move when the size is pinned at its clamp bounds |
@@ -2007,8 +2042,10 @@ test/
 │   │                                       every day once, no foreign months)
 │   ├── call_signal_interpreter_test.dart ← interpretCallSignal event mapping,
 │   │                                        callerStatusLabel priority (§6.4)
-│   └── call_event_text_test.dart        ← formatCallDuration padding; missed-vs-ended
-│                                           wording of the end-of-call chat entry
+│   ├── call_event_text_test.dart        ← formatCallDuration padding; missed-vs-ended
+│   │                                       wording of the end-of-call chat entry
+│   └── emoji_data_test.dart             ← every category populated, tab icon is one of
+│                                           its own emoji, no duplicates or blanks
 ├── services/
 │   ├── reminder_service_test.dart       ← applySharedSnapshot reconcile rules
 │   │                                       (incl. subtask sync + recurrence sync:
@@ -2031,9 +2068,11 @@ test/
 │   ├── call_log_service_test.dart       ← docIdFor stability / dedup key,
 │   │                                       shouldSync + shouldReconcile throttles,
 │   │                                       windowStartMs (high-water vs full rescan)
-│   └── media_store_service_test.dart    ← mimeTypeFor mapping, channel arguments,
-│                                           null (not throw) on platform failure,
-│                                           testMode seam
+│   ├── media_store_service_test.dart    ← mimeTypeFor mapping, channel arguments,
+│   │                                       null (not throw) on platform failure,
+│   │                                       testMode seam
+│   └── giphy_service_test.dart          ← isConfigured gating, no request without a key,
+│                                           parseResponse variant preference + lenience
 ├── widgets/
 │   └── message_bubble_test.dart         ← tick states, pending/failed rendering,
 │                                           tappable link spans, uploading media
@@ -2056,6 +2095,11 @@ test/
     ├── calls_screen_test.dart           ← call history rendering
     ├── chat_screen_lifecycle_test.dart  ← background-leave navigation vs live calls
     │                                       (uses DeviceService.testMode seam)
+    ├── chat_screen_composer_test.dart   ← attach sheet (all 7 options visible, toggles),
+    │                                       emoji panel (inserts at caret, does not send,
+    │                                       grapheme-safe backspace, mutually exclusive
+    │                                       with the attach sheet), GIF tab configured
+    │                                       vs not
     └── chat_screen_overlay_test.dart    ← overlay geometry persistence defaults/reset,
                                             phantom-open guard (notifier + inCall),
                                             resize handle: tap absorbed (no restore),
@@ -2067,7 +2111,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 358 tests, ~40 seconds
+flutter test                        # 387 tests, ~45 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a

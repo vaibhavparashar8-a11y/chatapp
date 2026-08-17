@@ -120,6 +120,7 @@ class ChatController extends ChangeNotifier {
   // UI-only state that belongs here because it drives notifyListeners()
   Message? _replyingTo;
   bool _showAttachMenu = false;
+  bool _showEmojiPanel = false;
 
   // Read-receipt guard: ID of the latest message from the other person that we
   // have already scheduled a markRead for. Only updated when !_markReadPaused
@@ -156,6 +157,7 @@ class ChatController extends ChangeNotifier {
   bool get loadingMore => _loadingMore;
   Message? get replyingTo => _replyingTo;
   bool get showAttachMenu => _showAttachMenu;
+  bool get showEmojiPanel => _showEmojiPanel;
 
   Set<String> get pendingIds =>
       _pendingEntries.where((e) => !e.failed).map((e) => e.message.id).toSet();
@@ -694,12 +696,24 @@ class ChatController extends ChangeNotifier {
 
   void setReplyingTo(Message? msg) {
     _replyingTo = msg;
-    if (msg != null) _showAttachMenu = false;
+    if (msg != null) {
+      _showAttachMenu = false;
+      _showEmojiPanel = false;
+    }
     notifyListeners();
   }
 
+  /// Attach sheet and emoji/GIF panel are mutually exclusive — both occupy the
+  /// space under the composer, so opening one always closes the other.
   void setShowAttachMenu(bool show) {
     _showAttachMenu = show;
+    if (show) _showEmojiPanel = false;
+    notifyListeners();
+  }
+
+  void setShowEmojiPanel(bool show) {
+    _showEmojiPanel = show;
+    if (show) _showAttachMenu = false;
     notifyListeners();
   }
 
