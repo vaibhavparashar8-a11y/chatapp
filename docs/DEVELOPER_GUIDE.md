@@ -928,6 +928,7 @@ bool get _isRead {
 | `webrtc_call_engine.dart` | Peer-to-peer WebRTC implementation (no per-minute cost) |
 | `webrtc_signaling.dart` | Firestore offer/answer/ICE exchange for the WebRTC backend |
 | `call_screen.dart` | Full-screen call UI with timer, mute/camera buttons |
+| `end_minimized_call.dart` | Hang-up teardown for the mini call bar / floating overlay — the minimized twin of `CallScreen._endCall` |
 | `incoming_call_dialog.dart` | Bottom-sheet shown when `callSignal.status == 'ringing'` |
 | `agora_token_builder.dart` | Client-side HMAC-SHA256 token builder (Test Mode fallback) |
 
@@ -1003,9 +1004,25 @@ at the default small size. A resize drag whose delta is fully absorbed by the
 min/max size clamps (size pinned) falls back to a move, so the overlay never
 feels "stuck" at its largest size.
 
-**Foreground service:** `CallScreen` invokes `startForeground` /
-`stopForeground` on a platform channel so Android keeps the process alive
-while a call runs in the background. Native side:
+**Ending a call — two surfaces, one teardown:**
+
+| Surface | Entry point | What it does |
+|---|---|---|
+| Full-screen `CallScreen` | `_endCall()` | Writes the callEvent (caller only), sets `callSignal.status = ended`, then `CallService.leaveCall()` and pops |
+| Mini call bar / floating video overlay | `endMinimizedCall()` (`features/call/end_minimized_call.dart`) | Same three steps, minus the navigation |
+
+Both build the chat entry with `callEndEventText()`
+(`utils/call_event_text.dart`) so the two paths cannot word it differently.
+Missed vs. ended is decided by `CallService.connectedAt` — the timestamp of
+the first remote join, which (unlike `currentRemoteUid` or CallScreen's
+`_callConnected`) is *not* cleared when the peer leaves, so a teardown
+triggered by the remote hang-up still knows the call was answered.
+`connectedAt` is cleared in `joinCall()` and `leaveCall()`.
+
+**Foreground service:** `CallScreen` invokes `startForeground` on a platform
+channel so Android keeps the process alive while a call runs in the
+background; the matching `stopForeground` is issued centrally by
+`CallService.leaveCall()`, so it fires on *every* teardown path. Native side:
 `android/.../MainActivity.java` (channel handler) →
 `android/.../CallForegroundService.java` (the service).
 
@@ -1693,6 +1710,9 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
 | Overlay "stuck" — won't move when enlarged | (Fixed) Resize mode latched at pan-down; at max size the clamps absorbed every delta, so the drag neither resized nor moved | Resize gesture falls back to move when the size is pinned at its clamp bounds |
 | Overlay resets to small size after returning from CallScreen | (Fixed) Geometry was widget State, wiped by the `_floatingVideoEpoch` key-bump reconstruction | Geometry hoisted to `CallService.overlayX/Y/W/H`; reset only in `joinCall()` (new call) |
+| Hanging up from the mini call bar or floating video overlay leaves no trace in the chat | (Fixed) Those two surfaces only flipped `callActiveNotifier` and called `leaveCall()` — no callEvent was written and `callSignal.status` was never set to `ended`, so the same call cut from the full screen logged an entry while one cut from the minimized UI logged nothing | Both surfaces call the shared `endMinimizedCall()` (`features/call/end_minimized_call.dart`), which mirrors `CallScreen._endCall`: callEvent + status + `leaveCall()` |
+| Foreground-service notification ("MyTask — Running") stays in the tray after the call ends | (Fixed) `stopForeground` was invoked only from `CallScreen`, so ending from the mini bar/overlay — or any dispose path that skipped `_endCall` — never stopped the service | `CallService.leaveCall()` invokes `stopForeground` centrally, alongside the screen-wakelock release it already owned |
+| The caller's chat logs an answered call as "Missed" when the other side hangs up first | (Fixed) `_endCall` picked the wording from `_callConnected`, which the `onUserLeft` handler sets to false immediately before calling it | Wording comes from `callEndEventText()` keyed on `CallService.connectedAt`, which is not cleared when the peer leaves |
 | Mini bar / video overlay appears with no live call | (Fixed) Visibility trusted `callActiveNotifier` alone, which atypical teardowns left stale-true | Gate on `callActiveNotifier && CallService.inCall`; `leaveCall()` centrally resets the notifier |
 | Reminder for other person never arrives | Recipient's phone has no FCM token registered | Check `rooms/{roomId}/fcmTokens` in Firestore Console — open the app once on that phone to register |
 | Reminder docs pile up in Firestore after deleting tasks | (Fixed) Self reminders were never stored, and "remind them, no list" docs were created but not linked to the local task, so deletion never removed them | Every created doc is linked (`sharedId` or `reminderDocId`) and `_delete` deletes `backingDocId`; self reminders are stored with `locallyScheduled=true` and the Cloud Function skips them |
@@ -1876,7 +1896,9 @@ test/
 │                                           silent-push recovery (dead stream re-subscribes,
 │                                           healthy one does not, listener dropped on dispose)
 ├── features/call/
-│   └── call_service_test.dart           ← backend selection (agora/webrtc + safe fallback)
+│   └── call_service_test.dart           ← backend selection (agora/webrtc + safe fallback),
+│                                           leaveCall stops the foreground service and clears
+│                                           call state (connectedAt, remote uid, flags)
 ├── models/
 │   ├── message_test.dart                ← fromMap/toMap, all MessageTypes, legacy iv field
 │   ├── recurrence_test.dart             ← storage round-trip, fireDays, shortLabel, abbrev,
@@ -1897,8 +1919,10 @@ test/
 │   ├── calendar_utils_test.dart         ← monthYearLabel; monthCells (whole weeks,
 │   │                                       Monday-first padding, leap February,
 │   │                                       every day once, no foreign months)
-│   └── call_signal_interpreter_test.dart ← interpretCallSignal event mapping,
-│                                            callerStatusLabel priority (§6.4)
+│   ├── call_signal_interpreter_test.dart ← interpretCallSignal event mapping,
+│   │                                        callerStatusLabel priority (§6.4)
+│   └── call_event_text_test.dart        ← formatCallDuration padding; missed-vs-ended
+│                                           wording of the end-of-call chat entry
 ├── services/
 │   ├── reminder_service_test.dart       ← applySharedSnapshot reconcile rules
 │   │                                       (incl. subtask sync + recurrence sync:
@@ -1950,7 +1974,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 235 tests, ~20 seconds
+flutter test                        # 346 tests, ~40 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a

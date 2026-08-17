@@ -35,6 +35,12 @@ class CallService {
   // When the channel was first joined — used to restore timer on reconnect
   static DateTime? callStartTime;
 
+  /// When the remote participant first joined, or null if they never did.
+  /// Unlike [currentRemoteUid] this is NOT cleared when they leave, so a
+  /// teardown running after the hang-up can still tell a connected call from
+  /// one that was never answered (missed).
+  static DateTime? connectedAt;
+
   // UI state persisted across minimize/restore
   static bool isMuted = false;
   static bool isCameraOff = false;
@@ -84,6 +90,7 @@ class CallService {
 
   static void _handleUserJoined(int uid) {
     currentRemoteUid = uid;
+    connectedAt ??= DateTime.now();
     _onUserJoined?.call(uid);
   }
 
@@ -145,6 +152,7 @@ class CallService {
     required void Function() onError,
   }) async {
     inCall = true; // set before any await so a pending leave-timer can't pop us
+    connectedAt = null; // new call — nobody has joined yet
     // Video calls: keep the screen awake for the whole call. Audio calls rely on
     // the proximity wakelock (see CallScreen) instead, so the screen can still
     // switch off when held to the ear.
@@ -178,6 +186,12 @@ class CallService {
     inCall = false;
     // Always clear the screen-on flag (no-op if it was an audio call).
     _callChannel.invokeMethod('allowScreenOff').catchError((_) {});
+    // Centralized like the wakelock above: the foreground-service notification
+    // ("MyTask — Running") used to be stopped only from CallScreen, so every
+    // teardown that skipped that screen — ending from the mini bar or the
+    // floating video overlay, or CallScreen being disposed without _endCall —
+    // left it sitting in the tray after the call was over.
+    _callChannel.invokeMethod('stopForeground').catchError((_) {});
     // Centralized here so EVERY teardown path (error, timeout, remote hangup)
     // hides the overlay/mini-bar. The scattered per-callback resets in
     // CallScreen missed atypical paths, leaving the overlay to appear
@@ -189,6 +203,7 @@ class CallService {
     onCallEnded = null;
     currentRemoteUid = null;
     callStartTime = null;
+    connectedAt = null;
     isMuted = false;
     isCameraOff = false;
     isSpeakerOn = false;

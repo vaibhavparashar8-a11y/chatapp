@@ -8,6 +8,7 @@ import 'call_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/log_service.dart';
 import '../../constants.dart';
+import '../../utils/call_event_text.dart';
 import '../../utils/call_signal_interpreter.dart';
 
 const _proximityChannel = MethodChannel('com.example.chatapp/proximity');
@@ -251,13 +252,17 @@ class _CallScreenState extends State<CallScreen> {
     _callChannel.invokeMethod('stopForeground').catchError((_) {});
     _stopwatch.stop();
     if (widget.isCaller) {
-      final label = widget.isVideo ? 'Video call' : 'Audio call';
-      // !_callConnected covers both: A manually cuts before B answers, and 20s timeout
-      if (!_callConnected) {
-        await ChatService.sendCallEvent('Missed $label');
-      } else {
-        await ChatService.sendCallEvent('$label ended • $_duration');
-      }
+      // CallService.connectedAt — not _callConnected — decides missed vs ended:
+      // the remote-hangup path clears _callConnected just before calling us, so
+      // keying off it logged an answered call as "Missed". Null means the other
+      // side never joined (manual cut before answer, or the 20s timeout).
+      final connectedAt = CallService.connectedAt;
+      await ChatService.sendCallEvent(callEndEventText(
+        isVideo: widget.isVideo,
+        connectedFor: connectedAt == null
+            ? null
+            : DateTime.now().difference(connectedAt),
+      ));
     }
     await ChatService.updateCallStatus('ended');
     // Timeout so a stuck Agora engine can't block navigation forever.
