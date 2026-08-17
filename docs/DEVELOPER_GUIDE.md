@@ -1065,11 +1065,20 @@ Navigator.push(context, MaterialPageRoute(builder: (_) => CallScreen()));
 **Floating video overlay gestures** (`floating_video_overlay.dart`):
 
 - Drag anywhere → moves the overlay (clamped to screen bounds)
-- Drag from the bottom-right 24×24 corner handle → resizes (80–260 × 100–340)
+- Drag from the bottom-right 36×36 corner handle → resizes (80–260 × 100–340).
+  The handle is its own `GestureDetector` (`HitTestBehavior.opaque`, with an
+  empty `onTap` that absorbs taps), not a painted hint the parent hit-tests —
+  otherwise grabbing the corner falls through to restore-on-tap and throws the
+  user into the full-screen call.
 - Fast upward flick (velocity < −600 px/s) → restores full-screen call
-- Tap → restores full-screen call. Position alone NEVER triggers restore —
-  an earlier `_y < 35% of screen` check fired on every drag release because
-  the overlay starts at y=80.
+- Tap → restores full-screen call, but only when the gesture did not move the
+  overlay (`_moved`). Position alone NEVER triggers restore — an earlier
+  `_y < 35% of screen` check fired on every drag release because the overlay
+  starts at y=80.
+
+> Testing gestures here: drag in **small steps** (`startGesture` + repeated
+> `moveBy`). A single big `tester.drag` move is swallowed as the pan
+> recognizer's slop and never reaches `onPanUpdate`.
 
 **AgoraVideoView blank-screen fix:**
 
@@ -1739,6 +1748,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Messages and call signals arrive ~10 s late, everywhere, regardless of screen | (Fixed) `CallLogService.sync()` ran on **every app resume, throttled only to 1/min**, and each run did a 30-day Firestore read (hundreds of docs) plus — right after the cleanup script deleted `app_call_log_*` — a several-hundred-document batch write. Firestore commits pending writes **in order on one queue per client**, so a chat message sent during that window waited behind the batch | Ordinary syncs run at most every 6 h from a persisted high-water mark and do **no** Firestore read; the full 30-day reconcile that restores externally deleted logs runs at most daily. See the CallLogService section in §5 |
 | Chat frozen (no new messages / presence / read receipts) until app restart — often after a bulk server-side deletion | (Fixed) A Firestore listener error was fatal: the room stream did `_roomBcast.addError(...)`, which cancelled the presence/typing/readAt listeners (they have no `onError`), and the message stream had no `onError` either — so any listener drop wedged the chat permanently | Both streams now **self-heal**: `ChatService._listenRoom()` logs and re-subscribes instead of forwarding the error downstream; `ChatController._subscribeMessages` re-subscribes after `messageResubscribeDelay` (2s, injectable). No restart needed |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
+| Grabbing the pip's resize corner opens the full-screen call instead | (Fixed) The corner was only a painted hint; the parent `GestureDetector` hit-tested the whole overlay, so a touch there that didn't travel far enough to win the pan arena was delivered as a tap → restore | The handle is its own opaque `GestureDetector` owning the resize pan, with an empty `onTap` that absorbs the touch, and is 36×36 instead of 24×24. The parent additionally refuses to restore when the gesture moved the overlay (`_moved`) |
 | Overlay "stuck" — won't move when enlarged | (Fixed) Resize mode latched at pan-down; at max size the clamps absorbed every delta, so the drag neither resized nor moved | Resize gesture falls back to move when the size is pinned at its clamp bounds |
 | Overlay resets to small size after returning from CallScreen | (Fixed) Geometry was widget State, wiped by the `_floatingVideoEpoch` key-bump reconstruction | Geometry hoisted to `CallService.overlayX/Y/W/H`; reset only in `joinCall()` (new call) |
 | Hanging up from the mini call bar or floating video overlay leaves no trace in the chat | (Fixed) Those two surfaces only flipped `callActiveNotifier` and called `leaveCall()` — no callEvent was written and `callSignal.status` was never set to `ended`, so the same call cut from the full screen logged an entry while one cut from the minimized UI logged nothing | Both surfaces call the shared `endMinimizedCall()` (`features/call/end_minimized_call.dart`), which mirrors `CallScreen._endCall`: callEvent + status + `leaveCall()` |
@@ -2002,7 +2012,9 @@ test/
     ├── chat_screen_lifecycle_test.dart  ← background-leave navigation vs live calls
     │                                       (uses DeviceService.testMode seam)
     └── chat_screen_overlay_test.dart    ← overlay geometry persistence defaults/reset,
-                                            phantom-open guard (notifier + inCall)
+                                            phantom-open guard (notifier + inCall),
+                                            resize handle: tap absorbed (no restore),
+                                            drag resizes, over-max falls through to move
 integration_test/
 └── chat_screen_test.dart                ← end-to-end smoke tests (requires physical device)
 ```
@@ -2010,7 +2022,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 354 tests, ~40 seconds
+flutter test                        # 358 tests, ~40 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
