@@ -18,10 +18,19 @@ class _AudioMessageTileState extends State<_AudioMessageTile> {
     setState(() => _downloading = true);
     try {
       final name = widget.message.fileName ?? 'audio.m4a';
-      final path = await _savePath(name);
-      await Dio().download(widget.message.mediaUrl!, path);
-      await OpenFile.open(path);
-    } catch (_) {
+      final staged = await _downloadToMyTask(widget.message.mediaUrl!, name);
+      if (!mounted) return;
+      if (staged == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Download failed'), duration: Duration(seconds: 2)));
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Saved to Download/${MediaStoreService.folderName}'),
+        duration: const Duration(seconds: 2)));
+      await OpenFile.open(staged);
+    } catch (e) {
+      LogService.e('Download', 'audio download failed: $e');
     } finally {
       if (mounted) setState(() => _downloading = false);
     }

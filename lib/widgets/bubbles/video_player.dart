@@ -45,9 +45,17 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
     if (_openingExternal) return;
     setState(() => _openingExternal = true);
     try {
-      final path = await _savePath(widget.fileName);
-      await Dio().download(widget.url, path);
-      await OpenFile.open(path);
+      final staged = await _downloadToMyTask(widget.url, widget.fileName);
+      if (!mounted) return;
+      if (staged == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Download failed'), duration: Duration(seconds: 2)));
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Saved to Download/${MediaStoreService.folderName}'),
+        duration: const Duration(seconds: 2)));
+      await OpenFile.open(staged);
     } catch (e, st) {
       LogService.e('VideoPlayer', 'open external failed — ${widget.fileName} err=$e\n$st');
     } finally {

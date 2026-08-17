@@ -7,11 +7,13 @@ import android.os.PowerManager;
 import android.view.WindowManager;
 import io.flutter.embedding.android.FlutterActivity;
 import io.flutter.embedding.engine.FlutterEngine;
+import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 
 public class MainActivity extends FlutterActivity {
     private static final String PROXIMITY_CHANNEL    = "com.example.chatapp/proximity";
     private static final String CALL_CHANNEL         = "com.example.chatapp/call";
+    private static final String STORAGE_CHANNEL      = "com.example.chatapp/storage";
     private PowerManager.WakeLock proximityWakeLock;
 
     @Override
@@ -33,6 +35,15 @@ public class MainActivity extends FlutterActivity {
                 } else if (call.method.equals("release")) {
                     releaseProximityWakeLock();
                     result.success(null);
+                } else {
+                    result.notImplemented();
+                }
+            });
+
+        new MethodChannel(flutterEngine.getDartExecutor().getBinaryMessenger(), STORAGE_CHANNEL)
+            .setMethodCallHandler((call, result) -> {
+                if (call.method.equals("saveToMyTask")) {
+                    saveToMyTask(call, result);
                 } else {
                     result.notImplemented();
                 }
@@ -63,6 +74,28 @@ public class MainActivity extends FlutterActivity {
     }
 
     @SuppressWarnings("WakelockTimeout")
+    /**
+     * Exports a downloaded file into Download/MyTask. Runs off the main thread:
+     * the copy can be tens of megabytes for a video.
+     */
+    private void saveToMyTask(MethodCall call, MethodChannel.Result result) {
+        final String path = call.argument("path");
+        final String name = call.argument("fileName");
+        final String mime = call.argument("mimeType");
+        if (path == null || name == null) {
+            result.error("bad_args", "path and fileName are required", null);
+            return;
+        }
+        new Thread(() -> {
+            try {
+                final String saved = MyTaskStorage.save(getApplicationContext(), path, name, mime);
+                runOnUiThread(() -> result.success(saved));
+            } catch (Exception e) {
+                runOnUiThread(() -> result.error("save_failed", e.getMessage(), null));
+            }
+        }).start();
+    }
+
     private void acquireProximityWakeLock() {
         if (proximityWakeLock == null) {
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
