@@ -12,6 +12,7 @@ import '../models/message.dart';
 import '../repositories/firebase_chat_repository.dart';
 import '../repositories/i_chat_repository.dart';
 import '../features/call/call_service.dart';
+import '../features/call/end_minimized_call.dart';
 import '../services/chat_service.dart';
 import '../widgets/message_bubble.dart';
 import '../features/call/incoming_call_dialog.dart';
@@ -497,10 +498,7 @@ class _ChatScreenState extends State<ChatScreen>
                     style: TextStyle(color: Colors.white, fontSize: 13)),
               ),
               GestureDetector(
-                onTap: () async {
-                  callActiveNotifier.value = false;
-                  await CallService.leaveCall();
-                },
+                onTap: endMinimizedCall,
                 child: const Icon(Icons.call_end, color: Colors.redAccent, size: 22),
               ),
             ]),
@@ -855,10 +853,7 @@ class _ChatScreenState extends State<ChatScreen>
         return _FloatingVideoOverlay(
           key: ValueKey(_floatingVideoEpoch),
           onTap: _returnToCall,
-          onEnd: () async {
-            callActiveNotifier.value = false;
-            await CallService.leaveCall();
-          },
+          onEnd: () => unawaited(endMinimizedCall()),
         );
       },
     );
