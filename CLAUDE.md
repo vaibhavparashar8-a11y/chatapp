@@ -24,6 +24,8 @@ lib/
 │                             chat_screen (+ part files in chat/),
 │                             calls_screen, media_viewer, log_screen
 ├── widgets/               ← message_bubble (+ part files in bubbles/)
+├── theme/                 ← chat_theme.dart: ALL colors/gradients/radii/motion for
+│                             chat + call surfaces — never hard-code a Color again
 ├── features/call/         ← CallService (Agora engine), CallScreen, incoming dialog
 ├── background_worker.dart ← WorkManager isolate (15-min reminder/sync fallback)
 └── utils/                 ← pure functions (time formatting) — unit-testable

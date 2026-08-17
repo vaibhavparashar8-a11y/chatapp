@@ -13,6 +13,7 @@ import '../models/message.dart';
 import '../screens/media_viewer_screen.dart';
 import '../services/log_service.dart';
 import '../services/media_store_service.dart';
+import '../theme/chat_theme.dart';
 import '../utils/link_utils.dart';
 
 part 'bubbles/shared.dart';
@@ -34,6 +35,12 @@ class MessageBubble extends StatefulWidget {
   /// ring drawn over the local preview.
   final double? uploadProgress;
 
+  /// Position within a run of consecutive messages from the same sender.
+  /// Only the last of a run draws a tail and the time/status row, so a burst
+  /// reads as one block rather than repeating the clock on every line.
+  final bool isFirstInGroup;
+  final bool isLastInGroup;
+
   final VoidCallback? onRetry;
   final bool showReadTime;
   final VoidCallback? onLongPress;
@@ -46,26 +53,36 @@ class MessageBubble extends StatefulWidget {
     this.isPending = false,
     this.isFailed = false,
     this.uploadProgress,
+    this.isFirstInGroup = true,
+    this.isLastInGroup = true,
     this.onRetry,
     this.showReadTime = false,
     this.onLongPress,
   });
 
   // Dark theme palette
-  static const _myColor    = Color(0xFF6D28D9);
-  static const _theirColor = Color(0xFF1E1D30);
+  // Tail colours: the flat end of each bubble gradient, so the painted
+  // triangle joins its bubble seamlessly.
+  static const _myColor    = ChatTheme.violetDeep;
+  static const _theirColor = Color(0xFF1A1530);
 
   @override
   State<MessageBubble> createState() => _MessageBubbleState();
 }
 
 class _MessageBubbleState extends State<MessageBubble>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
 
   static const _triggerThreshold = 64.0;
   static const _maxSlide = 72.0;
 
   late final AnimationController _snapCtrl;
+
+  /// Fade + rise as the bubble appears. Runs whenever the item is built into
+  /// the viewport, so it covers both a new message and one scrolled back to —
+  /// kept short and small so it reads as materialising, not as a slideshow.
+  late final AnimationController _entryCtrl;
+
   Animation<double>? _snapAnim;
   double _slideOffset = 0;
   bool _triggerFired = false;
@@ -80,6 +97,10 @@ class _MessageBubbleState extends State<MessageBubble>
       vsync: this,
       duration: const Duration(milliseconds: 200),
     )..addListener(_onSnapTick);
+    _entryCtrl = AnimationController(
+      vsync: this,
+      duration: ChatTheme.fast,
+    )..forward();
   }
 
   void _onSnapTick() {
@@ -91,6 +112,7 @@ class _MessageBubbleState extends State<MessageBubble>
   @override
   void dispose() {
     _snapCtrl.dispose();
+    _entryCtrl.dispose();
     _disposeLinkRecognizers();
     super.dispose();
   }
@@ -185,43 +207,62 @@ class _MessageBubbleState extends State<MessageBubble>
     final otherReadAt  = widget.otherReadAt;
     final showReadTime = widget.showReadTime;
 
-    final bubbleColor = isMe ? MessageBubble._myColor : MessageBubble._theirColor;
-    final textColor   = isMe ? Colors.white : const Color(0xFFE8E8FF);
+    final textColor   = isMe ? Colors.white : ChatTheme.textPrimary;
     final metaColor   = isMe
-        ? Colors.white.withValues(alpha: 0.60)
-        : Colors.white.withValues(alpha: 0.40);
+        ? Colors.white.withValues(alpha: 0.70)
+        : Colors.white.withValues(alpha: 0.45);
+
+    // Square off the corner facing the previous bubble in a run, so a group
+    // reads as one stacked column; the tail corner only opens on the last.
+    const r = Radius.circular(ChatTheme.bubbleRadius);
+    const tail = Radius.circular(ChatTheme.bubbleTailRadius);
+    final borderRadius = BorderRadius.only(
+      topLeft: isMe || widget.isFirstInGroup ? r : tail,
+      topRight: !isMe || widget.isFirstInGroup ? r : tail,
+      bottomLeft: isMe || !widget.isLastInGroup ? r : tail,
+      bottomRight: !isMe || !widget.isLastInGroup ? r : tail,
+    );
 
     final bubbleContent = Container(
       constraints: BoxConstraints(
-        maxWidth: MediaQuery.of(context).size.width * 0.72,
+        maxWidth: MediaQuery.of(context).size.width * 0.74,
       ),
       decoration: BoxDecoration(
-        color: bubbleColor.withValues(alpha: isPending ? 0.55 : 1.0),
-        borderRadius: BorderRadius.only(
-          topLeft: const Radius.circular(14),
-          topRight: const Radius.circular(14),
-          bottomLeft: Radius.circular(isMe ? 14 : 2),
-          bottomRight: Radius.circular(isMe ? 2 : 14),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.25),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        gradient: isMe ? ChatTheme.myBubble : ChatTheme.theirBubble,
+        borderRadius: borderRadius,
+        // A violet-tinted shadow under my bubbles (rather than plain black) is
+        // most of what makes them read as lit instead of pasted on.
+        boxShadow: isMe
+            ? ChatTheme.bubbleGlow
+            : const [
+                BoxShadow(
+                    color: Color(0x40000000),
+                    blurRadius: 8,
+                    offset: Offset(0, 3)),
+              ],
         border: isFailed
-            ? Border.all(color: Colors.redAccent.withValues(alpha: 0.7), width: 1)
-            : null,
+            ? Border.all(color: ChatTheme.danger.withValues(alpha: 0.8), width: 1)
+            : Border.all(color: Colors.white.withValues(alpha: 0.06)),
       ),
+      foregroundDecoration: isPending
+          // Dim in place: fading the gradient itself would wash the colour out.
+          ? BoxDecoration(
+              color: ChatTheme.surface0.withValues(alpha: 0.35),
+              borderRadius: borderRadius,
+            )
+          : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.end,
         mainAxisSize: MainAxisSize.min,
         children: [
           if (message.replyToText != null) _buildReplyPreview(textColor),
           _buildContent(context, textColor),
+          // Only the last bubble of a run carries the clock and ticks.
+          if (!widget.isLastInGroup)
+            const SizedBox(height: 6)
+          else
           Padding(
-            padding: const EdgeInsets.only(right: 8, bottom: 5, left: 8),
+            padding: const EdgeInsets.only(right: 10, bottom: 6, left: 10),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -264,9 +305,24 @@ class _MessageBubbleState extends State<MessageBubble>
       ),
     );
 
+    return FadeTransition(
+      opacity: CurvedAnimation(parent: _entryCtrl, curve: Curves.easeOut),
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 0.06),
+          end: Offset.zero,
+        ).animate(
+            CurvedAnimation(parent: _entryCtrl, curve: ChatTheme.enter)),
+        child: _buildGestureLayer(context, bubbleContent, otherReadAt, showReadTime),
+      ),
+    );
+  }
+
+  Widget _buildGestureLayer(BuildContext context, Widget bubbleContent,
+      DateTime? otherReadAt, bool showReadTime) {
+    final isMe = this.isMe;
     final replyHintOpacity = (_slideOffset / _triggerThreshold).clamp(0.0, 1.0);
     final showHint = widget.onReply != null && _slideOffset > 6;
-
     return GestureDetector(
       onLongPress: widget.onLongPress,
       onHorizontalDragUpdate: widget.onReply != null ? _onDragUpdate : null,
@@ -292,24 +348,32 @@ class _MessageBubbleState extends State<MessageBubble>
                         isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
+                      // The tail is drawn once per run, on its last bubble;
+                      // the others reserve the same width so the column of
+                      // bubbles stays aligned.
                       if (!isMe)
                         SizedBox(
                           width: 8,
                           height: 12,
-                          child: CustomPaint(
-                            painter: _TailPainter(
-                                color: MessageBubble._theirColor, isMe: false),
-                          ),
+                          child: widget.isLastInGroup
+                              ? CustomPaint(
+                                  painter: _TailPainter(
+                                      color: MessageBubble._theirColor,
+                                      isMe: false),
+                                )
+                              : null,
                         ),
                       Flexible(child: bubbleContent),
                       if (isMe)
                         SizedBox(
                           width: 8,
                           height: 12,
-                          child: CustomPaint(
-                            painter: _TailPainter(
-                                color: MessageBubble._myColor, isMe: true),
-                          ),
+                          child: widget.isLastInGroup
+                              ? CustomPaint(
+                                  painter: _TailPainter(
+                                      color: MessageBubble._myColor, isMe: true),
+                                )
+                              : null,
                         ),
                     ],
                   ),
