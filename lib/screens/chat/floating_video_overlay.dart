@@ -127,14 +127,17 @@ class _FloatingVideoOverlayState extends State<_FloatingVideoOverlay>
               width: _w,
               height: _h,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white, width: 2),
-                boxShadow: const [
-                  BoxShadow(color: Colors.black54, blurRadius: 8, spreadRadius: 1),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                    color: ChatTheme.accent.withValues(alpha: 0.85), width: 2),
+                boxShadow: [
+                  const BoxShadow(
+                      color: Colors.black54, blurRadius: 10, spreadRadius: 1),
+                  ...ChatTheme.glow(ChatTheme.violet, blur: 18, opacity: 0.4),
                 ],
               ),
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(14),
                 child: Stack(
                   fit: StackFit.expand,
                   children: [

@@ -23,10 +23,13 @@ import '../features/call/call_screen.dart';
 import '../services/device_service.dart';
 import '../services/giphy_service.dart';
 import '../services/log_service.dart';
+import '../theme/chat_theme.dart';
 import '../utils/emoji_data.dart';
+import '../utils/message_grouping.dart';
 import '../utils/time_utils.dart';
 import 'calls_screen.dart';
 
+part 'chat/aurora_background.dart';
 part 'chat/load_more_indicator.dart';
 part 'chat/attach_option.dart';
 part 'chat/typing_indicator.dart';
@@ -360,10 +363,7 @@ class _ChatScreenState extends State<ChatScreen>
                     // ── Chat tab ────────────────────────────────────────────
                     Column(children: [
                       Expanded(
-                        child: ColoredBox(
-                          color: const Color(0xFF0F0F1E),
-                          child: _buildMessageList(),
-                        ),
+                        child: _AuroraBackground(child: _buildMessageList()),
                       ),
                       if (_ctrl.replyingTo != null) _buildReplyBar(),
                       if (_ctrl.showAttachMenu) _buildAttachMenu(),
@@ -402,11 +402,10 @@ class _ChatScreenState extends State<ChatScreen>
       elevation: 0,
       flexibleSpace: Container(
         decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF1C0544), Color(0xFF3D1A78)],
-          ),
+          gradient: ChatTheme.appBar,
+          boxShadow: [
+            BoxShadow(color: Color(0x59000000), blurRadius: 14, offset: Offset(0, 3)),
+          ],
         ),
       ),
       leading: IconButton(
@@ -417,18 +416,44 @@ class _ChatScreenState extends State<ChatScreen>
         },
       ),
       title: Row(children: [
-        CircleAvatar(
-          radius: 18,
-          backgroundColor: Colors.white24,
-          child: Text(
-            otherDisplayName.isNotEmpty ? otherDisplayName[0].toUpperCase() : '?',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+        // Avatar with a live presence ring — green while they are online, so
+        // status is readable at a glance and not only as small text.
+        Container(
+          padding: const EdgeInsets.all(2),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: _ctrl.otherOnline ? ChatTheme.success : Colors.white24,
+              width: 1.5,
+            ),
+            boxShadow: _ctrl.otherOnline
+                ? ChatTheme.glow(ChatTheme.success, blur: 8, opacity: 0.35)
+                : null,
+          ),
+          child: Container(
+            width: 34,
+            height: 34,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: ChatTheme.sendButton,
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              otherDisplayName.isNotEmpty
+                  ? otherDisplayName[0].toUpperCase()
+                  : '?',
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+            ),
           ),
         ),
         const SizedBox(width: 10),
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text(otherDisplayName,
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.2)),
           Text(
             _ctrl.otherTyping
                 ? 'typing...'
@@ -513,7 +538,7 @@ class _ChatScreenState extends State<ChatScreen>
         return GestureDetector(
           onTap: _returnToCall,
           child: Container(
-            color: const Color(0xFF1C1040),
+            color: ChatTheme.surface2,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             child: Row(children: [
               const Icon(Icons.call, color: Colors.white, size: 18),
@@ -538,14 +563,31 @@ class _ChatScreenState extends State<ChatScreen>
     if (messages.isEmpty && !_ctrl.otherTyping) {
       return Center(
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(Icons.lock, size: 48, color: Colors.white.withValues(alpha: 0.25)),
-          const SizedBox(height: 12),
-          Text('Private & anonymous',
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.55),
-                  fontSize: 16, fontWeight: FontWeight.w500)),
+          // Haloed lock — the empty state is the first thing a new install
+          // shows, so it carries the same lit-from-within look as the bubbles.
+          Container(
+            width: 88,
+            height: 88,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(colors: [
+                ChatTheme.violet.withValues(alpha: 0.35),
+                ChatTheme.violet.withValues(alpha: 0.02),
+              ]),
+            ),
+            child: const Icon(Icons.lock_rounded,
+                size: 38, color: ChatTheme.accent),
+          ),
+          const SizedBox(height: 18),
+          const Text('Private & anonymous',
+              style: TextStyle(
+                  color: ChatTheme.textPrimary,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.2)),
           const SizedBox(height: 6),
-          Text('Messages are deleted when you leave',
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.38), fontSize: 13)),
+          const Text('Messages are deleted when you leave',
+              style: TextStyle(color: ChatTheme.textFaint, fontSize: 13)),
         ]),
       );
     }
@@ -566,6 +608,10 @@ class _ChatScreenState extends State<ChatScreen>
       }
     }
 
+    // Date chips and bubble runs, decided in one pure pass (see
+    // utils/message_grouping.dart) so the rules stay testable.
+    final layouts = layoutMessages(messages);
+
     // With reverse: true, index 0 = visual bottom (newest).
     // The load-more indicator sits at the very top (last index = oldest end).
     final typingOffset = _ctrl.otherTyping ? 1 : 0;
@@ -574,7 +620,7 @@ class _ChatScreenState extends State<ChatScreen>
     return ListView.builder(
       controller: _scrollController,
       reverse: true,
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
       itemCount: messages.length + typingOffset + loadMoreOffset,
       itemBuilder: (_, i) {
         // Typing indicator at visual bottom (index 0)
@@ -585,22 +631,34 @@ class _ChatScreenState extends State<ChatScreen>
           return _LoadMoreIndicator(loading: _ctrl.loadingMore);
         }
 
-        final msg = messages[messages.length - 1 - (i - typingOffset)];
+        final index = messages.length - 1 - (i - typingOffset);
+        final msg = messages[index];
+        final layout = layouts[index];
         final isPending = _ctrl.pendingIds.contains(msg.id);
         final isFailed = _ctrl.failedIds.contains(msg.id);
 
-        return MessageBubble(
+        final bubble = MessageBubble(
           message: msg,
           otherReadAt: _ctrl.otherReadAt,
           isPending: isPending,
           isFailed: isFailed,
           uploadProgress: _ctrl.uploadProgressFor(msg.id),
+          isFirstInGroup: layout.isFirstInGroup,
+          isLastInGroup: layout.isLastInGroup,
           onRetry: isFailed ? () => _ctrl.retryMessage(msg.id) : null,
           onReply: msg.type == MessageType.callEvent ? null : _ctrl.setReplyingTo,
           showReadTime: !isPending && !isFailed && msg.id == lastReadMsgId,
           onLongPress: isPending || isFailed || msg.type == MessageType.callEvent
               ? null
               : () => _showMessageActions(msg),
+        );
+
+        if (!layout.showDateChip) return bubble;
+        // The chip belongs above its message; the list is reversed, so it is
+        // the second child of the column, not the first.
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [_DateSeparator(date: msg.timestamp), bubble],
         );
       },
     );
@@ -609,7 +667,7 @@ class _ChatScreenState extends State<ChatScreen>
   Widget _buildReplyBar() {
     final reply = _ctrl.replyingTo!;
     return Container(
-      color: const Color(0xFF1A1040),
+      color: ChatTheme.surface1,
       padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
       child: Row(children: [
         Container(width: 3, height: 36, color: const Color(0xFFA78BFA)),
@@ -694,13 +752,16 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   Widget _buildInputBar() {
-    return Material(
-      elevation: 6,
-      color: const Color(0xFF13102A),
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: ChatTheme.surface1,
+        border: const Border(top: BorderSide(color: ChatTheme.hairline)),
+        boxShadow: ChatTheme.panelShadow,
+      ),
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          padding: const EdgeInsets.fromLTRB(6, 8, 8, 8),
           child: Row(children: [
             IconButton(
               icon: Icon(
@@ -757,33 +818,32 @@ class _ChatScreenState extends State<ChatScreen>
                 minLines: 1,
                 decoration: InputDecoration(
                   hintText: 'Message',
-                  hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.35)),
+                  hintStyle: const TextStyle(color: ChatTheme.textFaint),
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
+                    borderRadius: BorderRadius.circular(ChatTheme.pillRadius),
                     borderSide: BorderSide.none,
                   ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(ChatTheme.pillRadius),
+                    borderSide: const BorderSide(color: ChatTheme.hairline),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(ChatTheme.pillRadius),
+                    borderSide: BorderSide(
+                        color: ChatTheme.accent.withValues(alpha: 0.55)),
+                  ),
                   filled: true,
-                  fillColor: const Color(0xFF1E1A40),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  fillColor: ChatTheme.surface2,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
                 ),
                 onSubmitted: (_) => _sendText(),
               ),
             ),
             const SizedBox(width: 6),
-            GestureDetector(
-              // Never gated on an upload: media goes up behind its own bubble,
-              // so text can still be sent while a photo or video is uploading.
-              onTap: _sendText,
-              child: Container(
-                width: 44,
-                height: 44,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF6D28D9),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.send, color: Colors.white, size: 20),
-              ),
-            ),
+            // Never gated on an upload: media goes up behind its own bubble,
+            // so text can still be sent while a photo or video is uploading.
+            _SendButton(onTap: _sendText),
           ]),
         ),
       ),
@@ -800,7 +860,7 @@ class _ChatScreenState extends State<ChatScreen>
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF1A1040),
+      backgroundColor: ChatTheme.surface1,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -869,7 +929,7 @@ class _ChatScreenState extends State<ChatScreen>
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1040),
+        backgroundColor: ChatTheme.surface1,
         title: const Text('Edit message',
             style: TextStyle(color: Colors.white, fontSize: 16)),
         content: TextField(
@@ -887,7 +947,7 @@ class _ChatScreenState extends State<ChatScreen>
               borderSide: BorderSide(color: Color(0xFFA78BFA)),
             ),
             filled: true,
-            fillColor: const Color(0xFF1E1A40),
+            fillColor: ChatTheme.surface2,
           ),
         ),
         actions: [

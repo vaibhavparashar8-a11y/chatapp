@@ -870,6 +870,7 @@ if (ChatController.canModify(msg)) {
 |---|---|
 | `chat_screen.dart` | State class, lifecycle, `build()` scaffold |
 | `screens/chat/load_more_indicator.dart` | Scroll-triggered history loader |
+| `screens/chat/aurora_background.dart` | Static aurora backdrop, gradient `_SendButton`, `_DateSeparator` chip |
 | `screens/chat/attach_option.dart` | Attach sheet: the rounded card (`_AttachSheet`) and its gradient tiles (`_AttachOption`) |
 | `screens/chat/emoji_panel.dart` | Emoji grid + GIF picker behind two tabs (`_EmojiGifPanel`, `_GifPicker`) |
 | `screens/chat/composer_input.dart` | `extension ChatComposerInput` — emoji insert/backspace, GIF send, keyboard sticker handling |
@@ -930,6 +931,49 @@ void didChangeAppLifecycleState(AppLifecycleState state) {
   }
 }
 ```
+
+---
+
+### `lib/theme/chat_theme.dart` — visual language
+
+Every colour, gradient, radius and animation duration on the chat and call
+surfaces comes from `ChatTheme`. Before this they were raw `Color(0xFF…)`
+literals in each file, which is how three files ended up with three different
+"panel purple" and the UI drifted into looking flat.
+
+| Group | What is in it |
+|---|---|
+| Surfaces | `surface0` (page), `surface1` (panels), `surface2` (raised: input pill, chips, incoming bubbles), `hairline` |
+| Brand | `violet`, `violetLight`, `violetDeep`, `accent`, `success`, `danger` |
+| Text | `textPrimary`, `textSecondary`, `textFaint` |
+| Gradients | `myBubble`, `theirBubble`, `appBar`, `sendButton` |
+| Glow | `bubbleGlow`, `panelShadow`, `glow(color)` — **tinted** shadows; a violet shadow under a violet bubble is most of what makes it read as lit rather than pasted on |
+| Shape | `bubbleRadius` 20, `bubbleTailRadius` 6, `panelRadius`, `pillRadius` |
+| Motion | `fast` 140ms, `base` 240ms, `slow` 380ms, `enter` (decelerate), `press` (slight overshoot) |
+
+Two deliberate constraints:
+
+- **The aurora backdrop is static.** `_AuroraBackground` layers three
+  off-screen radial pools behind the message list. An animated full-screen
+  gradient repaints every frame, and one of the two phones already struggles
+  with video decode (§7) — depth is free, continuous motion is not.
+- **Motion is attached to interaction.** Bubbles fade+rise as they build
+  (140 ms), buttons dip under the finger, the call avatar pulses *only* while
+  waiting. Nothing loops behind a conversation.
+
+**Grouped bubbles and date chips** are decided by
+`lib/utils/message_grouping.dart` — pure, Flutter-free, unit-tested:
+
+```
+layoutMessages(messages) → per message: showDateChip, isFirstInGroup, isLastInGroup
+```
+
+Consecutive messages from one sender, within 5 minutes and on the same calendar
+day, form one run. Only the **last** of a run draws a tail and the time/status
+row, so a burst reads as one block instead of repeating the clock. Runs never
+span midnight (a date chip lands between), and call events never join one —
+they are centred dividers, and grouping across one would hide a real message's
+tail.
 
 ---
 
@@ -1011,6 +1055,7 @@ bool get _isRead {
 | `webrtc_signaling.dart` | Firestore offer/answer/ICE exchange for the WebRTC backend |
 | `call_screen.dart` | Full-screen call UI with timer, mute/camera buttons |
 | `end_minimized_call.dart` | Hang-up teardown for the mini call bar / floating overlay — the minimized twin of `CallScreen._endCall` |
+| `call_avatar.dart` | `PulsingAvatar` — expanding rings while a call is connecting; shared by CallScreen and the incoming-call dialog. Pulse stops once connected |
 | `incoming_call_dialog.dart` | Bottom-sheet shown when `callSignal.status == 'ringing'` |
 | `agora_token_builder.dart` | Client-side HMAC-SHA256 token builder (Test Mode fallback) |
 
@@ -2044,8 +2089,11 @@ test/
 │   │                                        callerStatusLabel priority (§6.4)
 │   ├── call_event_text_test.dart        ← formatCallDuration padding; missed-vs-ended
 │   │                                       wording of the end-of-call chat entry
-│   └── emoji_data_test.dart             ← every category populated, tab icon is one of
-│                                           its own emoji, no duplicates or blanks
+│   ├── emoji_data_test.dart             ← every category populated, tab icon is one of
+│   │                                       its own emoji, no duplicates or blanks
+│   └── message_grouping_test.dart       ← runs by sender/time window, never across
+│                                           midnight or a call event, date chip per day,
+│                                           formatDateSeparator (Today/Yesterday/weekday)
 ├── services/
 │   ├── reminder_service_test.dart       ← applySharedSnapshot reconcile rules
 │   │                                       (incl. subtask sync + recurrence sync:
@@ -2095,6 +2143,9 @@ test/
     ├── calls_screen_test.dart           ← call history rendering
     ├── chat_screen_lifecycle_test.dart  ← background-leave navigation vs live calls
     │                                       (uses DeviceService.testMode seam)
+    ├── chat_screen_ui_test.dart         ← date separators per day, grouped runs carry one
+    │                                       timestamp, alternating senders keep their tails,
+    │                                       empty state
     ├── chat_screen_composer_test.dart   ← attach sheet (all 7 options visible, toggles),
     │                                       emoji panel (inserts at caret, does not send,
     │                                       grapheme-safe backspace, mutually exclusive
@@ -2111,7 +2162,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 387 tests, ~45 seconds
+flutter test                        # 407 tests, ~50 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a

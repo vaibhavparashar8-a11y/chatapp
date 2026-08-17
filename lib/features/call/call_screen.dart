@@ -4,10 +4,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'agora_token_builder.dart';
+import 'call_avatar.dart';
 import 'call_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/log_service.dart';
 import '../../constants.dart';
+import '../../theme/chat_theme.dart';
 import '../../utils/call_event_text.dart';
 import '../../utils/call_signal_interpreter.dart';
 
@@ -346,39 +348,66 @@ class _CallScreenState extends State<CallScreen> {
               // Remote video fills the screen (default)
               SizedBox.expand(child: CallService.remoteVideoView(_remoteUid!))
             else
-              // Waiting / audio call background
-              Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Color(0xFF0D1117), Color(0xFF1A2332)],
-                  ),
-                ),
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const CircleAvatar(
-                        radius: 60,
-                        backgroundColor: Color(0xFF128C7E),
-                        child: Icon(Icons.person, color: Colors.white, size: 60),
+              // Waiting / audio call background — same violet aurora as the
+              // chat, so a call doesn't look like a different app.
+              DecoratedBox(
+                decoration: const BoxDecoration(color: ChatTheme.surface0),
+                child: Stack(
+                  children: [
+                    const Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: RadialGradient(
+                            center: Alignment(0, -0.55),
+                            radius: 0.95,
+                            colors: [Color(0x667C3AED), Color(0x00000000)],
+                          ),
+                        ),
                       ),
-                      const SizedBox(height: 20),
-                      const Text(
-                        otherDisplayName,
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold),
+                    ),
+                    const Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: RadialGradient(
+                            center: Alignment(0.9, 1.0),
+                            radius: 0.9,
+                            colors: [Color(0x3B4F46E5), Color(0x00000000)],
+                          ),
+                        ),
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _callConnected ? _duration : _statusLabel,
-                        style: const TextStyle(color: Colors.white70, fontSize: 16),
+                    ),
+                    Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          // Ring pulses only while waiting — once connected it
+                          // would be motion with nothing left to say.
+                          PulsingAvatar(active: !_callConnected),
+                          const SizedBox(height: 24),
+                          const Text(
+                            otherDisplayName,
+                            style: TextStyle(
+                                color: ChatTheme.textPrimary,
+                                fontSize: 26,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.3),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            _callConnected ? _duration : _statusLabel,
+                            style: TextStyle(
+                              color: _callConnected
+                                  ? ChatTheme.accent
+                                  : ChatTheme.textSecondary,
+                              fontSize: 16,
+                              letterSpacing: _callConnected ? 1.5 : 0.2,
+                              fontFeatures: const [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
 
@@ -472,7 +501,16 @@ class _CallScreenState extends State<CallScreen> {
               right: 0,
               child: SafeArea(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                  // Scrim so the controls stay readable over bright video.
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Color(0x00000000), Color(0xB3000000)],
+                    ),
+                  ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
@@ -492,10 +530,10 @@ class _CallScreenState extends State<CallScreen> {
                           onTap: CallService.switchCamera,
                         ),
                       _CallButton(
-                        icon: Icons.call_end,
+                        icon: Icons.call_end_rounded,
                         label: 'End',
-                        color: Colors.red,
-                        size: 60,
+                        color: ChatTheme.danger,
+                        size: 64,
                         onTap: _endCall,
                       ),
                       if (widget.isVideo)
@@ -544,7 +582,9 @@ class _CallScreenState extends State<CallScreen> {
   }
 }
 
-class _CallButton extends StatelessWidget {
+/// A call control: frosted circle, springs under the finger, and glows when its
+/// toggle is on so state is visible without reading the label.
+class _CallButton extends StatefulWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
@@ -557,30 +597,68 @@ class _CallButton extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.color,
-    this.size = 52,
+    this.size = 54,
     this.active = false,
   });
 
   @override
+  State<_CallButton> createState() => _CallButtonState();
+}
+
+class _CallButtonState extends State<_CallButton> {
+  bool _down = false;
+
+  @override
   Widget build(BuildContext context) {
+    final danger = widget.color != null;
+    final tint = widget.color ?? ChatTheme.violetLight;
     return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: size,
-            height: size,
-            decoration: BoxDecoration(
-              color: color ?? (active ? Colors.white54 : Colors.white24),
-              shape: BoxShape.circle,
+      onTap: widget.onTap,
+      onTapDown: (_) => setState(() => _down = true),
+      onTapUp: (_) => setState(() => _down = false),
+      onTapCancel: () => setState(() => _down = false),
+      child: AnimatedScale(
+        scale: _down ? 0.9 : 1,
+        duration: ChatTheme.fast,
+        curve: ChatTheme.press,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedContainer(
+              duration: ChatTheme.base,
+              width: widget.size,
+              height: widget.size,
+              decoration: BoxDecoration(
+                gradient: danger
+                    ? const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFFFF6B6B), Color(0xFFD32F2F)])
+                    : widget.active
+                        ? ChatTheme.sendButton
+                        : null,
+                color: danger || widget.active
+                    ? null
+                    : Colors.white.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: widget.active ? 0.35 : 0.15),
+                ),
+                boxShadow: danger || widget.active
+                    ? ChatTheme.glow(tint, blur: 18, opacity: 0.45)
+                    : null,
+              ),
+              child: Icon(widget.icon,
+                  color: Colors.white, size: widget.size * 0.42),
             ),
-            child: Icon(icon, color: Colors.white, size: size * 0.45),
-          ),
-          const SizedBox(height: 6),
-          Text(label,
-              style: const TextStyle(color: Colors.white70, fontSize: 11)),
-        ],
+            const SizedBox(height: 7),
+            Text(widget.label,
+                style: const TextStyle(
+                    color: ChatTheme.textSecondary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500)),
+          ],
+        ),
       ),
     );
   }

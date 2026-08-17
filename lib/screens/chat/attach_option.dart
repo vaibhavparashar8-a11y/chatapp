@@ -80,7 +80,7 @@ class _AttachSheet extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(8, 0, 8, 6),
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1636),
+        color: ChatTheme.surface1,
         borderRadius: BorderRadius.circular(22),
         border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
         boxShadow: const [

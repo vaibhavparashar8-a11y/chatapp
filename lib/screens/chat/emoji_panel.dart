@@ -43,7 +43,7 @@ class _EmojiGifPanelState extends State<_EmojiGifPanel>
   Widget build(BuildContext context) {
     return Container(
       height: _height,
-      color: const Color(0xFF14112A),
+      color: ChatTheme.surface1,
       child: Column(
         children: [
           SizedBox(
@@ -104,7 +104,7 @@ class _EmojiGifPanelState extends State<_EmojiGifPanel>
     return Container(
       height: 42,
       decoration: const BoxDecoration(
-        color: Color(0xFF1A1636),
+        color: ChatTheme.surface1,
         border: Border(top: BorderSide(color: Color(0x22FFFFFF))),
       ),
       child: Row(
@@ -230,7 +230,7 @@ class _GifPickerState extends State<_GifPicker> {
               prefixIcon:
                   const Icon(Icons.search, size: 18, color: Colors.white38),
               filled: true,
-              fillColor: const Color(0xFF1E1A40),
+              fillColor: ChatTheme.surface2,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(20),
                 borderSide: BorderSide.none,
@@ -276,9 +276,9 @@ class _GifPickerState extends State<_GifPicker> {
             child: CachedNetworkImage(
               imageUrl: gif.previewUrl,
               fit: BoxFit.cover,
-              placeholder: (_, __) => const ColoredBox(color: Color(0xFF1E1A40)),
+              placeholder: (_, __) => const ColoredBox(color: ChatTheme.surface2),
               errorWidget: (_, __, ___) => const ColoredBox(
-                color: Color(0xFF1E1A40),
+                color: ChatTheme.surface2,
                 child: Icon(Icons.broken_image, color: Colors.white24, size: 18),
               ),
             ),
