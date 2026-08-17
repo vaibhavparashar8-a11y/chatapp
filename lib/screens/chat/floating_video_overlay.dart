@@ -22,15 +22,21 @@ class _FloatingVideoOverlayState extends State<_FloatingVideoOverlay>
   double _w = CallService.overlayW;
   double _h = CallService.overlayH;
 
-  // Whether the current pan gesture started in the resize handle corner.
-  bool _resizeMode = false;
+  /// Set once a gesture has actually moved the overlay. A tap that ends after
+  /// any real movement must not be treated as "restore full screen" — nudging
+  /// the pip while repositioning it used to throw the user into the call
+  /// screen. Reset on every pan-down.
+  bool _moved = false;
 
   // Changing this key forces AgoraVideoView to fully recreate its platform
   // surface, which re-attaches to the Agora engine after the app resumes
   // from background (the old surface becomes stale when the app is paused).
   Key _surfaceKey = UniqueKey();
 
-  static const _handleSize = 24.0;
+  // Comfortably larger than the old 24: the handle is now the resize target
+  // itself, and a corner too small to hit reliably is what made people grab
+  // the video surface instead and trip the restore-on-tap.
+  static const _handleSize = 36.0;
   static const _minW = 80.0;
   static const _maxW = 260.0;
   static const _minH = 100.0;
@@ -55,6 +61,47 @@ class _FloatingVideoOverlayState extends State<_FloatingVideoOverlay>
     }
   }
 
+  /// Drag the overlay by [delta], clamped inside a screen of [size].
+  void _move(Offset delta, Size size) {
+    if (delta.distance > 0) _moved = true;
+    setState(() {
+      _x = (_x + delta.dx).clamp(0, size.width - _w);
+      _y = (_y + delta.dy).clamp(0, size.height - _h);
+      _persist();
+    });
+  }
+
+  /// Grow/shrink from the bottom-right corner by [delta].
+  ///
+  /// When the size is pinned at a clamp bound the delta would be silently
+  /// absorbed and the drag would feel "stuck", so it falls through to a move —
+  /// the same fallback the old combined gesture had.
+  void _resize(Offset delta, Size size) {
+    final newW = (_w + delta.dx).clamp(_minW, _maxW);
+    final newH = (_h + delta.dy).clamp(_minH, _maxH);
+    if (newW == _w && newH == _h) {
+      _move(delta, size);
+      return;
+    }
+    setState(() {
+      _w = newW;
+      _h = newH;
+      // Keep the overlay inside the screen after resizing.
+      _x = _x.clamp(0, size.width - _w);
+      _y = _y.clamp(0, size.height - _h);
+      _persist();
+    });
+  }
+
+  /// Store geometry in CallService so the next reconstruction (return from
+  /// CallScreen) restores the same size/position for this call.
+  void _persist() {
+    CallService.overlayX = _x;
+    CallService.overlayY = _y;
+    CallService.overlayW = _w;
+    CallService.overlayH = _h;
+  }
+
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
@@ -64,51 +111,17 @@ class _FloatingVideoOverlayState extends State<_FloatingVideoOverlay>
           left: _x,
           top: _y,
           child: GestureDetector(
-            onTap: widget.onTap,
-            // Decide at touch-down whether this is a move or a resize gesture.
-            onPanDown: (d) {
-              _resizeMode = d.localPosition.dx > _w - _handleSize &&
-                  d.localPosition.dy > _h - _handleSize;
+            // Restore only on a clean tap. A gesture that moved the overlay is
+            // a reposition, never a request to go full screen.
+            onTap: () {
+              if (!_moved) widget.onTap();
             },
-            onPanUpdate: (d) {
-              setState(() {
-                if (_resizeMode) {
-                  final newW = (_w + d.delta.dx).clamp(_minW, _maxW);
-                  final newH = (_h + d.delta.dy).clamp(_minH, _maxH);
-                  if (newW == _w && newH == _h) {
-                    // Size is pinned at its clamp bounds — the delta would be
-                    // silently absorbed and the drag would feel "stuck" (the
-                    // reported hard-to-move-when-enlarged bug). Treat the rest
-                    // of the gesture as a move instead.
-                    _resizeMode = false;
-                    _x = (_x + d.delta.dx).clamp(0, size.width - _w);
-                    _y = (_y + d.delta.dy).clamp(0, size.height - _h);
-                  } else {
-                    _w = newW;
-                    _h = newH;
-                    // Keep overlay inside screen after resize
-                    _x = _x.clamp(0, size.width - _w);
-                    _y = _y.clamp(0, size.height - _h);
-                  }
-                } else {
-                  _x = (_x + d.delta.dx).clamp(0, size.width - _w);
-                  _y = (_y + d.delta.dy).clamp(0, size.height - _h);
-                }
-                // Persist so the next reconstruction (return from CallScreen)
-                // restores the same geometry for this call.
-                CallService.overlayX = _x;
-                CallService.overlayY = _y;
-                CallService.overlayW = _w;
-                CallService.overlayH = _h;
-              });
-            },
+            onPanDown: (_) => _moved = false,
+            onPanUpdate: (d) => _move(d.delta, size),
             // Only expand on a deliberate upward flick — never on position alone,
             // since the overlay often starts in the "upper" zone already.
             onPanEnd: (d) {
-              if (!_resizeMode && d.velocity.pixelsPerSecond.dy < -600) {
-                widget.onTap();
-              }
-              _resizeMode = false;
+              if (d.velocity.pixelsPerSecond.dy < -600) widget.onTap();
             },
             child: Container(
               width: _w,
@@ -151,23 +164,37 @@ class _FloatingVideoOverlayState extends State<_FloatingVideoOverlay>
                         ),
                       ),
                     ),
-                    // Resize handle (bottom-right corner) — visual indicator only;
-                    // the pan logic above detects touches in this area via _resizeMode.
+                    // Resize handle (bottom-right corner). It owns its own
+                    // gestures rather than being a painted hint the parent
+                    // hit-tests: an opaque child detector consumes the touch,
+                    // so a tap or a wobble while grabbing the corner can no
+                    // longer fall through to the parent's restore-on-tap.
                     Positioned(
                       bottom: 0,
                       right: 0,
-                      child: Container(
-                        width: _handleSize,
-                        height: _handleSize,
-                        decoration: const BoxDecoration(
-                          color: Colors.white24,
-                          borderRadius: BorderRadius.only(
-                            topLeft: Radius.circular(6),
-                            bottomRight: Radius.circular(10),
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {}, // absorb — never restores full screen
+                        onPanUpdate: (d) => _resize(d.delta, size),
+                        child: Container(
+                          width: _handleSize,
+                          height: _handleSize,
+                          decoration: const BoxDecoration(
+                            color: Colors.white30,
+                            borderRadius: BorderRadius.only(
+                              topLeft: Radius.circular(10),
+                              bottomRight: Radius.circular(10),
+                            ),
+                          ),
+                          child: const Align(
+                            alignment: Alignment.bottomRight,
+                            child: Padding(
+                              padding: EdgeInsets.only(right: 3, bottom: 3),
+                              child: Icon(Icons.open_in_full_rounded,
+                                  size: 14, color: Colors.white),
+                            ),
                           ),
                         ),
-                        child: const Icon(Icons.open_in_full_rounded,
-                            size: 12, color: Colors.white70),
                       ),
                     ),
                   ],

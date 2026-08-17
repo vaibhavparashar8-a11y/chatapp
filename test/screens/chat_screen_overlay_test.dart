@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:chatapp/constants.dart';
+import 'package:chatapp/features/call/call_screen.dart';
 import 'package:chatapp/features/call/call_service.dart';
 import 'package:chatapp/screens/chat_screen.dart';
 import 'package:chatapp/services/device_service.dart';
@@ -95,6 +96,19 @@ void main() {
       expect(find.text('Tap to return to call'), findsOneWidget);
     });
 
+    testWidgets('floating video overlay shows for a live video call',
+        (tester) async {
+      await pumpChat(tester);
+
+      callActiveNotifier.value = true;
+      CallService.inCall = true;
+      isCallVideo = true;
+      await tester.pump();
+
+      expect(find.byIcon(Icons.open_in_full_rounded), findsOneWidget);
+      expect(find.text('Tap to return to call'), findsNothing);
+    });
+
     testWidgets('mini call bar disappears when the call ends', (tester) async {
       await pumpChat(tester);
 
@@ -108,6 +122,75 @@ void main() {
       callActiveNotifier.value = false;
       await tester.pump();
       expect(find.text('Tap to return to call'), findsNothing);
+    });
+  });
+
+  // The pip's restore-on-tap used to be hit-tested across the whole overlay,
+  // resize corner included, so grabbing the corner threw the user into the
+  // full-screen call. The handle now owns its own gestures.
+  group('floating video overlay — resize vs restore', () {
+    Future<void> pumpVideoOverlay(WidgetTester tester) async {
+      await pumpChat(tester);
+      callActiveNotifier.value = true;
+      CallService.inCall = true;
+      isCallVideo = true;
+      await tester.pump();
+    }
+
+    /// Drag in small steps. A single big `tester.drag` move is swallowed as
+    /// the pan recognizer's slop and never reaches onPanUpdate.
+    Future<void> dragBy(WidgetTester tester, Finder from, Offset total) async {
+      const steps = 8;
+      final gesture = await tester.startGesture(tester.getCenter(from));
+      for (var i = 0; i < steps; i++) {
+        await gesture.moveBy(Offset(total.dx / steps, total.dy / steps));
+        await tester.pump();
+      }
+      await gesture.up();
+      await tester.pump();
+    }
+
+    testWidgets('tapping the resize handle does not open the call screen',
+        (tester) async {
+      await pumpVideoOverlay(tester);
+
+      await tester.tap(find.byIcon(Icons.open_in_full_rounded));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(CallScreen), findsNothing);
+      expect(find.byType(ChatScreen), findsOneWidget);
+    });
+
+    testWidgets('dragging the handle resizes instead of navigating',
+        (tester) async {
+      await pumpVideoOverlay(tester);
+      final startW = CallService.overlayW;
+      final startH = CallService.overlayH;
+
+      await dragBy(tester, find.byIcon(Icons.open_in_full_rounded),
+          const Offset(48, 48));
+
+      expect(CallService.overlayW, greaterThan(startW));
+      expect(CallService.overlayH, greaterThan(startH));
+      expect(find.byType(CallScreen), findsNothing);
+    });
+
+    testWidgets('a resize past the max size falls through to a move',
+        (tester) async {
+      await pumpVideoOverlay(tester);
+      final startX = CallService.overlayX;
+
+      // Far more growth than the clamps allow: the overlay maxes out partway
+      // through, and the leftover deltas must not simply vanish (the old
+      // "stuck when enlarged" bug).
+      await dragBy(tester, find.byIcon(Icons.open_in_full_rounded),
+          const Offset(400, 400));
+
+      expect(CallService.overlayW, 260, reason: 'clamped at the max width');
+      expect(CallService.overlayH, 340, reason: 'clamped at the max height');
+      expect(CallService.overlayX, greaterThan(startX),
+          reason: 'absorbed deltas must move the overlay instead');
+      expect(find.byType(CallScreen), findsNothing);
     });
   });
 }
