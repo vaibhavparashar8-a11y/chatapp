@@ -6,6 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:dio/dio.dart';
+import 'package:path_provider/path_provider.dart';
 import '../constants.dart';
 import '../controllers/chat_controller.dart';
 import '../models/message.dart';
@@ -18,12 +21,17 @@ import '../widgets/message_bubble.dart';
 import '../features/call/incoming_call_dialog.dart';
 import '../features/call/call_screen.dart';
 import '../services/device_service.dart';
+import '../services/giphy_service.dart';
+import '../services/log_service.dart';
+import '../utils/emoji_data.dart';
 import '../utils/time_utils.dart';
 import 'calls_screen.dart';
 
 part 'chat/load_more_indicator.dart';
 part 'chat/attach_option.dart';
 part 'chat/typing_indicator.dart';
+part 'chat/emoji_panel.dart';
+part 'chat/composer_input.dart';
 part 'chat/floating_video_overlay.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -49,6 +57,9 @@ class _ChatScreenState extends State<ChatScreen>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   // Flutter-specific controllers that need a widget lifecycle
   final _textController = TextEditingController();
+  // Held so the emoji button can hand focus back to the field (and the system
+  // keyboard with it) when the panel closes.
+  final _inputFocus = FocusNode();
   final _scrollController = ScrollController();
   final _picker = ImagePicker();
   late TabController _tabCtrl;
@@ -160,6 +171,7 @@ class _ChatScreenState extends State<ChatScreen>
     _scrollController.removeListener(_onScroll);
     _callSub?.cancel();
     _textController.dispose();
+    _inputFocus.dispose();
     _scrollController.dispose();
     _tabCtrl.dispose();
     _ctrl.dispose();
@@ -274,6 +286,19 @@ class _ChatScreenState extends State<ChatScreen>
     }
   }
 
+  Future<void> _sendAudio() async {
+    _ctrl.setShowAttachMenu(false);
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      type: FileType.audio,
+    );
+    if (result == null || result.files.isEmpty) return;
+    for (final f in result.files) {
+      if (f.path == null) continue;
+      await _ctrl.sendMedia(File(f.path!), MessageType.audio, fileName: f.name);
+    }
+  }
+
   Future<void> _sendFile() async {
     _ctrl.setShowAttachMenu(false);
     final result = await FilePicker.platform.pickFiles(allowMultiple: true, type: FileType.any);
@@ -343,6 +368,7 @@ class _ChatScreenState extends State<ChatScreen>
                       if (_ctrl.replyingTo != null) _buildReplyBar(),
                       if (_ctrl.showAttachMenu) _buildAttachMenu(),
                       _buildInputBar(),
+                      if (_ctrl.showEmojiPanel) _buildEmojiPanel(),
                     ]),
                     // ── Calls tab ───────────────────────────────────────────
                     CallsScreen(onStartCall: _startCall),
@@ -618,26 +644,52 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   Widget _buildAttachMenu() {
-    return Container(
-      color: const Color(0xFF14112A),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            _AttachOption(icon: Icons.photo_camera, label: 'Camera', color: Colors.purple,
-                onTap: () => _sendImage(ImageSource.camera)),
-            _AttachOption(icon: Icons.videocam, label: 'Record', color: Colors.red,
-                onTap: _recordVideo),
-            _AttachOption(icon: Icons.photo, label: 'Gallery', color: Colors.pink,
-                onTap: () => _sendImage(ImageSource.gallery)),
-            _AttachOption(icon: Icons.video_library, label: 'Videos', color: Colors.orange,
-                onTap: _sendVideo),
-            _AttachOption(icon: Icons.insert_drive_file, label: 'File', color: Colors.blue,
-                onTap: _sendFile),
-          ],
-        ),
-      ),
+    return _AttachSheet(
+      options: [
+        _AttachOption(
+            icon: Icons.photo_camera_rounded,
+            label: 'Camera',
+            color: const Color(0xFF8B5CF6),
+            onTap: () => _sendImage(ImageSource.camera)),
+        _AttachOption(
+            icon: Icons.photo_library_rounded,
+            label: 'Gallery',
+            color: const Color(0xFFEC4899),
+            onTap: () => _sendImage(ImageSource.gallery)),
+        _AttachOption(
+            icon: Icons.videocam_rounded,
+            label: 'Record',
+            color: const Color(0xFFEF4444),
+            onTap: _recordVideo),
+        _AttachOption(
+            icon: Icons.video_library_rounded,
+            label: 'Video',
+            color: const Color(0xFFF59E0B),
+            onTap: _sendVideo),
+        _AttachOption(
+            icon: Icons.headphones_rounded,
+            label: 'Audio',
+            color: const Color(0xFF10B981),
+            onTap: _sendAudio),
+        _AttachOption(
+            icon: Icons.description_rounded,
+            label: 'Document',
+            color: const Color(0xFF3B82F6),
+            onTap: _sendFile),
+        _AttachOption(
+            icon: Icons.gif_box_rounded,
+            label: 'GIF',
+            color: const Color(0xFF06B6D4),
+            onTap: () => _ctrl.setShowEmojiPanel(true)),
+      ],
+    );
+  }
+
+  Widget _buildEmojiPanel() {
+    return _EmojiGifPanel(
+      onEmoji: _insertEmoji,
+      onGif: _sendGif,
+      onBackspace: _backspace,
     );
   }
 
@@ -652,15 +704,52 @@ class _ChatScreenState extends State<ChatScreen>
           child: Row(children: [
             IconButton(
               icon: Icon(
-                _ctrl.showAttachMenu ? Icons.close : Icons.attach_file,
+                _ctrl.showAttachMenu ? Icons.close : Icons.add_circle_outline,
                 color: const Color(0xFFA78BFA),
               ),
+              tooltip: 'Attach',
               onPressed: () => _ctrl.setShowAttachMenu(!_ctrl.showAttachMenu),
+            ),
+            IconButton(
+              icon: Icon(
+                _ctrl.showEmojiPanel
+                    ? Icons.keyboard_alt_outlined
+                    : Icons.emoji_emotions_outlined,
+                color: const Color(0xFFA78BFA),
+              ),
+              tooltip: 'Emoji & GIFs',
+              onPressed: () {
+                final opening = !_ctrl.showEmojiPanel;
+                // Hide the system keyboard so the panel isn't stacked on top of
+                // it; reopening it is what the keyboard icon then does.
+                if (opening) {
+                  FocusScope.of(context).unfocus();
+                } else {
+                  _inputFocus.requestFocus();
+                }
+                _ctrl.setShowEmojiPanel(opening);
+              },
             ),
             Expanded(
               child: TextField(
                 controller: _textController,
-                onTap: () => _ctrl.setShowAttachMenu(false),
+                focusNode: _inputFocus,
+                // Gboard's GIF/sticker key and Play Store sticker packs deliver
+                // their images through Android's commitContent API; without
+                // this the keyboard shows them greyed out as "not supported".
+                contentInsertionConfiguration: ContentInsertionConfiguration(
+                  allowedMimeTypes: const [
+                    'image/gif',
+                    'image/png',
+                    'image/jpeg',
+                    'image/webp',
+                  ],
+                  onContentInserted: _onKeyboardContent,
+                ),
+                onTap: () {
+                  _ctrl.setShowAttachMenu(false);
+                  _ctrl.setShowEmojiPanel(false);
+                },
                 onChanged: _ctrl.onTypingChanged,
                 textCapitalization: TextCapitalization.sentences,
                 style: const TextStyle(color: Colors.white),

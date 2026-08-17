@@ -37,6 +37,8 @@ class RemoteConfigService {
       'webrtc_turn_url': '',
       'webrtc_turn_username': '',
       'webrtc_turn_credential': '',
+      // Giphy API key for the GIF picker — empty disables that tab only.
+      'giphy_api_key': '',
       'todo_input_text_color': '#ADADAD',
       'enable_firestore_logging': false, // off by default — enable remotely to debug
     });
@@ -65,6 +67,7 @@ class RemoteConfigService {
     final backend = _rc.getString('call_backend').trim().toLowerCase();
     defaults.callBackend =
         backend.isNotEmpty ? backend : defaults.kDefaultCallBackend;
+    defaults.giphyApiKey = _rc.getString('giphy_api_key').trim();
     defaults.webrtcTurnUrl = _rc.getString('webrtc_turn_url').trim();
     defaults.webrtcTurnUsername = _rc.getString('webrtc_turn_username').trim();
     defaults.webrtcTurnCredential =

@@ -32,6 +32,10 @@ String callBackend = kDefaultCallBackend;
 // TURN relay for the WebRTC backend. STUN alone connects most networks, but two
 // phones on mobile data behind carrier-grade NAT need a relay. Leave empty for
 // STUN-only; set via Remote Config (webrtc_turn_url/_username/_credential).
+// Giphy API key for the in-app GIF picker (Remote Config `giphy_api_key`).
+// Empty = the GIF tab shows a "not configured" message instead of results;
+// nothing else in the composer is affected. Free key: developers.giphy.com.
+String giphyApiKey = '';
 String webrtcTurnUrl = '';
 String webrtcTurnUsername = '';
 String webrtcTurnCredential = '';
