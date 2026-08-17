@@ -333,7 +333,6 @@ class _ChatScreenState extends State<ChatScreen>
                   children: [
                     // ── Chat tab ────────────────────────────────────────────
                     Column(children: [
-                      if (_ctrl.uploadProgress != null) _buildUploadBanner(),
                       Expanded(
                         child: ColoredBox(
                           color: const Color(0xFF0F0F1E),
@@ -510,27 +509,6 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
-  Widget _buildUploadBanner() {
-    return Column(children: [
-      LinearProgressIndicator(
-        value: _ctrl.uploadProgress,
-        minHeight: 4,
-        backgroundColor: Colors.white12,
-        color: const Color(0xFF7C3AED),
-      ),
-      Container(
-        color: const Color(0xFF1A1040),
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Text(
-          'Uploading… ${((_ctrl.uploadProgress ?? 0) * 100).toStringAsFixed(0)}%',
-          textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 12, color: Color(0xFFA78BFA)),
-        ),
-      ),
-    ]);
-  }
-
   Widget _buildMessageList() {
     final messages = _ctrl.messages;
     if (messages.isEmpty && !_ctrl.otherTyping) {
@@ -592,6 +570,7 @@ class _ChatScreenState extends State<ChatScreen>
           otherReadAt: _ctrl.otherReadAt,
           isPending: isPending,
           isFailed: isFailed,
+          uploadProgress: _ctrl.uploadProgressFor(msg.id),
           onRetry: isFailed ? () => _ctrl.retryMessage(msg.id) : null,
           onReply: msg.type == MessageType.callEvent ? null : _ctrl.setReplyingTo,
           showReadTime: !isPending && !isFailed && msg.id == lastReadMsgId,
@@ -705,12 +684,14 @@ class _ChatScreenState extends State<ChatScreen>
             ),
             const SizedBox(width: 6),
             GestureDetector(
-              onTap: _ctrl.sending ? null : _sendText,
+              // Never gated on an upload: media goes up behind its own bubble,
+              // so text can still be sent while a photo or video is uploading.
+              onTap: _sendText,
               child: Container(
                 width: 44,
                 height: 44,
-                decoration: BoxDecoration(
-                  color: _ctrl.sending ? Colors.white24 : const Color(0xFF6D28D9),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF6D28D9),
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(Icons.send, color: Colors.white, size: 20),

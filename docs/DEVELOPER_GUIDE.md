@@ -282,6 +282,7 @@ rooms/{chatRoomId}/messages/
     ├── fileSize: number?                ← bytes
     ├── timestamp: Timestamp             ← server-side (FieldValue.serverTimestamp())
     ├── clientId: string?                ← "pending_<microseconds>" for optimistic UI
+    │                                       (text AND media — see §6.2)
     ├── edited: bool                     ← true after editMessage()
     ├── replyToId: string?               ← message ID being replied to
     ├── replyToText: string?             ← preview text of the quoted message
@@ -488,7 +489,7 @@ All Firestore and Storage operations — only static methods, no instance state.
 | `messagesStream({int limit})` | Real-time stream, newest 50, oldest-first |
 | `fetchOlderMessages(DateTime before)` | One-shot fetch for pagination |
 | `sendText(text, {replyToId, clientId, ...})` | Writes plaintext document |
-| `sendMedia(File, MessageType, {onProgress})` | Uploads to Storage, then writes Firestore doc |
+| `sendMedia(File, MessageType, {fileName, onProgress, clientId})` | Uploads to Storage, then writes the Firestore doc — with `clientId`, so the optimistic bubble can be retired |
 | `markRead()` | Updates `readAt.{mySenderId}` on the room doc |
 | `get/setLastReadMsgId()` | Per-room SharedPreferences guard (`lastReadMsgId_{chatRoomId}`) — newest other-message already marked read; keeps the read time stable across app restarts |
 | `setTyping(bool)` | Updates `typing.{mySenderId}` on the room doc |
@@ -662,7 +663,7 @@ Abstract interface — `ChatController` only ever imports this file.
 abstract class IChatRepository {
   Stream<List<Message>> messagesStream({int limit = 50});
   Future<void> sendText(String text, {String? replyToId, String? clientId, ...});
-  Future<void> sendMedia(File file, MessageType type, {void Function(double)? onProgress, ...});
+  Future<void> sendMedia(File file, MessageType type, {void Function(double)? onProgress, String? clientId, ...});
   Future<void> markRead();
   Future<void> enterChat();
   Future<void> leaveChat();
@@ -715,7 +716,7 @@ a stream listener alone since no new snapshot arrives).
 |---|---|---|
 | `_streamMessages` | `List<Message>` | Latest 50 from Firestore stream |
 | `_olderMessages` | `List<Message>` | Prepended via `loadMoreMessages()` |
-| `_pendingEntries` | `List<_PendingEntry>` | Optimistic / failed messages |
+| `_pendingEntries` | `List<_PendingEntry>` | Optimistic / failed messages, text and media alike. A media entry also carries `sourceFile` (for retry) and `progress` (its upload ring) |
 | `_otherReadAt` | `DateTime?` | Drives blue tick display |
 | `_otherTyping` | `bool` | Drives typing indicator |
 | `_otherOnline` | `bool` | Drives "Online" in app bar |
@@ -864,6 +865,13 @@ void didChangeAppLifecycleState(AppLifecycleState state) {
 
 ```dart
 Widget _buildContent(Message msg) {
+  // Photo/video/GIF with no mediaUrl yet = still uploading: show the local
+  // preview (msg.previewPath) under a progress ring instead. Skipping this
+  // check is what made the old code throw on `msg.mediaUrl!`.
+  if (msg.mediaUrl == null && isVisualMedia(msg.type)) {
+    return _UploadPreview(previewPath: msg.previewPath, type: msg.type,
+                          progress: widget.uploadProgress);
+  }
   switch (msg.type) {
     case MessageType.text:  return _TextContent(msg);
     case MessageType.image: return EncryptedImage(url: msg.mediaUrl!);
@@ -1488,19 +1496,41 @@ User picks file (image/video/audio/file)
         ▼
 ChatController.sendMedia(file, MessageType.image)
         │
-        ├─ _uploadProgress = 0.0 → notifyListeners() (progress bar appears)
+        ├─ _PendingEntry(clientId, message: previewPath=file.path, progress: 0)
+        │       → notifyListeners()  ← bubble with local preview appears instantly
+        │  (video: VideoCompress.getFileThumbnail fills previewPath a moment later)
         │
-        └─ repo.sendMedia(file, type, onProgress: (p) { _uploadProgress = p; notifyListeners(); })
-                │
-                ├─ file.readAsBytes() → rawBytes
-                ├─ Storage.ref("chats/{roomId}/{uuid}.jpg").putData(rawBytes)
-                │       snapshotEvents → onProgress(bytesTransferred / totalBytes)
-                ├─ ref.getDownloadURL() → mediaUrl
-                └─ messages.add({type: "image", mediaUrl: url, fileSize: N, ...})
+        └─ _upload(entry)
+                ├─ video only: VideoCompress.compressVideo(...)
+                └─ repo.sendMedia(file, type, clientId, onProgress: (p) {
+                       entry.progress = p; notifyListeners();  ← ring on THAT bubble
+                   })
                         │
-                        ▼
-                 _uploadProgress = null → notifyListeners() (progress bar hides)
+                        ├─ file.readAsBytes() → rawBytes
+                        ├─ Storage.ref("chats/{roomId}/{uuid}.jpg").putData(rawBytes)
+                        │       snapshotEvents → onProgress(bytesTransferred / totalBytes)
+                        ├─ ref.getDownloadURL() → mediaUrl
+                        └─ messages.add({type, mediaUrl, clientId, fileSize, ...})
+                                │
+                                ▼
+                     stream emits the doc → clientId matches → _PendingEntry
+                     dropped, bubble switches to the uploaded media
 ```
+
+Uploads are **optimistic, like text** (§6.1) and share the same
+`_PendingEntry` / `clientId` confirmation machinery — hence `clientId` on media
+docs too. Consequences:
+
+- The composer is never disabled. It used to be: a single `_uploadProgress`
+  field drove a screen-wide "Uploading… 42%" banner and `sending` greyed out
+  the send button, so no text could be sent until the file finished.
+- Progress is per message (`ChatController.uploadProgressFor(messageId)`), so
+  several uploads can be in flight at once, each with its own ring.
+- `Message.previewPath` is the local image shown until `mediaUrl` exists — the
+  picked file for a photo, a generated thumbnail for a video. It is
+  **client-side only**: never written to or read from Firestore.
+- A failed upload keeps its bubble in `failedIds`; `retryMessage()` re-uploads
+  from `_PendingEntry.sourceFile` instead of re-sending it as text.
 
 ### 6.3 Read Receipt (Blue Ticks)
 
@@ -1681,6 +1711,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Screen dims / locks during a video call | (Fixed) Only audio calls held a wakelock (proximity); video calls held none, so the OS screen-timeout fired | `CallService.joinCall` sets `FLAG_KEEP_SCREEN_ON` (native `call` channel `keepScreenOn`) for video calls; `leaveCall` clears it. Spans full-screen + minimized |
 | Call drops when app goes to background | (Fixed) ChatScreen's leave-timer popped CallScreen; `callActiveNotifier` only covers minimized calls | `CallService.inCall` (true for the whole call) added to both pop guards |
 | Reminder notification shows time 5:30 h off | (Fixed) FCM payload timestamps are UTC; formatting without `.toLocal()` printed UTC wall-clock | `parseReminderTimestamp()` converts at the single parse point |
+| Can't send a message while a photo/video is uploading; nothing to look at but a banner | (Fixed) `sendMedia` set one screen-wide `_uploadProgress`, and the send button was disabled whenever `sending` (`_uploadProgress != null`) was true | Media is sent optimistically like text: the bubble appears at once with a local preview and its own progress ring (`uploadProgressFor(messageId)`), and the composer is never gated. See §6.2 |
 | Read ticks appear on just-sent messages | (Fixed) Optimistic messages use the local clock; device clock behind server time made `otherReadAt` look newer | `_isRead` returns false while `isPending` |
 | "Read HH:mm" time changes on already-read messages after the reader restarts the app | (Fixed) The read guard `_lastSeenOtherMsgId` was in-memory only; on restart it reset to null, so re-opening a chat with no new messages re-fired `markRead()` and re-stamped `readAt` | Persist the last-read message id per room (`ChatService.get/setLastReadMsgId`, key `lastReadMsgId_{chatRoomId}`); `ChatController.init()` restores it so an idle re-open never advances `readAt` |
 | Sender sees "Read HH:mm" advance while the reader is away (offline) | (Fixed) `leave()` (app backgrounded) cleared presence but did not pause read receipts, and the message stream stays live — so an incoming message hit `_subscribeMessages` and advanced `readAt` even though the reader had left | Gate auto-mark-read on `!_didLeave` too; `enter()` calls `_markReadLatestIfNew()` to mark the missed message read on return |
@@ -1868,7 +1899,10 @@ test/
 ├── helpers/
 │   └── fake_chat_repository.dart        ← in-memory IChatRepository, no Firebase
 ├── controllers/
-│   └── chat_controller_test.dart        ← optimistic UI, pagination, markRead, canModify,
+│   └── chat_controller_test.dart        ← optimistic UI (text + media upload: preview
+│                                           bubble before upload, per-message progress,
+│                                           clientId confirmation, retry re-uploads,
+│                                           concurrent uploads), pagination, markRead, canModify,
 │                                           hideMessage, editMessage, deleteMessage, presence
 │                                           (heartbeat staleness, legacy peer, dispose guard),
 │                                           stuck-write watchdog (wedged connection is reset,
@@ -1923,7 +1957,9 @@ test/
 │                                           windowStartMs (high-water vs full rescan)
 ├── widgets/
 │   └── message_bubble_test.dart         ← tick states, pending/failed rendering,
-│                                           tappable link spans
+│                                           tappable link spans, uploading media
+│                                           (local FileImage preview, % ring,
+│                                           indeterminate at 0, failed = no ring)
 └── screens/
     ├── todo_screen_test.dart            ← add/complete/delete/search tasks, subtasks,
     │                                       long-press edit dialog, unified reminder dialog,
@@ -1950,7 +1986,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 235 tests, ~20 seconds
+flutter test                        # 347 tests, ~35 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a

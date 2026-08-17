@@ -36,6 +36,12 @@ class FakeChatRepository implements IChatRepository {
   bool wedged = false;
   final List<bool> typingLog = [];
   final List<String> sentTexts = [];
+  final List<String> sentMedia = [];
+  final List<String?> mediaClientIds = [];
+
+  /// When set, [sendMedia] parks halfway through (after reporting 50%) until
+  /// the test completes it — the window in which the upload bubble is visible.
+  Completer<void>? mediaProgressGate;
 
   // ── Helpers for test control ──────────────────────────────────────────────
 
@@ -97,9 +103,30 @@ class FakeChatRepository implements IChatRepository {
     MessageType type, {
     String? fileName,
     void Function(double)? onProgress,
+    String? clientId,
   }) async {
+    sentMedia.add(fileName ?? file.path);
+    mediaClientIds.add(clientId);
+    if (throwOnSend) throw Exception('Upload failed');
+    // Reported step by step so a test can observe the bubble's progress ring
+    // mid-upload via [mediaProgressGate].
     onProgress?.call(0.5);
+    if (mediaProgressGate != null) await mediaProgressGate!.future;
     onProgress?.call(1.0);
+    if (autoConfirm) {
+      final msg = Message(
+        id: 'srv_${_confirmed.length}',
+        sender: mySenderId,
+        text: '',
+        type: type,
+        mediaUrl: 'https://example.test/${fileName ?? 'media'}',
+        fileName: fileName,
+        timestamp: DateTime.now(),
+        clientId: clientId,
+      );
+      _confirmed.add(msg);
+      _msgsCtrl.add(List.from(_confirmed));
+    }
   }
 
   @override

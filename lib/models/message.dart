@@ -20,6 +20,12 @@ class Message {
   // was added. Null on older events (direction cannot be determined).
   final String? callerId;
 
+  /// Local image file shown in place of [mediaUrl] while an outgoing photo or
+  /// video is still uploading (for a video this is a generated thumbnail).
+  /// Purely client-side: never written to or read from Firestore, and only ever
+  /// set on the optimistic copy the sender sees.
+  final String? previewPath;
+
   /// Roles (`A`/`B`) that have deleted this message from their own view. A user
   /// whose role is in this list doesn't see the message; once BOTH are present
   /// the doc is removed from Firestore. See two-sided deletion in ChatService.
@@ -40,6 +46,7 @@ class Message {
     this.clientId,
     this.edited = false,
     this.callerId,
+    this.previewPath,
     this.deletedFor = const [],
   });
 
