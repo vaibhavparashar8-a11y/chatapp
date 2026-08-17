@@ -609,6 +609,47 @@ ValueListenableBuilder<int>(
 
 ---
 
+### `lib/services/media_store_service.dart`
+
+Puts every downloaded chat file in one place the user can actually find:
+**Internal storage / Download / MyTask**.
+
+Downloads previously went to `getExternalStorageDirectory()` —
+`Android/data/com.example.chatapp/files/`. That path is writable without
+permission, but it is hidden from Files/My Files on modern Android and is
+deleted with the app, which is why saved files appeared to vanish. Images and
+videos additionally went to the Gallery via `gal`; that package is gone now, so
+chat media no longer lands in the camera roll (which the discreteness
+requirement prefers anyway).
+
+The app targets SDK 36, where a plain write into shared storage is ignored, so
+the save is done natively:
+
+```
+_downloadToMyTask(url, fileName)          ← widgets/bubbles/shared.dart
+  ├─ Dio().download(url, <cache>/fileName)         staging copy (for OpenFile)
+  └─ MediaStoreService.saveToMyTask(temp, name, mimeType)
+        └─ MethodChannel com.example.chatapp/storage → "saveToMyTask"
+              └─ MyTaskStorage.java (off the main thread)
+                   ├─ API 29+  MediaStore.Downloads insert,
+                   │           RELATIVE_PATH = Download/MyTask,
+                   │           IS_PENDING while the bytes are copied
+                   └─ API ≤28  direct write + MediaScannerConnection.scanFile
+```
+
+| Behaviour | Detail |
+|---|---|
+| Return value | `content://` URI (API 29+) or absolute path (≤28); **null on failure** |
+| Failure handling | Callers show "Download failed" — a null must never be reported as saved, since the user would go looking in MyTask for a file that is not there |
+| Name clashes | MediaStore renames to `photo (1).jpg`; the legacy path does the same in `uniqueFile()` |
+| Opening a file | Uses the staged cache copy — `OpenFile` needs a real path, not a `content://` URI |
+| Test seam | `MediaStoreService.testMode = true` records into `savedInTestMode` and never calls the platform |
+
+Used by all four download sites: `_DownloadButton` (photos/GIFs),
+`_InlineVideoPlayer._openExternal`, `_FileMessageTile`, `_AudioMessageTile`.
+
+---
+
 ### `lib/services/remote_config_service.dart`
 
 Fetches Firebase Remote Config on every startup (`minimumFetchInterval: Duration.zero`).  
@@ -1748,6 +1789,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Messages and call signals arrive ~10 s late, everywhere, regardless of screen | (Fixed) `CallLogService.sync()` ran on **every app resume, throttled only to 1/min**, and each run did a 30-day Firestore read (hundreds of docs) plus — right after the cleanup script deleted `app_call_log_*` — a several-hundred-document batch write. Firestore commits pending writes **in order on one queue per client**, so a chat message sent during that window waited behind the batch | Ordinary syncs run at most every 6 h from a persisted high-water mark and do **no** Firestore read; the full 30-day reconcile that restores externally deleted logs runs at most daily. See the CallLogService section in §5 |
 | Chat frozen (no new messages / presence / read receipts) until app restart — often after a bulk server-side deletion | (Fixed) A Firestore listener error was fatal: the room stream did `_roomBcast.addError(...)`, which cancelled the presence/typing/readAt listeners (they have no `onError`), and the message stream had no `onError` either — so any listener drop wedged the chat permanently | Both streams now **self-heal**: `ChatService._listenRoom()` logs and re-subscribes instead of forwarding the error downstream; `ChatController._subscribeMessages` re-subscribes after `messageResubscribeDelay` (2s, injectable). No restart needed |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
+| A downloaded photo/video/file cannot be found anywhere on the phone | (Fixed) Downloads went to `getExternalStorageDirectory()` = `Android/data/com.example.chatapp/files/`, which modern Android hides from file managers and wipes on uninstall. Only images/videos escaped it, via `gal`, into the Gallery | Everything is exported to **Download/MyTask** through MediaStore (`MediaStoreService` → `MyTaskStorage.java`). The cache copy is kept only so `OpenFile` has a real path to open. A failed export now says "Download failed" instead of silently reporting success |
 | Grabbing the pip's resize corner opens the full-screen call instead | (Fixed) The corner was only a painted hint; the parent `GestureDetector` hit-tested the whole overlay, so a touch there that didn't travel far enough to win the pan arena was delivered as a tap → restore | The handle is its own opaque `GestureDetector` owning the resize pan, with an empty `onTap` that absorbs the touch, and is 36×36 instead of 24×24. The parent additionally refuses to restore when the gesture moved the overlay (`_moved`) |
 | Overlay "stuck" — won't move when enlarged | (Fixed) Resize mode latched at pan-down; at max size the clamps absorbed every delta, so the drag neither resized nor moved | Resize gesture falls back to move when the size is pinned at its clamp bounds |
 | Overlay resets to small size after returning from CallScreen | (Fixed) Geometry was widget State, wiped by the `_floatingVideoEpoch` key-bump reconstruction | Geometry hoisted to `CallService.overlayX/Y/W/H`; reset only in `joinCall()` (new call) |
@@ -1986,9 +2028,12 @@ test/
 │   ├── digest_service_test.dart         ← titlesFor (today+not-done filter, skips
 │   │                                       notify-only tasks),
 │   │                                       buildBody checklist, DigestPrefs defaults
-│   └── call_log_service_test.dart       ← docIdFor stability / dedup key,
-│                                           shouldSync + shouldReconcile throttles,
-│                                           windowStartMs (high-water vs full rescan)
+│   ├── call_log_service_test.dart       ← docIdFor stability / dedup key,
+│   │                                       shouldSync + shouldReconcile throttles,
+│   │                                       windowStartMs (high-water vs full rescan)
+│   └── media_store_service_test.dart    ← mimeTypeFor mapping, channel arguments,
+│                                           null (not throw) on platform failure,
+│                                           testMode seam
 ├── widgets/
 │   └── message_bubble_test.dart         ← tick states, pending/failed rendering,
 │                                           tappable link spans, uploading media

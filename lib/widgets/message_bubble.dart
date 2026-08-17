@@ -7,12 +7,12 @@ import 'package:video_player/video_player.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
 import 'package:dio/dio.dart';
-import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
 import '../constants.dart';
 import '../models/message.dart';
 import '../screens/media_viewer_screen.dart';
 import '../services/log_service.dart';
+import '../services/media_store_service.dart';
 import '../utils/link_utils.dart';
 
 part 'bubbles/shared.dart';

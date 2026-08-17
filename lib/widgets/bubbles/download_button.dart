@@ -26,19 +26,18 @@ class _DownloadButtonState extends State<_DownloadButton> {
     if (_saving || _done) return;
     setState(() { _saving = true; _error = false; });
     try {
-      await Gal.requestAccess();
-      final path = await _savePath(widget.fileName);
-      await Dio().download(widget.url, path);
-
-      if (widget.messageType == MessageType.video) {
-        await Gal.putVideo(path);
-      } else if (widget.messageType == MessageType.image ||
-                 widget.messageType == MessageType.gif) {
-        await Gal.putImage(path);
-      }
-      if (mounted) setState(() { _saving = false; _done = true; });
+      final staged = await _downloadToMyTask(widget.url, widget.fileName);
+      if (staged == null) throw Exception('could not write to MyTask');
+      if (!mounted) return;
+      setState(() { _saving = false; _done = true; });
+      ScaffoldMessenger.of(ctx).showSnackBar(
+        SnackBar(
+          content: Text('Saved to Download/${MediaStoreService.folderName}'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
     } catch (e) {
-      debugPrint('DownloadButton: save failed — $e');
+      LogService.e('Download', 'save failed — ${widget.fileName}: $e');
       if (mounted) {
         setState(() { _saving = false; _error = true; });
         ScaffoldMessenger.of(ctx).showSnackBar(

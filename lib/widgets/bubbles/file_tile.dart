@@ -26,15 +26,27 @@ class _FileMessageTileState extends State<_FileMessageTile> {
     setState(() { _downloading = true; _progress = 0; });
     try {
       final name = widget.message.fileName ?? 'file';
-      final path = await _savePath(name);
-      await Dio().download(
-        widget.message.mediaUrl!, path,
-        onReceiveProgress: (r, t) {
+      final staged = await _downloadToMyTask(
+        widget.message.mediaUrl!,
+        name,
+        onProgress: (r, t) {
           if (t > 0 && mounted) setState(() => _progress = r / t);
         },
       );
-      await OpenFile.open(path);
-    } catch (_) {
+      if (!mounted) return;
+      if (staged == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Download failed'), duration: Duration(seconds: 2)));
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Saved to Download/${MediaStoreService.folderName}'),
+        duration: const Duration(seconds: 2)));
+      // Open from the staged copy: OpenFile wants a real path, and MediaStore
+      // hands back a content:// URI.
+      await OpenFile.open(staged);
+    } catch (e) {
+      LogService.e('Download', 'file download failed: $e');
     } finally {
       if (mounted) setState(() { _downloading = false; _progress = null; });
     }

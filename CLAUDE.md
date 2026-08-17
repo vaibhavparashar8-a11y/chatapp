@@ -32,7 +32,8 @@ functions/                 ← Cloud Functions, Node 20 1st-gen (onReminderCreat
 test/                      ← mirrors lib/; helpers/fake_chat_repository.dart
 docs/DEVELOPER_GUIDE.md    ← the deep reference (schema, data flows, module docs)
 android/.../chatapp/       ← native: MainActivity, CallForegroundService (discreet
-                             notification — do not make it louder)
+                             notification — do not make it louder),
+                             MyTaskStorage (MediaStore export → Download/MyTask)
 ```
 
 ## Conventions
