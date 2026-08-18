@@ -1,4 +1,5 @@
 import 'dart:io' show File;
+import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart' show TapGestureRecognizer;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
@@ -545,6 +546,7 @@ class _MessageBubbleState extends State<MessageBubble>
                     const BorderRadius.vertical(top: Radius.circular(12)),
                 child: _EncryptedImage(
                   url: msg.mediaUrl!,
+                  thumbUrl: msg.thumbUrl,
                   width: 220,
                   height: 200,
                 ),

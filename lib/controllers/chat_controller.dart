@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:video_compress/video_compress.dart';
 import '../constants.dart';
 import '../models/message.dart';
@@ -14,6 +16,9 @@ import '../services/log_service.dart';
 ///   • Pagination         — stream limited to last 50; [loadMoreMessages] fetches older
 ///   • Debounced markRead — batches read-receipt writes into 500 ms windows
 ///   • Retry              — failed sends preserved in [_pendingEntries] for re-attempt
+/// Default for [ChatController.isCallActive]: no call engine in sight.
+bool _neverInCall() => false;
+
 class ChatController extends ChangeNotifier {
   final IChatRepository _repo;
   final void Function(String message)? onUploadError;
@@ -51,7 +56,16 @@ class ChatController extends ChangeNotifier {
     this.stuckWriteAfter = const Duration(seconds: 60),
     this.connectionResetCooldown = const Duration(seconds: 60),
     this.pushGraceWindow = const Duration(seconds: 3),
+    this.isCallActive = _neverInCall,
   });
+
+  /// Whether a call is running right now.
+  ///
+  /// Injected rather than read from CallService directly, so the controller
+  /// keeps its independence from the call engine (and so tests can drive it).
+  /// It gates work that would compete with the call for the hardware codec —
+  /// see [_upload].
+  final bool Function() isCallActive;
 
   // ── Private state ────────────────────────────────────────────────────────
 
@@ -555,7 +569,15 @@ class ChatController extends ChangeNotifier {
     final type = entry.message.type;
     try {
       File uploadFile = file;
-      if (type == MessageType.video) {
+      if (type == MessageType.video && isCallActive()) {
+        // A call already owns a hardware encoder and decoder for its own video.
+        // Devices allow only a handful of concurrent MediaCodec instances, and
+        // asking for another one mid-call is a good way to take the whole
+        // process down — taking the call with it. Send the original instead;
+        // putFile streams it, so the larger file costs no extra memory.
+        LogService.w('ChatController',
+            'call in progress — skipping video transcode, uploading original');
+      } else if (type == MessageType.video) {
         // Transcode to H.264 Main/Baseline at 720p so low-end devices can
         // decode the video (avoids NO_EXCEEDS_CAPABILITIES on MediaCodec).
         LogService.i('ChatController', 'Compressing video before upload');
@@ -573,7 +595,19 @@ class ChatController extends ChangeNotifier {
           LogService.w('ChatController', 'Compression returned null — uploading original');
         }
       }
+      // Poster/preview frame uploaded beside the media so the receiver has
+      // something to draw immediately: the generated frame for a video, a
+      // 32px-wide copy of the picture for a photo.
       final previewPath = entry.message.previewPath;
+      final File? thumbnailFile;
+      if (type == MessageType.video && previewPath != null) {
+        thumbnailFile = File(previewPath);
+      } else if (type == MessageType.image || type == MessageType.gif) {
+        final small = await _imageThumbnail(uploadFile);
+        thumbnailFile = small == null ? null : File(small);
+      } else {
+        thumbnailFile = null;
+      }
       await _repo.sendMedia(
         uploadFile,
         type,
@@ -581,9 +615,7 @@ class ChatController extends ChangeNotifier {
         clientId: entry.clientId,
         // The frame generated for our own upload bubble doubles as the poster
         // the other phone shows before the video itself downloads.
-        thumbnail: type == MessageType.video && previewPath != null
-            ? File(previewPath)
-            : null,
+        thumbnail: thumbnailFile,
         onProgress: (p) {
           entry.progress = p;
           notifyListeners();
@@ -608,6 +640,32 @@ class ChatController extends ChangeNotifier {
       return thumb.path;
     } catch (e) {
       LogService.w('ChatController', 'video thumbnail failed: $e');
+      return null;
+    }
+  }
+
+  /// Tiny downscaled copy of a photo, uploaded beside it as `thumbUrl`.
+  ///
+  /// A few KB that arrives almost instantly, so the receiving bubble can show a
+  /// blurred version of the actual picture while the full-size file downloads,
+  /// instead of an empty grey tile. Decoded through dart:ui rather than an
+  /// image package — no new dependency, and it reuses the platform decoder.
+  Future<String?> _imageThumbnail(File file) async {
+    try {
+      final bytes = await file.readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes, targetWidth: 32);
+      final frame = await codec.getNextFrame();
+      final data = await frame.image.toByteData(format: ui.ImageByteFormat.png);
+      frame.image.dispose();
+      codec.dispose();
+      if (data == null) return null;
+      final dir = await getTemporaryDirectory();
+      final path =
+          '${dir.path}/thumb_${DateTime.now().microsecondsSinceEpoch}.png';
+      await File(path).writeAsBytes(data.buffer.asUint8List(), flush: true);
+      return path;
+    } catch (e) {
+      LogService.w('ChatController', 'image thumbnail failed: $e');
       return null;
     }
   }
