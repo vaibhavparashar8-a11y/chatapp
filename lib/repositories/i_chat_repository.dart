@@ -25,6 +25,9 @@ abstract class IChatRepository {
     void Function(double progress)? onProgress,
     // Same role as in [sendText]: confirms the optimistic upload bubble.
     String? clientId,
+    /// Video only: a still frame uploaded alongside it, so the receiving side
+    /// has something to show before the video itself is fetched.
+    File? thumbnail,
   });
 
   Future<void> enterChat();

@@ -148,6 +148,7 @@ class ChatService {
       text: text,
       type: type,
       mediaUrl: map['mediaUrl'] as String?,
+      thumbUrl: map['thumbUrl'] as String?,
       fileName: fileName,
       fileSize: map['fileSize'] as int?,
       timestamp: map['timestamp'] != null
@@ -189,6 +190,7 @@ class ChatService {
     String? fileName,
     void Function(double)? onProgress,
     String? clientId,
+    File? thumbnail,
   }) async {
     final rawBytes = await file.readAsBytes();
     final name = fileName ?? file.path.split('/').last;
@@ -216,11 +218,28 @@ class ChatService {
     }
 
     final url = await ref.getDownloadURL();
+    // Best-effort poster frame for videos. A few KB next to a multi-MB video,
+    // and it is what lets the receiver show the video's own frame immediately
+    // instead of a blank tile or the cost of spinning up a network player.
+    // A failure here must never fail the send.
+    String? thumbUrl;
+    if (thumbnail != null) {
+      try {
+        final thumbRef = _storage.ref('chats/$chatRoomId/${id}_thumb.jpg');
+        await thumbRef.putData(await thumbnail.readAsBytes(),
+            SettableMetadata(contentType: 'image/jpeg'));
+        thumbUrl = await thumbRef.getDownloadURL();
+      } catch (e) {
+        LogService.w('Upload', 'thumbnail upload failed (video still sent): $e');
+      }
+    }
+
     final map = <String, dynamic>{
       'sender': mySenderId,
       'type': type.name,
       'text': '',
       'mediaUrl': url,
+      if (thumbUrl != null) 'thumbUrl': thumbUrl,
       'fileName': name,
       'fileSize': rawBytes.length,
       'timestamp': FieldValue.serverTimestamp(),

@@ -2,6 +2,7 @@ import 'dart:io' show File;
 import 'package:flutter/gestures.dart' show TapGestureRecognizer;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import 'package:intl/intl.dart';
@@ -566,6 +567,7 @@ class _MessageBubbleState extends State<MessageBubble>
           url: msg.mediaUrl!,
           fileName: msg.fileName ?? '${msg.id}.mp4',
           messageId: msg.id,
+          thumbUrl: msg.thumbUrl,
         );
 
       case MessageType.file:

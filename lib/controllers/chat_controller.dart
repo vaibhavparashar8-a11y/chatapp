@@ -573,11 +573,17 @@ class ChatController extends ChangeNotifier {
           LogService.w('ChatController', 'Compression returned null — uploading original');
         }
       }
+      final previewPath = entry.message.previewPath;
       await _repo.sendMedia(
         uploadFile,
         type,
         fileName: entry.message.fileName,
         clientId: entry.clientId,
+        // The frame generated for our own upload bubble doubles as the poster
+        // the other phone shows before the video itself downloads.
+        thumbnail: type == MessageType.video && previewPath != null
+            ? File(previewPath)
+            : null,
         onProgress: (p) {
           entry.progress = p;
           notifyListeners();

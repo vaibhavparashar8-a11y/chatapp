@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'agora_token_builder.dart';
 import 'call_avatar.dart';
 import 'call_service.dart';
+import 'end_minimized_call.dart';
 import '../../services/chat_service.dart';
 import '../../services/log_service.dart';
 import '../../constants.dart';
@@ -291,12 +292,13 @@ class _CallScreenState extends State<CallScreen> {
     isCallVideo = widget.isVideo;
     isCallCaller = widget.isCaller;
     activeCallToken = widget.callToken;
-    // If remote hangs up while minimized, clean up silently
-    CallService.onCallEnded = () async {
-      callActiveNotifier.value = false;
-      _callChannel.invokeMethod('stopForeground').catchError((_) {});
-      await CallService.leaveCall();
-    };
+    // Remote hung up while we are minimized. This used to tear down silently,
+    // which lost the chat entry entirely whenever the OTHER side ended the
+    // call: only the caller writes the event, and if the caller was the one
+    // sitting minimized, nobody wrote it. Route it through the same teardown
+    // the pip's own end button uses — it no-ops the write for the callee, so
+    // exactly one event is still logged per call.
+    CallService.onCallEnded = () => unawaited(endMinimizedCall());
     // Clear UI callbacks — this screen is going away
     CallService.updateCallbacks(
       onUserJoined: (_) {},

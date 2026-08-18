@@ -8,6 +8,11 @@ class Message {
   final String text;
   final MessageType type;
   final String? mediaUrl;
+
+  /// Small still frame for a video, uploaded alongside it, so the receiver can
+  /// show the frame immediately instead of a blank tile (or paying to
+  /// initialise a network video player just to get one).
+  final String? thumbUrl;
   final String? fileName;
   final int? fileSize;
   final DateTime timestamp;
@@ -37,6 +42,7 @@ class Message {
     required this.text,
     required this.type,
     this.mediaUrl,
+    this.thumbUrl,
     this.fileName,
     this.fileSize,
     required this.timestamp,
@@ -60,6 +66,7 @@ class Message {
         orElse: () => MessageType.text,
       ),
       mediaUrl: map['mediaUrl'],
+      thumbUrl: map['thumbUrl'],
       fileName: map['fileName'],
       fileSize: map['fileSize'],
       timestamp: map['timestamp'] != null
@@ -81,6 +88,7 @@ class Message {
       'text': text,
       'type': type.name,
       if (mediaUrl != null) 'mediaUrl': mediaUrl,
+      if (thumbUrl != null) 'thumbUrl': thumbUrl,
       if (fileName != null) 'fileName': fileName,
       if (fileSize != null) 'fileSize': fileSize,
       'timestamp': timestamp,
