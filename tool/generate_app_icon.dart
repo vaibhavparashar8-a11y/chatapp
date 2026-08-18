@@ -10,7 +10,6 @@
 // anti-aliasing, real gradients — instead of hand-rolling PNG pixels. Nothing
 // here runs in the app.
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';

@@ -96,6 +96,9 @@ class _ChatScreenState extends State<ChatScreen>
     _tabCtrl = TabController(length: 2, vsync: this);
     _ctrl = ChatController(
       widget.repository ?? const FirebaseChatRepository(),
+      // Lets the controller skip codec-heavy work (video transcoding) while a
+      // call is live — competing for MediaCodec can take the process down.
+      isCallActive: () => CallService.inCall,
       onUploadError: (msg) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -777,8 +780,13 @@ class _ChatScreenState extends State<ChatScreen>
       ),
       child: SafeArea(
         top: false,
+        // With the emoji/GIF panel open BELOW this bar, its own bottom inset
+        // (nav bar / gesture pill) would sit in the middle of the composer as
+        // dead space — which is what pushed the GIF grid down to a row and a
+        // half. The panel takes the inset instead.
+        bottom: !_ctrl.showEmojiPanel,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(4, 8, 8, 8),
+          padding: const EdgeInsets.fromLTRB(4, 6, 8, 6),
           child: Row(children: [
             // Compact by hand: a default IconButton reserves a 48x48 tap target
             // plus its own padding, and two of those side by side ate most of

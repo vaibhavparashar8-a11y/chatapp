@@ -192,9 +192,9 @@ class ChatService {
     String? clientId,
     File? thumbnail,
   }) async {
-    final rawBytes = await file.readAsBytes();
     final name = fileName ?? file.path.split('/').last;
-    LogService.i('Upload', 'Read ${rawBytes.length} bytes');
+    final fileSize = await file.length();
+    LogService.i('Upload', 'Uploading $name ($fileSize bytes)');
 
     final id  = _uuid.v4();
     final ext = name.contains('.') ? name.split('.').last : 'bin';
@@ -204,7 +204,14 @@ class ChatService {
     LogService.i('Upload', 'Storage path: $storagePath');
     try {
       final metadata = SettableMetadata(contentType: _mimeType(ext));
-      final uploadTask = ref.putData(rawBytes, metadata);
+      // putFile, NOT readAsBytes + putData. The old path pulled the entire
+      // file into the Dart heap and then handed a copy across the platform
+      // channel, so a 50 MB video meant a ~100 MB spike. During a video call —
+      // where Agora is already holding camera buffers plus an encoder and a
+      // decoder — that spike is enough for Android to kill the process, which
+      // looks like "the app crashed and the call dropped". putFile streams
+      // from disk in chunks and reports the same progress events.
+      final uploadTask = ref.putFile(file, metadata);
       uploadTask.snapshotEvents.listen((snap) {
         if (snap.totalBytes > 0) {
           onProgress?.call(snap.bytesTransferred / snap.totalBytes);
@@ -213,7 +220,7 @@ class ChatService {
       await uploadTask;
       LogService.i('Upload', 'Upload complete');
     } catch (e, st) {
-      LogService.e('Upload', 'putData failed: $e\n$st');
+      LogService.e('Upload', 'putFile failed: $e\n$st');
       rethrow;
     }
 
@@ -241,7 +248,7 @@ class ChatService {
       'mediaUrl': url,
       if (thumbUrl != null) 'thumbUrl': thumbUrl,
       'fileName': name,
-      'fileSize': rawBytes.length,
+      'fileSize': fileSize,
       'timestamp': FieldValue.serverTimestamp(),
       if (clientId != null) 'clientId': clientId,
     };

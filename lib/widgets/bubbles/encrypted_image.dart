@@ -12,13 +12,20 @@ part of '../message_bubble.dart';
 ///     to be drawn 220 px wide.
 /// [memCacheWidth]/[maxWidthDiskCache] cap the decode at roughly what is
 /// actually on screen, which is where most of the delay went.
+///
+/// While the full file downloads it shows [thumbUrl] — a 32 px copy uploaded
+/// beside the photo — blurred up to fill the bubble. A few KB arrives almost
+/// instantly, so the bubble holds a recognisable version of the actual picture
+/// instead of an empty grey tile.
 class _EncryptedImage extends StatelessWidget {
   final String url;
+  final String? thumbUrl;
   final double width;
   final double height;
 
   const _EncryptedImage({
     required this.url,
+    this.thumbUrl,
     this.width = 220,
     this.height = 200,
   });
@@ -36,10 +43,9 @@ class _EncryptedImage extends StatelessWidget {
       fit: BoxFit.cover,
       memCacheWidth: targetWidth,
       maxWidthDiskCache: targetWidth,
-      fadeInDuration: ChatTheme.fast,
-      // Same tile the upload preview shows, so an arriving photo occupies its
-      // final shape immediately instead of collapsing the bubble.
-      placeholder: (_, __) => _MediaPlaceholder(width: width, height: height),
+      fadeInDuration: ChatTheme.base,
+      placeholder: (_, __) => _MediaLoadingTile(
+          width: width, height: height, thumbUrl: thumbUrl),
       errorWidget: (_, __, ___) => _MediaPlaceholder(
         width: width,
         height: height,
@@ -50,7 +56,60 @@ class _EncryptedImage extends StatelessWidget {
   }
 }
 
-/// Neutral tile shown while media loads or when it cannot be shown.
+/// What fills a media bubble before its full-size file has arrived: the blurred
+/// thumbnail when there is one, otherwise a neutral tile.
+class _MediaLoadingTile extends StatelessWidget {
+  final double width;
+  final double height;
+  final String? thumbUrl;
+
+  const _MediaLoadingTile({
+    required this.width,
+    required this.height,
+    required this.thumbUrl,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final thumb = thumbUrl;
+    if (thumb == null) {
+      return _MediaPlaceholder(width: width, height: height);
+    }
+    return SizedBox(
+      width: width,
+      height: height,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // The thumbnail is ~32 px wide, so it is blurred rather than shown
+          // sharp — upscaled detail that small looks like a mistake.
+          ImageFiltered(
+            imageFilter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: CachedNetworkImage(
+              imageUrl: thumb,
+              fit: BoxFit.cover,
+              fadeInDuration: ChatTheme.fast,
+              placeholder: (_, __) =>
+                  const ColoredBox(color: Color(0xFF241C46)),
+              errorWidget: (_, __, ___) =>
+                  const ColoredBox(color: Color(0xFF241C46)),
+            ),
+          ),
+          const Center(
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.white70),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Neutral tile shown when there is no thumbnail, or the media cannot be shown.
 class _MediaPlaceholder extends StatelessWidget {
   final double width;
   final double height;

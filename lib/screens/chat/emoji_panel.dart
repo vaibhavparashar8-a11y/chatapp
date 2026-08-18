@@ -32,7 +32,11 @@ class _EmojiGifPanelState extends State<_EmojiGifPanel>
   late final TabController _tabs;
   int _category = 0;
 
-  static const _height = 260.0;
+  /// Roughly a keyboard's worth of the screen, which is the space this panel
+  /// replaces. Fixed 260 left the GIF grid showing a row and a half on a tall
+  /// phone; clamped so it never eats the conversation on a small one.
+  static double _panelHeight(BuildContext context) =>
+      (MediaQuery.of(context).size.height * 0.42).clamp(260.0, 360.0);
 
   @override
   void initState() {
@@ -50,9 +54,11 @@ class _EmojiGifPanelState extends State<_EmojiGifPanel>
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: _height,
+      height: _panelHeight(context),
       color: ChatTheme.surface1,
-      child: Column(
+      child: SafeArea(
+        top: false,
+        child: Column(
         children: [
           // Tight chrome: the panel replaces the keyboard, so every pixel
           // spent on tabs is a pixel of content the user does not see.
@@ -83,6 +89,7 @@ class _EmojiGifPanelState extends State<_EmojiGifPanel>
             ),
           ),
         ],
+        ),
       ),
     );
   }

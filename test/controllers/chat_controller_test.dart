@@ -136,11 +136,45 @@ void main() {
 
       final future = ctrl.sendMedia(File('/pics/cat.jpg'), MessageType.image);
       final id = ctrl.messages.single.id;
+      // Generating the thumbnail is an await, so the upload starts a turn later.
+      await Future.delayed(Duration.zero);
       expect(ctrl.uploadProgressFor(id), 0.5);
       expect(ctrl.uploadProgressFor('some-other-message'), isNull);
 
       repo.mediaProgressGate!.complete();
       await future;
+      ctrl.dispose();
+      repo.close();
+    });
+
+    // Sending a video mid-call used to ask VideoCompress for a hardware
+    // encoder while the call already held one. Devices allow only a handful of
+    // concurrent MediaCodec instances, and losing that race takes the whole
+    // process down — which is what "the app crashed and the call cut" was.
+    //
+    // The assertion is indirect but exact: VideoCompress has no plugin in the
+    // test environment, so if the transcode were still attempted this test
+    // would fail with a MissingPluginException instead of completing.
+    test('a video sent during a call skips the transcode', () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(repo, isCallActive: () => true);
+      await ctrl.init();
+
+      await ctrl.sendMedia(File('/clips/clip.mp4'), MessageType.video,
+          fileName: 'clip.mp4');
+      await Future.delayed(Duration.zero);
+
+      expect(repo.sentMedia, ['clip.mp4']);
+      expect(ctrl.failedIds, isEmpty, reason: 'the send must still succeed');
+      ctrl.dispose();
+      repo.close();
+    });
+
+    test('isCallActive defaults to "no call", so nothing is skipped normally',
+        () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(repo);
+      expect(ctrl.isCallActive(), isFalse);
       ctrl.dispose();
       repo.close();
     });

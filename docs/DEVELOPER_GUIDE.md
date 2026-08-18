@@ -279,8 +279,9 @@ rooms/{chatRoomId}/messages/
     │        |"audio"|"file"|"gif"
     ├── text: string                     ← plaintext body (or "" for media)
     ├── mediaUrl: string?                ← Firebase Storage download URL
-    ├── thumbUrl: string?                ← video poster frame (uploaded beside the
-    │                                       video) so the receiver shows it instantly
+    ├── thumbUrl: string?                ← poster frame uploaded beside the media:
+    │                                       a video still, or a 32px copy of a photo
+    │                                       (blurred as the bubble placeholder)
     ├── fileName: string?                ← original filename for files
     ├── fileSize: number?                ← bytes
     ├── timestamp: Timestamp             ← server-side (FieldValue.serverTimestamp())
@@ -1872,6 +1873,9 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Chat frozen (no new messages / presence / read receipts) until app restart — often after a bulk server-side deletion | (Fixed) A Firestore listener error was fatal: the room stream did `_roomBcast.addError(...)`, which cancelled the presence/typing/readAt listeners (they have no `onError`), and the message stream had no `onError` either — so any listener drop wedged the chat permanently | Both streams now **self-heal**: `ChatService._listenRoom()` logs and re-subscribes instead of forwarding the error downstream; `ChatController._subscribeMessages` re-subscribes after `messageResubscribeDelay` (2s, injectable). No restart needed |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
 | No way to send emoji, GIFs or Play Store stickers | (Added) The composer had a text field and an attach menu, nothing else. Flutter text fields also reject keyboard-inserted images unless configured, so Gboard greyed out its GIF/sticker keys | Emoji/GIF panel behind a smiley button (`_EmojiGifPanel`), and `contentInsertionConfiguration` on the message field so keyboard stickers/GIFs insert and send. GIF search needs `giphy_api_key` in Remote Config |
+| The app crashes and the call drops when a file is sent during a video call | (Fixed) `sendMedia` did `readAsBytes()` then `putData()`, pulling the whole file into the Dart heap and handing a copy across the platform channel — a ~100 MB spike for a 50 MB video. On top of a live call (Agora holding camera buffers, an encoder and a decoder) that is enough for Android to kill the process, which takes the call with it | `putFile` streams from disk in chunks and reports the same progress. A video send during a call also skips the `VideoCompress` transcode: a call already owns a hardware encoder, devices allow only a handful of concurrent MediaCodec instances, and losing that race is a native crash |
+| The emoji/GIF panel shows only a row and a half of GIFs | (Fixed) The composer's `SafeArea` bottom inset (nav bar / gesture pill) sat **between** the input bar and the panel, because the panel renders below it | The input bar drops its bottom inset while the panel is open and the panel takes it instead; the panel is also sized to 42% of screen height (clamped 260–360) rather than a fixed 260 |
+| An arriving photo shows an empty grey tile while it downloads | (Fixed) There was nothing to draw until the full-size file finished | A 32 px copy of the photo is uploaded beside it as `thumbUrl` (decoded via `dart:ui`, no new dependency) and blurred up to fill the bubble while the real file loads — a few KB that arrives almost immediately |
 | The todo side looks like a different app from the chat | (Fixed) `app_palette.dart` held a second set of hex literals that had drifted from the chat's — the todo card was `#1A1040` against the chat panel's `#141024`, so switching halves shifted the background a shade | `app_palette.dart` now derives from `ChatTheme`, and a test asserts they stay equal. Task cards gained the same lit-from-one-direction gradient + shadow as the bubbles; the app bar and add button match the chat's |
 | Received photos take seconds to appear, every time you scroll back | (Fixed) The bubble used `Image.network`, which has **no disk cache** — so scrolling back re-fetched the whole file from Storage — and decoded at full resolution: a 12 MP photo decoded into memory to be drawn 220 px wide | `CachedNetworkImage` with `memCacheWidth`/`maxWidthDiskCache` capped at the bubble's real pixel size, plus a placeholder tile so the bubble holds its shape while loading |
 | A received video shows a blank tile until it is opened | (Fixed) There was nothing to show without initialising a network `VideoPlayerController` purely to obtain a first frame | The sender already generates a preview frame for its own upload bubble; it is now uploaded next to the video (`chats/{room}/{id}_thumb.jpg`) and stored as `thumbUrl`, so the receiver paints the frame immediately. Videos sent before this fall back to the old tile |
@@ -2176,7 +2180,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 419 tests, ~55 seconds
+flutter test                        # 421 tests, ~55 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
