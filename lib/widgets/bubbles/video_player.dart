@@ -60,7 +60,7 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Saved to Download/${MediaStoreService.folderName}'),
         duration: const Duration(seconds: 2)));
-      await OpenFile.open(staged);
+      await OpenFilex.open(staged);
     } catch (e, st) {
       LogService.e('VideoPlayer', 'open external failed — ${widget.fileName} err=$e\n$st');
     } finally {

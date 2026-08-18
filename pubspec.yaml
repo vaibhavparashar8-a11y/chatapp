@@ -37,7 +37,7 @@ dependencies:
   permission_handler: ^11.3.0
   path: ^1.9.0
   uuid: ^4.3.3
-  open_file: ^3.3.2
+  open_filex: ^4.5.0
   dio: ^5.4.1
   path_provider: ^2.1.2
   shared_preferences: ^2.2.2

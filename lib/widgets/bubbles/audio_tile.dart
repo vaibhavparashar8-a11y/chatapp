@@ -28,7 +28,7 @@ class _AudioMessageTileState extends State<_AudioMessageTile> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Saved to Download/${MediaStoreService.folderName}'),
         duration: const Duration(seconds: 2)));
-      await OpenFile.open(staged);
+      await OpenFilex.open(staged);
     } catch (e) {
       LogService.e('Download', 'audio download failed: $e');
     } finally {

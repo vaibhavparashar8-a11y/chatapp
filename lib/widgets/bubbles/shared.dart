@@ -6,7 +6,7 @@ part of '../message_bubble.dart';
 ///
 /// This is a staging area, never the destination: the user-visible copy is
 /// written by [MediaStoreService.saveToMyTask]. Keeping the temp file lets
-/// `OpenFile` hand a real path to the viewer app afterwards.
+/// `OpenFilex` hand a real path to the viewer app afterwards.
 Future<String> _tempPath(String fileName) async {
   final dir = await getTemporaryDirectory();
   return '${dir.path}/$fileName';
