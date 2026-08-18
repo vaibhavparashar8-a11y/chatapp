@@ -121,6 +121,7 @@ class ChatController extends ChangeNotifier {
   Message? _replyingTo;
   bool _showAttachMenu = false;
   bool _showEmojiPanel = false;
+  bool _emojiPanelOnGifTab = false;
 
   // Read-receipt guard: ID of the latest message from the other person that we
   // have already scheduled a markRead for. Only updated when !_markReadPaused
@@ -158,6 +159,9 @@ class ChatController extends ChangeNotifier {
   Message? get replyingTo => _replyingTo;
   bool get showAttachMenu => _showAttachMenu;
   bool get showEmojiPanel => _showEmojiPanel;
+
+  /// Which tab the emoji panel should open on.
+  bool get emojiPanelOnGifTab => _emojiPanelOnGifTab;
 
   Set<String> get pendingIds =>
       _pendingEntries.where((e) => !e.failed).map((e) => e.message.id).toSet();
@@ -711,8 +715,12 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setShowEmojiPanel(bool show) {
+  /// Opens the emoji/GIF panel. [onGifTab] starts it on the GIF side, which is
+  /// what the attach sheet's GIF tile wants — landing on emoji and making the
+  /// user hunt for the GIF tab is an extra tap for a choice already made.
+  void setShowEmojiPanel(bool show, {bool onGifTab = false}) {
     _showEmojiPanel = show;
+    _emojiPanelOnGifTab = show && onGifTab;
     if (show) _showAttachMenu = false;
     notifyListeners();
   }

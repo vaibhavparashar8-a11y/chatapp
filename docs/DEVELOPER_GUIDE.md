@@ -872,7 +872,7 @@ if (ChatController.canModify(msg)) {
 | `screens/chat/load_more_indicator.dart` | Scroll-triggered history loader |
 | `screens/chat/aurora_background.dart` | Static aurora backdrop, gradient `_SendButton`, `_DateSeparator` chip |
 | `screens/chat/attach_option.dart` | Attach sheet: the rounded card (`_AttachSheet`) and its gradient tiles (`_AttachOption`) |
-| `screens/chat/emoji_panel.dart` | Emoji grid + GIF picker behind two tabs (`_EmojiGifPanel`, `_GifPicker`) |
+| `screens/chat/emoji_panel.dart` | Emoji grid + GIF picker behind two tabs (`_EmojiGifPanel`, `_GifPicker`). `initialTab` opens it straight on GIF, so the attach sheet's GIF tile does not land the user on emoji |
 | `screens/chat/composer_input.dart` | `extension ChatComposerInput` — emoji insert/backspace, GIF send, keyboard sticker handling |
 | `screens/chat/typing_indicator.dart` | Three-dot animated bubble |
 | `screens/chat/floating_video_overlay.dart` | Minimized call pip overlay |
@@ -1868,6 +1868,9 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Chat frozen (no new messages / presence / read receipts) until app restart — often after a bulk server-side deletion | (Fixed) A Firestore listener error was fatal: the room stream did `_roomBcast.addError(...)`, which cancelled the presence/typing/readAt listeners (they have no `onError`), and the message stream had no `onError` either — so any listener drop wedged the chat permanently | Both streams now **self-heal**: `ChatService._listenRoom()` logs and re-subscribes instead of forwarding the error downstream; `ChatController._subscribeMessages` re-subscribes after `messageResubscribeDelay` (2s, injectable). No restart needed |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
 | No way to send emoji, GIFs or Play Store stickers | (Added) The composer had a text field and an attach menu, nothing else. Flutter text fields also reject keyboard-inserted images unless configured, so Gboard greyed out its GIF/sticker keys | Emoji/GIF panel behind a smiley button (`_EmojiGifPanel`), and `contentInsertionConfiguration` on the message field so keyboard stickers/GIFs insert and send. GIF search needs `giphy_api_key` in Remote Config |
+| The message field is cramped; the composer icons eat the width | (Fixed) Two default `IconButton`s sat outside the pill, each reserving a 48×48 tap target plus its own padding | The attach button is hand-sized (40×40, zero padding) and the emoji button moved **inside** the pill as a `prefixIcon`, freeing a whole slot for text |
+| Tapping GIF in the attach sheet lands on the emoji tab | (Fixed) The tile only opened the panel, which always started at index 0 | `setShowEmojiPanel(true, onGifTab: true)` → `_EmojiGifPanel.initialTab`. The panel is keyed on the tab so re-opening on the other side rebuilds it — `TabController.initialIndex` only applies at construction |
+| The GIF panel wastes vertical space | (Fixed) Default tab-bar height and search-field padding, in a panel that replaces the keyboard | Tab bar 38→30 px with zero label padding, tighter search field and grid insets |
 | Attach sheet tiles are enormous / the sheet overflows the composer | (Fixed) `GridView.count` with `childAspectRatio` derives tile **height** from screen width, so a wide layout produced 226 px tiles and a RenderFlex overflow | `SliverGridDelegateWithMaxCrossAxisExtent` with an explicit `mainAxisExtent` pins row height independently of width. Tile labels are `maxLines: 1` |
 | A downloaded photo/video/file cannot be found anywhere on the phone | (Fixed) Downloads went to `getExternalStorageDirectory()` = `Android/data/com.example.chatapp/files/`, which modern Android hides from file managers and wipes on uninstall. Only images/videos escaped it, via `gal`, into the Gallery | Everything is exported to **Download/MyTask** through MediaStore (`MediaStoreService` → `MyTaskStorage.java`). The cache copy is kept only so `OpenFile` has a real path to open. A failed export now says "Download failed" instead of silently reporting success |
 | Grabbing the pip's resize corner opens the full-screen call instead | (Fixed) The corner was only a painted hint; the parent `GestureDetector` hit-tested the whole overlay, so a touch there that didn't travel far enough to win the pan arena was delivered as a tap → restore | The handle is its own opaque `GestureDetector` owning the resize pan, with an empty `onTap` that absorbs the touch, and is 36×36 instead of 24×24. The parent additionally refuses to restore when the gesture moved the overlay (`_moved`) |
@@ -2162,7 +2165,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 407 tests, ~50 seconds
+flutter test                        # 408 tests, ~50 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
