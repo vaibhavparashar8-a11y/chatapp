@@ -953,6 +953,8 @@ literals in each file, which is how three files ended up with three different
 | Shape | `bubbleRadius` 20, `bubbleTailRadius` 6, `panelRadius`, `pillRadius` |
 | Motion | `fast` 140ms, `base` 240ms, `slow` 380ms, `enter` (decelerate), `press` (slight overshoot) |
 
+`lib/theme/app_palette.dart` — the todo and calendar half — **derives its values from `ChatTheme`** rather than repeating them, with `test/theme/app_palette_test.dart` asserting they stay equal. It also adds `kAppCardGradient` / `kAppCardShadow` for task cards. The todo screen deliberately stops short of the aurora and bubble glow: it is the app the other person might glance at, so it keeps the shared palette and elevation without looking like anything but a task list.
+
 Two deliberate constraints:
 
 - **The aurora backdrop is static.** `_AuroraBackground` layers three
@@ -1870,6 +1872,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Chat frozen (no new messages / presence / read receipts) until app restart — often after a bulk server-side deletion | (Fixed) A Firestore listener error was fatal: the room stream did `_roomBcast.addError(...)`, which cancelled the presence/typing/readAt listeners (they have no `onError`), and the message stream had no `onError` either — so any listener drop wedged the chat permanently | Both streams now **self-heal**: `ChatService._listenRoom()` logs and re-subscribes instead of forwarding the error downstream; `ChatController._subscribeMessages` re-subscribes after `messageResubscribeDelay` (2s, injectable). No restart needed |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
 | No way to send emoji, GIFs or Play Store stickers | (Added) The composer had a text field and an attach menu, nothing else. Flutter text fields also reject keyboard-inserted images unless configured, so Gboard greyed out its GIF/sticker keys | Emoji/GIF panel behind a smiley button (`_EmojiGifPanel`), and `contentInsertionConfiguration` on the message field so keyboard stickers/GIFs insert and send. GIF search needs `giphy_api_key` in Remote Config |
+| The todo side looks like a different app from the chat | (Fixed) `app_palette.dart` held a second set of hex literals that had drifted from the chat's — the todo card was `#1A1040` against the chat panel's `#141024`, so switching halves shifted the background a shade | `app_palette.dart` now derives from `ChatTheme`, and a test asserts they stay equal. Task cards gained the same lit-from-one-direction gradient + shadow as the bubbles; the app bar and add button match the chat's |
 | Received photos take seconds to appear, every time you scroll back | (Fixed) The bubble used `Image.network`, which has **no disk cache** — so scrolling back re-fetched the whole file from Storage — and decoded at full resolution: a 12 MP photo decoded into memory to be drawn 220 px wide | `CachedNetworkImage` with `memCacheWidth`/`maxWidthDiskCache` capped at the bubble's real pixel size, plus a placeholder tile so the bubble holds its shape while loading |
 | A received video shows a blank tile until it is opened | (Fixed) There was nothing to show without initialising a network `VideoPlayerController` purely to obtain a first frame | The sender already generates a preview frame for its own upload bubble; it is now uploaded next to the video (`chats/{room}/{id}_thumb.jpg`) and stored as `thumbUrl`, so the receiver paints the frame immediately. Videos sent before this fall back to the old tile |
 | The message field is cramped; the composer icons eat the width | (Fixed) Two default `IconButton`s sat outside the pill, each reserving a 48×48 tap target plus its own padding | The attach button is hand-sized (40×40, zero padding) and the emoji button moved **inside** the pill as a `prefixIcon`, freeing a whole slot for text |
@@ -2129,6 +2132,9 @@ test/
 │   │                                       testMode seam
 │   └── giphy_service_test.dart          ← isConfigured gating, no request without a key,
 │                                           parseResponse variant preference + lenience
+├── theme/
+│   └── app_palette_test.dart        ← todo/calendar palette stays derived from
+│                                       ChatTheme (no second set of hex literals)
 ├── widgets/
 │   └── message_bubble_test.dart         ← tick states, pending/failed rendering,
 │                                           tappable link spans, uploading media
@@ -2170,7 +2176,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 416 tests, ~55 seconds
+flutter test                        # 419 tests, ~55 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
