@@ -18,6 +18,7 @@ This guide covers every module with code examples, data flow diagrams, and runna
 9. [Testing Guide](#9-testing-guide)
 10. [Build & Release](#10-build--release)
 11. [Cloud Functions](#11-cloud-functions)
+12. [Planned / Deferred Work](#12-planned--deferred-work)
 
 ---
 
@@ -2551,3 +2552,61 @@ Notes:
   (`"20"`) — ranges like `">=20"` fail deploy
 - The deploy automatically grants the App Engine service account access to
   the secret
+
+---
+
+## 12. Planned / Deferred Work
+
+Features discussed and specced but **not yet built**. Captured here so the
+design isn't lost; each is a green-field branch when picked up.
+
+### 12.1 WhatsApp call log (read WhatsApp call notifications)
+
+**Status:** deferred, not started. **Intended use:** parental monitoring on a
+device the owner controls — this is the only context it's appropriate for.
+WhatsApp calls never reach the system dialer call log (which `CallLogService`
+reads), so the *only* way to capture them is to read WhatsApp's notifications.
+
+**Why it's more than the reminder permission we already hold.** The reminders
+use `POST_NOTIFICATIONS` — permission to *show our own* notifications. Reading
+WhatsApp's needs `BIND_NOTIFICATION_LISTENER_SERVICE` ("Notification access"),
+a separate special grant with **no popup**: the user must enable it by hand in
+Settings → Notification access, and it stays listed there (a visible dent in
+the app's discreteness).
+
+**Design (mirror `CallLogService`: capture natively, queue locally, flush to
+Firestore when the app/worker next runs — the listener fires even when the
+Flutter engine is dead):**
+
+- **Native (Java):**
+  - `WhatsAppNotificationListener.java` extends `NotificationListenerService`.
+    Filter `com.whatsapp` / `com.whatsapp.w4b`; keep only call notifications
+    (`category == CATEGORY_CALL` + a text check); extract title (contact name
+    as saved on that phone), text (voice/video, incoming/missed), post time.
+  - Append each event to a local queue (SharedPreferences/JSON) immediately so
+    nothing is lost to a battery-kill.
+  - `AndroidManifest.xml`: register the service with
+    `BIND_NOTIFICATION_LISTENER_SERVICE` + the listener intent-filter.
+  - `MainActivity.java`: add `isNotificationAccessGranted` /
+    `openNotificationAccessSettings` to the existing MethodChannel.
+- **Dart:**
+  - `WhatsAppCallService` (static, `testMode` seam, like `CallLogService`) —
+    drains the native queue, dedupes, writes to `app_wa_call_log_{role}`.
+    Flushed on app resume **and** from `background_worker.dart` (15-min), so it
+    works while MyTask is mostly closed.
+  - Pure `parseWhatsAppNotification()` + dedup-window helper — the testable
+    core (WhatsApp re-posts the same ringing notification several times; one
+    call must log once). This is where the unit tests live.
+  - One-time onboarding: check the permission, deep-link to Notification-access
+    settings.
+  - `calls_screen.dart`: show WhatsApp calls in the Calls tab with a marked icon.
+
+**Hard limits (accept before building):** no phone number and no answered-call
+duration — WhatsApp doesn't put them in the notification (name + voice/video +
+incoming/missed + time only). Notification text is localized, so match on
+`CATEGORY_CALL` rather than English strings. OEM battery managers may silently
+revoke the access — same fragility as reminders; add it to the
+battery-optimization exemption, but it isn't bulletproof. Messages are out of
+scope: calls only.
+
+**Branch when picked up:** `feat/whatsapp-call-log`.
