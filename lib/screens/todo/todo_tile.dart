@@ -70,7 +70,7 @@ class _TodoTile extends StatelessWidget {
         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         decoration: BoxDecoration(
             color: Colors.red.shade400,
-            borderRadius: BorderRadius.circular(14)),
+            borderRadius: BorderRadius.circular(18)),
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 20),
         child: const Icon(Icons.delete_rounded, color: Colors.white),
@@ -79,24 +79,21 @@ class _TodoTile extends StatelessWidget {
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         decoration: BoxDecoration(
-          color: _kTodoCard,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: const [
-            BoxShadow(
-              color: Colors.black26,
-              blurRadius: 8,
-              offset: Offset(0, 2),
-            ),
-          ],
+          // Same lit-from-one-direction gradient as the chat bubbles: the
+          // cheapest way to stop a list of cards reading as flat rectangles.
+          gradient: kAppCardGradient,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: kAppDivider),
+          boxShadow: kAppCardShadow,
         ),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(18),
           child: IntrinsicHeight(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 // Left accent stripe
-                Container(width: 4, color: accent),
+                Container(width: 5, color: accent),
                 // Card content
                 Expanded(
                   child: Column(

@@ -439,6 +439,10 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
               end: Alignment.bottomRight,
               colors: [_kTodoAppBar1, _kTodoAppBar2],
             ),
+            boxShadow: [
+              BoxShadow(
+                  color: Color(0x59000000), blurRadius: 14, offset: Offset(0, 3)),
+            ],
           ),
         ),
         actions: [

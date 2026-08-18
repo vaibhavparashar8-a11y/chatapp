@@ -174,13 +174,28 @@ class _TaskInputBar extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 10),
-          FloatingActionButton(
-            onPressed: onSubmit,
-            backgroundColor: _kTodoAccentDeep,
-            foregroundColor: Colors.white,
-            elevation: 2,
-            mini: true,
-            child: const Icon(Icons.add),
+          // Gradient + glow, the same treatment as the chat send button, so
+          // the two halves of the app feel like one product.
+          DecoratedBox(
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [kAppAccentLight, kAppAccent],
+              ),
+              boxShadow: [
+                BoxShadow(color: Color(0x807C3AED), blurRadius: 14),
+              ],
+            ),
+            child: FloatingActionButton(
+              onPressed: onSubmit,
+              backgroundColor: Colors.transparent,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              mini: true,
+              child: const Icon(Icons.add_rounded),
+            ),
           ),
         ],
       ),
