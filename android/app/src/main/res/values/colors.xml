@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#1B5E20</color>
+    <!-- The adaptive icon's background is now a gradient drawable
+         (res/drawable-*/ic_launcher_background.png), generated from
+         assets/icon_background.png by flutter_launcher_icons.
+
+         The dark green colour that used to live here was the background behind
+         a blue foreground, so every adaptive launcher drew a blue circle on a
+         green square. Removed rather than left stale: a colour of the same name
+         can also be resolved as @drawable, which would shadow the real one. -->
 </resources>
