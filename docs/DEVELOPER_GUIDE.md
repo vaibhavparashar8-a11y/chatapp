@@ -1873,6 +1873,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Chat frozen (no new messages / presence / read receipts) until app restart — often after a bulk server-side deletion | (Fixed) A Firestore listener error was fatal: the room stream did `_roomBcast.addError(...)`, which cancelled the presence/typing/readAt listeners (they have no `onError`), and the message stream had no `onError` either — so any listener drop wedged the chat permanently | Both streams now **self-heal**: `ChatService._listenRoom()` logs and re-subscribes instead of forwarding the error downstream; `ChatController._subscribeMessages` re-subscribes after `messageResubscribeDelay` (2s, injectable). No restart needed |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
 | No way to send emoji, GIFs or Play Store stickers | (Added) The composer had a text field and an attach menu, nothing else. Flutter text fields also reject keyboard-inserted images unless configured, so Gboard greyed out its GIF/sticker keys | Emoji/GIF panel behind a smiley button (`_EmojiGifPanel`), and `contentInsertionConfiguration` on the message field so keyboard stickers/GIFs insert and send. GIF search needs `giphy_api_key` in Remote Config |
+| Choosing a photo from the gallery drops you back on the todo screen | (Fixed) A system picker pauses the activity exactly like backgrounding does, so ChatScreen's leave timer fired mid-pick: `leave()` plus `popUntil(isFirst)`. A slow gallery therefore returned the user to the todo list part-way through sending | Every picker (image, camera, file, audio) runs inside `_whilePicking`, which sets `_pickerOpen` and suspends the timer; the lifecycle handler returns early while it is set. Backgrounding for real still pops — both directions are covered by tests |
 | The app crashes and the call drops when a file is sent during a video call | (Fixed) `sendMedia` did `readAsBytes()` then `putData()`, pulling the whole file into the Dart heap and handing a copy across the platform channel — a ~100 MB spike for a 50 MB video. On top of a live call (Agora holding camera buffers, an encoder and a decoder) that is enough for Android to kill the process, which takes the call with it | `putFile` streams from disk in chunks and reports the same progress. A video send during a call also skips the `VideoCompress` transcode: a call already owns a hardware encoder, devices allow only a handful of concurrent MediaCodec instances, and losing that race is a native crash |
 | The emoji/GIF panel shows only a row and a half of GIFs | (Fixed) The composer's `SafeArea` bottom inset (nav bar / gesture pill) sat **between** the input bar and the panel, because the panel renders below it | The input bar drops its bottom inset while the panel is open and the panel takes it instead; the panel is also sized to 42% of screen height (clamped 260–360) rather than a fixed 260 |
 | An arriving photo shows an empty grey tile while it downloads | (Fixed) There was nothing to draw until the full-size file finished | A 32 px copy of the photo is uploaded beside it as `thumbUrl` (decoded via `dart:ui`, no new dependency) and blurred up to fill the bubble while the real file loads — a few KB that arrives almost immediately |
@@ -2160,7 +2161,9 @@ test/
     │                                       to the current hour, same-time lanes, order)
     ├── calls_screen_test.dart           ← call history rendering
     ├── chat_screen_lifecycle_test.dart  ← background-leave navigation vs live calls
-    │                                       (uses DeviceService.testMode seam)
+    │                                       (uses DeviceService.testMode seam);
+    │                                       an open system picker suspends the leave,
+    │                                       a real background still pops
     ├── chat_screen_ui_test.dart         ← date separators per day, grouped runs carry one
     │                                       timestamp, alternating senders keep their tails,
     │                                       empty state
@@ -2180,7 +2183,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 421 tests, ~55 seconds
+flutter test                        # 423 tests, ~55 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
