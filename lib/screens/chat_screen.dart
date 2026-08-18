@@ -77,6 +77,11 @@ class _ChatScreenState extends State<ChatScreen>
   // from immediately marking the user offline (fix for issue #11).
   Timer? _leaveTimer;
 
+  /// True while a system picker (gallery/camera/files) is in front of us. The
+  /// activity is paused, but the user has not left the chat — see
+  /// [_whilePicking].
+  bool _pickerOpen = false;
+
   // Business logic lives entirely in the controller
   late final ChatController _ctrl;
 
@@ -124,39 +129,61 @@ class _ChatScreenState extends State<ChatScreen>
     if (state == AppLifecycleState.resumed) {
       _leaveTimer?.cancel();
       _ctrl.enter();
-    } else if (state == AppLifecycleState.inactive) {
+      return;
+    }
+    // A system picker (gallery, camera, files) pauses this activity exactly
+    // like backgrounding does — so the leave timer used to fire while the user
+    // was choosing a photo, and they came back to the todo list instead of the
+    // chat they were writing in. Picking media IS using the chat.
+    if (_pickerOpen) {
+      _leaveTimer?.cancel();
+      _leaveTimer = null;
+      return;
+    }
+    if (state == AppLifecycleState.inactive) {
       // Some Android devices only fire `inactive` for incoming call overlays
       // and never follow up with `paused`/`hidden`. Start the leave timer only
       // if one isn't already running (??= guards against restarting it on the
       // normal resumed→inactive→paused sequence where `hidden`/`paused` also fire).
-      _leaveTimer ??= Timer(const Duration(seconds: 8), () {
-        _leaveTimer = null;
-        _ctrl.leave();
-        // CallService.inCall covers full-screen calls; callActiveNotifier
-        // only covers minimized ones. Popping during a full-screen call
-        // disposes CallScreen and kills the Agora engine.
-        if (mounted && !callActiveNotifier.value && !CallService.inCall) {
-          Navigator.of(context).popUntil((route) => route.isFirst);
-        }
-      });
+      _leaveTimer ??= Timer(const Duration(seconds: 8), _leaveAndPop);
     } else if (state == AppLifecycleState.hidden ||
                state == AppLifecycleState.paused) {
       // `hidden` fires on newer Android when going to recent apps and may
       // never proceed to `paused` — handle both so the timer always starts.
       // Timer restarts on each event, so the 5s delay is from the last one.
       _leaveTimer?.cancel();
-      _leaveTimer = Timer(const Duration(seconds: 5), () {
-        _ctrl.leave();
-        // Skip navigation while any call is live: minimized (notifier) or
-        // full-screen (CallService.inCall) — popping would dispose CallScreen
-        // and release the Agora engine mid-call.
-        if (mounted && !callActiveNotifier.value && !CallService.inCall) {
-          Navigator.of(context).popUntil((route) => route.isFirst);
-        }
-      });
+      _leaveTimer = Timer(const Duration(seconds: 5), _leaveAndPop);
     } else if (state == AppLifecycleState.detached) {
       _leaveTimer?.cancel();
       _ctrl.leave();
+    }
+  }
+
+  /// Mark this device away and drop back to the todo list.
+  void _leaveAndPop() {
+    _leaveTimer = null;
+    _ctrl.leave();
+    // Skip the navigation while any call is live: minimized (notifier) or
+    // full-screen (CallService.inCall) — popping would dispose CallScreen and
+    // release the Agora engine mid-call.
+    if (mounted && !callActiveNotifier.value && !CallService.inCall) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    }
+  }
+
+  /// Runs a system picker with the background-leave timer suspended.
+  ///
+  /// Everything that opens another activity — image picker, camera, file
+  /// picker — must go through this, or a slow gallery drops the user back on
+  /// the todo screen mid-send.
+  Future<void> _whilePicking(Future<void> Function() action) async {
+    _pickerOpen = true;
+    _leaveTimer?.cancel();
+    _leaveTimer = null;
+    try {
+      await action();
+    } finally {
+      _pickerOpen = false;
     }
   }
 
@@ -257,60 +284,69 @@ class _ChatScreenState extends State<ChatScreen>
 
   Future<void> _sendImage(ImageSource source) async {
     _ctrl.setShowAttachMenu(false);
-    if (source == ImageSource.camera) {
-      // Camera always single shot
-      final picked = await _picker.pickImage(source: source, imageQuality: 70);
-      if (picked == null) return;
-      await _ctrl.sendMedia(File(picked.path), MessageType.image);
-    } else {
-      // Gallery — allow multi-select
-      final picked = await _picker.pickMultiImage(imageQuality: 70);
-      if (picked.isEmpty) return;
-      for (final xf in picked) {
-        await _ctrl.sendMedia(File(xf.path), MessageType.image);
+    // The picked files are sent AFTER the picker closes, deliberately: only
+    // the picker itself suspends the leave timer, so a long upload still
+    // behaves like normal chat use.
+    final List<File> files = [];
+    await _whilePicking(() async {
+      if (source == ImageSource.camera) {
+        // Camera always single shot
+        final picked = await _picker.pickImage(source: source, imageQuality: 70);
+        if (picked != null) files.add(File(picked.path));
+      } else {
+        // Gallery — allow multi-select
+        final picked = await _picker.pickMultiImage(imageQuality: 70);
+        files.addAll(picked.map((xf) => File(xf.path)));
       }
+    });
+    for (final file in files) {
+      await _ctrl.sendMedia(file, MessageType.image);
     }
   }
 
   Future<void> _recordVideo() async {
     _ctrl.setShowAttachMenu(false);
-    final picked = await _picker.pickVideo(source: ImageSource.camera);
-    if (picked == null) return;
-    await _ctrl.sendMedia(File(picked.path), MessageType.video);
+    File? file;
+    await _whilePicking(() async {
+      final picked = await _picker.pickVideo(source: ImageSource.camera);
+      if (picked != null) file = File(picked.path);
+    });
+    final recorded = file;
+    if (recorded == null) return;
+    await _ctrl.sendMedia(recorded, MessageType.video);
   }
 
   Future<void> _sendVideo() async {
     _ctrl.setShowAttachMenu(false);
-    final result = await FilePicker.platform.pickFiles(
-      allowMultiple: true,
-      type: FileType.video,
-    );
-    if (result == null || result.files.isEmpty) return;
-    for (final f in result.files) {
-      if (f.path == null) continue;
+    final picked = await _pickFiles(FileType.video);
+    for (final f in picked) {
       await _ctrl.sendMedia(File(f.path!), MessageType.video, fileName: f.name);
     }
   }
 
+  /// Opens the system file picker with the leave timer suspended, and returns
+  /// only the entries that actually have a path.
+  Future<List<PlatformFile>> _pickFiles(FileType type) async {
+    FilePickerResult? result;
+    await _whilePicking(() async {
+      result = await FilePicker.platform
+          .pickFiles(allowMultiple: true, type: type);
+    });
+    return result?.files.where((f) => f.path != null).toList() ?? const [];
+  }
+
   Future<void> _sendAudio() async {
     _ctrl.setShowAttachMenu(false);
-    final result = await FilePicker.platform.pickFiles(
-      allowMultiple: true,
-      type: FileType.audio,
-    );
-    if (result == null || result.files.isEmpty) return;
-    for (final f in result.files) {
-      if (f.path == null) continue;
+    final picked = await _pickFiles(FileType.audio);
+    for (final f in picked) {
       await _ctrl.sendMedia(File(f.path!), MessageType.audio, fileName: f.name);
     }
   }
 
   Future<void> _sendFile() async {
     _ctrl.setShowAttachMenu(false);
-    final result = await FilePicker.platform.pickFiles(allowMultiple: true, type: FileType.any);
-    if (result == null || result.files.isEmpty) return;
-    for (final f in result.files) {
-      if (f.path == null) continue;
+    final picked = await _pickFiles(FileType.any);
+    for (final f in picked) {
       final ext = f.extension?.toLowerCase() ?? '';
       var type = MessageType.file;
       if (['jpg', 'jpeg', 'png', 'webp'].contains(ext)) type = MessageType.image;

@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,6 +17,8 @@ import '../helpers/fake_chat_repository.dart';
 /// off the stack, disposed it, and released the Agora engine — dropping the
 /// call. The old guard only checked callActiveNotifier, which is true only
 /// for MINIMIZED calls. CallService.inCall covers the full call lifetime.
+final _originalFilePicker = FilePicker.platform;
+
 void main() {
   late FakeChatRepository repo;
 
@@ -145,4 +150,81 @@ void main() {
     goForeground(tester);
     await tester.pump(const Duration(seconds: 6));
   });
+
+  // A system picker pauses this activity exactly like backgrounding does. The
+  // leave timer used to fire anyway, so a slow gallery dropped the user back
+  // on the todo list while they were part-way through sending a photo.
+  testWidgets('a slow picker does NOT pop back to the todo screen',
+      (tester) async {
+    // The gate stands in for the gallery still being open: the pick stays
+    // pending while the test backgrounds the app for longer than the timer.
+    final gate = Completer<FilePickerResult?>();
+    FilePicker.platform = _GatedFakeFilePicker(gate.future);
+    addTearDown(() => FilePicker.platform = _originalFilePicker);
+
+    await pumpChatOverHome(tester);
+    await tester.tap(find.byIcon(Icons.add_circle_outline));
+    await tester.pump();
+    await tester.tap(find.text('Document'));
+    await tester.pump();
+
+    goBackground(tester);
+    await tester.pump(const Duration(seconds: 7)); // past the 5s leave timer
+    goForeground(tester);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ChatScreen), findsOneWidget,
+        reason: 'picking a file IS using the chat — it must not navigate away');
+
+    gate.complete(null); // user cancels the picker
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('backgrounding still pops once the picker has closed',
+      (tester) async {
+    FilePicker.platform = _GatedFakeFilePicker(Future.value(null));
+    addTearDown(() => FilePicker.platform = _originalFilePicker);
+
+    await pumpChatOverHome(tester);
+    await tester.tap(find.byIcon(Icons.add_circle_outline));
+    await tester.pump();
+    await tester.tap(find.text('Document'));
+    await tester.pumpAndSettle();
+
+    // The picker is done, so a real background behaves normally again.
+    goBackground(tester);
+    await tester.pump(const Duration(seconds: 6));
+    goForeground(tester);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ChatScreen), findsNothing);
+  });
+}
+
+/// Stands in for the system file picker: runs [onOpen] (which the tests use to
+/// simulate the activity being paused behind the picker) and returns null, as
+/// a cancelled pick does.
+class _GatedFakeFilePicker extends FilePicker {
+  _GatedFakeFilePicker(this.result);
+
+  /// Completes when the "picker" closes.
+  final Future<FilePickerResult?> result;
+
+  @override
+  Future<FilePickerResult?> pickFiles({
+    String? dialogTitle,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    Function(FilePickerStatus)? onFileLoading,
+    bool allowCompression = true,
+    int compressionQuality = 30,
+    bool allowMultiple = false,
+    bool withData = false,
+    bool withReadStream = false,
+    bool lockParentWindow = false,
+    bool readSequential = false,
+  }) async {
+    return result;
+  }
 }
