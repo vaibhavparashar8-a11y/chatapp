@@ -7,10 +7,15 @@ class _InlineVideoPlayer extends StatefulWidget {
   final String fileName;
   final String messageId;
 
+  /// Poster frame uploaded alongside the video. Null for videos sent before
+  /// this existed — those fall back to the neutral tile.
+  final String? thumbUrl;
+
   const _InlineVideoPlayer({
     required this.url,
     required this.fileName,
     required this.messageId,
+    this.thumbUrl,
   });
 
   @override
@@ -119,7 +124,26 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
                                   style: TextStyle(color: Colors.white30, fontSize: 10)),
                             ],
                           )
-                        : const Icon(Icons.videocam, color: Colors.white30, size: 48),
+                        // The sender's own preview frame, so an arriving video
+                        // shows what it is immediately. Initialising a network
+                        // VideoPlayerController just to get a first frame is
+                        // what made these sit blank for seconds.
+                        : widget.thumbUrl != null
+                            ? CachedNetworkImage(
+                                imageUrl: widget.thumbUrl!,
+                                width: 220,
+                                height: 160,
+                                fit: BoxFit.cover,
+                                fadeInDuration: ChatTheme.fast,
+                                placeholder: (_, __) =>
+                                    const _MediaPlaceholder(width: 220, height: 160),
+                                errorWidget: (_, __, ___) => const Icon(
+                                    Icons.videocam,
+                                    color: Colors.white30,
+                                    size: 48),
+                              )
+                            : const Icon(Icons.videocam,
+                                color: Colors.white30, size: 48),
                   ),
                   if (!_error)
                     Container(

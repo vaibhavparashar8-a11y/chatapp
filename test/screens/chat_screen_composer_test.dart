@@ -147,16 +147,35 @@ void main() {
       expect(find.text('Camera'), findsOneWidget);
     });
 
-    testWidgets('the GIF attach tile opens the panel on its GIF side',
+    testWidgets('the GIF attach tile opens the panel already on the GIF tab',
         (tester) async {
+      giphyApiKey = 'test-key';
+      GiphyService.testMode = true;
+      GiphyService.searchResults = const [];
+
       await pumpChat(tester);
       await openAttach(tester);
-
       await tester.tap(find.text('GIF'));
-      await tester.pump();
+      await tester.pumpAndSettle();
 
       expect(find.text('EMOJI'), findsOneWidget); // panel is open
       expect(find.text('Camera'), findsNothing);  // attach sheet closed
+      // Landing on the emoji side would mean a second tap for a choice the
+      // user already made: the GIF search box must be on screen right away.
+      expect(find.text('Search GIFs'), findsOneWidget);
+    });
+
+    testWidgets('the composer emoji button still opens on the emoji tab',
+        (tester) async {
+      giphyApiKey = 'test-key';
+      GiphyService.testMode = true;
+
+      await pumpChat(tester);
+      await openEmoji(tester);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Search GIFs'), findsNothing);
+      expect(find.text('😀'), findsWidgets);
     });
   });
 

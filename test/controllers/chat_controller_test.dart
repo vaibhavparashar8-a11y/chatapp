@@ -145,6 +145,23 @@ void main() {
       repo.close();
     });
 
+    // A received video used to sit blank while a network VideoPlayerController
+    // spun up just to produce a first frame. The sender's own preview frame is
+    // uploaded alongside it instead.
+    test('a photo is sent without a thumbnail', () async {
+      final repo = FakeChatRepository();
+      final ctrl = ChatController(repo);
+      await ctrl.init();
+
+      await ctrl.sendMedia(File('/pics/cat.jpg'), MessageType.image,
+          fileName: 'cat.jpg');
+      await Future.delayed(Duration.zero);
+
+      expect(repo.sentThumbnails, [null]);
+      ctrl.dispose();
+      repo.close();
+    });
+
     test('the optimistic bubble is replaced by the confirmed message',
         () async {
       final repo = FakeChatRepository();

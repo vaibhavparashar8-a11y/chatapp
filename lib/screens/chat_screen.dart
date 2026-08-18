@@ -738,19 +738,36 @@ class _ChatScreenState extends State<ChatScreen>
             icon: Icons.gif_box_rounded,
             label: 'GIF',
             color: const Color(0xFF06B6D4),
-            onTap: () => _ctrl.setShowEmojiPanel(true)),
+            onTap: () => _toggleEmojiPanel(onGifTab: true)),
       ],
     );
   }
 
   Widget _buildEmojiPanel() {
+    final onGif = _ctrl.emojiPanelOnGifTab;
     return _EmojiGifPanel(
+      // Keyed on the tab so re-opening on the other side rebuilds the panel:
+      // TabController.initialIndex only applies when the controller is created.
+      key: ValueKey(onGif),
+      initialTab: onGif ? 1 : 0,
       onEmoji: _insertEmoji,
       onGif: _sendGif,
       onBackspace: _backspace,
     );
   }
 
+  /// Emoji button in the composer. Hides the system keyboard when opening so
+  /// the panel isn't stacked on top of it; closing hands focus back, which is
+  /// what the keyboard icon then means.
+  void _toggleEmojiPanel({bool onGifTab = false}) {
+    final opening = !_ctrl.showEmojiPanel || (onGifTab && !_ctrl.emojiPanelOnGifTab);
+    if (opening) {
+      FocusScope.of(context).unfocus();
+    } else {
+      _inputFocus.requestFocus();
+    }
+    _ctrl.setShowEmojiPanel(opening, onGifTab: onGifTab);
+  }
   Widget _buildInputBar() {
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -761,35 +778,23 @@ class _ChatScreenState extends State<ChatScreen>
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(6, 8, 8, 8),
+          padding: const EdgeInsets.fromLTRB(4, 8, 8, 8),
           child: Row(children: [
+            // Compact by hand: a default IconButton reserves a 48x48 tap target
+            // plus its own padding, and two of those side by side ate most of
+            // the composer width. The emoji button moved inside the text pill
+            // (below) so only this one sits outside it.
             IconButton(
               icon: Icon(
                 _ctrl.showAttachMenu ? Icons.close : Icons.add_circle_outline,
-                color: const Color(0xFFA78BFA),
+                color: ChatTheme.accent,
+                size: 26,
               ),
               tooltip: 'Attach',
+              padding: EdgeInsets.zero,
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints.tightFor(width: 40, height: 40),
               onPressed: () => _ctrl.setShowAttachMenu(!_ctrl.showAttachMenu),
-            ),
-            IconButton(
-              icon: Icon(
-                _ctrl.showEmojiPanel
-                    ? Icons.keyboard_alt_outlined
-                    : Icons.emoji_emotions_outlined,
-                color: const Color(0xFFA78BFA),
-              ),
-              tooltip: 'Emoji & GIFs',
-              onPressed: () {
-                final opening = !_ctrl.showEmojiPanel;
-                // Hide the system keyboard so the panel isn't stacked on top of
-                // it; reopening it is what the keyboard icon then does.
-                if (opening) {
-                  FocusScope.of(context).unfocus();
-                } else {
-                  _inputFocus.requestFocus();
-                }
-                _ctrl.setShowEmojiPanel(opening);
-              },
             ),
             Expanded(
               child: TextField(
@@ -819,6 +824,25 @@ class _ChatScreenState extends State<ChatScreen>
                 decoration: InputDecoration(
                   hintText: 'Message',
                   hintStyle: const TextStyle(color: ChatTheme.textFaint),
+                  // Inside the pill, like WhatsApp: it reads as part of the
+                  // field rather than a third competing button.
+                  prefixIcon: IconButton(
+                    icon: Icon(
+                      _ctrl.showEmojiPanel
+                          ? Icons.keyboard_alt_outlined
+                          : Icons.emoji_emotions_outlined,
+                      color: ChatTheme.accent,
+                      size: 22,
+                    ),
+                    tooltip: 'Emoji & GIFs',
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
+                    constraints:
+                        const BoxConstraints.tightFor(width: 38, height: 38),
+                    onPressed: () => _toggleEmojiPanel(),
+                  ),
+                  prefixIconConstraints:
+                      const BoxConstraints(minWidth: 42, minHeight: 38),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(ChatTheme.pillRadius),
                     borderSide: BorderSide.none,
@@ -835,7 +859,7 @@ class _ChatScreenState extends State<ChatScreen>
                   filled: true,
                   fillColor: ChatTheme.surface2,
                   contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                      const EdgeInsets.only(left: 4, right: 14, top: 11, bottom: 11),
                 ),
                 onSubmitted: (_) => _sendText(),
               ),
@@ -849,7 +873,6 @@ class _ChatScreenState extends State<ChatScreen>
       ),
     );
   }
-
   // ── Message action sheet ───────────────────────────────────────────────────
 
   void _showMessageActions(Message msg) {

@@ -39,6 +39,9 @@ class FakeChatRepository implements IChatRepository {
   final List<String> sentMedia = [];
   final List<String?> mediaClientIds = [];
 
+  /// Thumbnail paths passed to [sendMedia] — null for non-video sends.
+  final List<String?> sentThumbnails = [];
+
   /// When set, [sendMedia] parks halfway through (after reporting 50%) until
   /// the test completes it — the window in which the upload bubble is visible.
   Completer<void>? mediaProgressGate;
@@ -104,9 +107,11 @@ class FakeChatRepository implements IChatRepository {
     String? fileName,
     void Function(double)? onProgress,
     String? clientId,
+    File? thumbnail,
   }) async {
     sentMedia.add(fileName ?? file.path);
     mediaClientIds.add(clientId);
+    sentThumbnails.add(thumbnail?.path);
     if (throwOnSend) throw Exception('Upload failed');
     // Reported step by step so a test can observe the bubble's progress ring
     // mid-upload via [mediaProgressGate].
@@ -120,6 +125,7 @@ class FakeChatRepository implements IChatRepository {
         text: '',
         type: type,
         mediaUrl: 'https://example.test/${fileName ?? 'media'}',
+        thumbUrl: thumbnail != null ? 'https://example.test/thumb.jpg' : null,
         fileName: fileName,
         timestamp: DateTime.now(),
         clientId: clientId,

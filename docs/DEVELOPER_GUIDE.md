@@ -279,6 +279,8 @@ rooms/{chatRoomId}/messages/
     │        |"audio"|"file"|"gif"
     ├── text: string                     ← plaintext body (or "" for media)
     ├── mediaUrl: string?                ← Firebase Storage download URL
+    ├── thumbUrl: string?                ← video poster frame (uploaded beside the
+    │                                       video) so the receiver shows it instantly
     ├── fileName: string?                ← original filename for files
     ├── fileSize: number?                ← bytes
     ├── timestamp: Timestamp             ← server-side (FieldValue.serverTimestamp())
@@ -872,7 +874,7 @@ if (ChatController.canModify(msg)) {
 | `screens/chat/load_more_indicator.dart` | Scroll-triggered history loader |
 | `screens/chat/aurora_background.dart` | Static aurora backdrop, gradient `_SendButton`, `_DateSeparator` chip |
 | `screens/chat/attach_option.dart` | Attach sheet: the rounded card (`_AttachSheet`) and its gradient tiles (`_AttachOption`) |
-| `screens/chat/emoji_panel.dart` | Emoji grid + GIF picker behind two tabs (`_EmojiGifPanel`, `_GifPicker`) |
+| `screens/chat/emoji_panel.dart` | Emoji grid + GIF picker behind two tabs (`_EmojiGifPanel`, `_GifPicker`). `initialTab` opens it straight on GIF, so the attach sheet's GIF tile does not land the user on emoji |
 | `screens/chat/composer_input.dart` | `extension ChatComposerInput` — emoji insert/backspace, GIF send, keyboard sticker handling |
 | `screens/chat/typing_indicator.dart` | Three-dot animated bubble |
 | `screens/chat/floating_video_overlay.dart` | Minimized call pip overlay |
@@ -1868,12 +1870,18 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Chat frozen (no new messages / presence / read receipts) until app restart — often after a bulk server-side deletion | (Fixed) A Firestore listener error was fatal: the room stream did `_roomBcast.addError(...)`, which cancelled the presence/typing/readAt listeners (they have no `onError`), and the message stream had no `onError` either — so any listener drop wedged the chat permanently | Both streams now **self-heal**: `ChatService._listenRoom()` logs and re-subscribes instead of forwarding the error downstream; `ChatController._subscribeMessages` re-subscribes after `messageResubscribeDelay` (2s, injectable). No restart needed |
 | Overlay drag snapped back to full screen | `_y < 35% of screen` was always true (overlay starts at y=80) | Restore only on tap or upward flick; corner handle resizes |
 | No way to send emoji, GIFs or Play Store stickers | (Added) The composer had a text field and an attach menu, nothing else. Flutter text fields also reject keyboard-inserted images unless configured, so Gboard greyed out its GIF/sticker keys | Emoji/GIF panel behind a smiley button (`_EmojiGifPanel`), and `contentInsertionConfiguration` on the message field so keyboard stickers/GIFs insert and send. GIF search needs `giphy_api_key` in Remote Config |
+| Received photos take seconds to appear, every time you scroll back | (Fixed) The bubble used `Image.network`, which has **no disk cache** — so scrolling back re-fetched the whole file from Storage — and decoded at full resolution: a 12 MP photo decoded into memory to be drawn 220 px wide | `CachedNetworkImage` with `memCacheWidth`/`maxWidthDiskCache` capped at the bubble's real pixel size, plus a placeholder tile so the bubble holds its shape while loading |
+| A received video shows a blank tile until it is opened | (Fixed) There was nothing to show without initialising a network `VideoPlayerController` purely to obtain a first frame | The sender already generates a preview frame for its own upload bubble; it is now uploaded next to the video (`chats/{room}/{id}_thumb.jpg`) and stored as `thumbUrl`, so the receiver paints the frame immediately. Videos sent before this fall back to the old tile |
+| The message field is cramped; the composer icons eat the width | (Fixed) Two default `IconButton`s sat outside the pill, each reserving a 48×48 tap target plus its own padding | The attach button is hand-sized (40×40, zero padding) and the emoji button moved **inside** the pill as a `prefixIcon`, freeing a whole slot for text |
+| Tapping GIF in the attach sheet lands on the emoji tab | (Fixed) The tile only opened the panel, which always started at index 0 | `setShowEmojiPanel(true, onGifTab: true)` → `_EmojiGifPanel.initialTab`. The panel is keyed on the tab so re-opening on the other side rebuilds it — `TabController.initialIndex` only applies at construction |
+| The GIF panel wastes vertical space | (Fixed) Default tab-bar height and search-field padding, in a panel that replaces the keyboard | Tab bar 38→30 px with zero label padding, tighter search field and grid insets |
 | Attach sheet tiles are enormous / the sheet overflows the composer | (Fixed) `GridView.count` with `childAspectRatio` derives tile **height** from screen width, so a wide layout produced 226 px tiles and a RenderFlex overflow | `SliverGridDelegateWithMaxCrossAxisExtent` with an explicit `mainAxisExtent` pins row height independently of width. Tile labels are `maxLines: 1` |
 | A downloaded photo/video/file cannot be found anywhere on the phone | (Fixed) Downloads went to `getExternalStorageDirectory()` = `Android/data/com.example.chatapp/files/`, which modern Android hides from file managers and wipes on uninstall. Only images/videos escaped it, via `gal`, into the Gallery | Everything is exported to **Download/MyTask** through MediaStore (`MediaStoreService` → `MyTaskStorage.java`). The cache copy is kept only so `OpenFile` has a real path to open. A failed export now says "Download failed" instead of silently reporting success |
 | Grabbing the pip's resize corner opens the full-screen call instead | (Fixed) The corner was only a painted hint; the parent `GestureDetector` hit-tested the whole overlay, so a touch there that didn't travel far enough to win the pan arena was delivered as a tap → restore | The handle is its own opaque `GestureDetector` owning the resize pan, with an empty `onTap` that absorbs the touch, and is 36×36 instead of 24×24. The parent additionally refuses to restore when the gesture moved the overlay (`_moved`) |
 | Overlay "stuck" — won't move when enlarged | (Fixed) Resize mode latched at pan-down; at max size the clamps absorbed every delta, so the drag neither resized nor moved | Resize gesture falls back to move when the size is pinned at its clamp bounds |
 | Overlay resets to small size after returning from CallScreen | (Fixed) Geometry was widget State, wiped by the `_floatingVideoEpoch` key-bump reconstruction | Geometry hoisted to `CallService.overlayX/Y/W/H`; reset only in `joinCall()` (new call) |
 | Hanging up from the mini call bar or floating video overlay leaves no trace in the chat | (Fixed) Those two surfaces only flipped `callActiveNotifier` and called `leaveCall()` — no callEvent was written and `callSignal.status` was never set to `ended`, so the same call cut from the full screen logged an entry while one cut from the minimized UI logged nothing | Both surfaces call the shared `endMinimizedCall()` (`features/call/end_minimized_call.dart`), which mirrors `CallScreen._endCall`: callEvent + status + `leaveCall()` |
+| A call ended from the pip **still** leaves no entry in the chat | (Fixed, second pass) `endMinimizedCall` was wired to both minimized surfaces, but only the **caller** writes the entry — and `CallScreen._minimize` installed an `onCallEnded` that tore down *silently*. So when the callee hung up while the caller sat minimized, neither side logged it | `_minimize` routes the remote hang-up through `endMinimizedCall()` too. Exactly one write still happens per call (the callee's own path no-ops the write), now guarded against two teardowns racing |
 | Foreground-service notification ("MyTask — Running") stays in the tray after the call ends | (Fixed) `stopForeground` was invoked only from `CallScreen`, so ending from the mini bar/overlay — or any dispose path that skipped `_endCall` — never stopped the service | `CallService.leaveCall()` invokes `stopForeground` centrally, alongside the screen-wakelock release it already owned |
 | The caller's chat logs an answered call as "Missed" when the other side hangs up first | (Fixed) `_endCall` picked the wording from `_callConnected`, which the `onUserLeft` handler sets to false immediately before calling it | Wording comes from `callEndEventText()` keyed on `CallService.connectedAt`, which is not cleared when the peer leaves |
 | Mini bar / video overlay appears with no live call | (Fixed) Visibility trusted `callActiveNotifier` alone, which atypical teardowns left stale-true | Gate on `callActiveNotifier && CallService.inCall`; `leaveCall()` centrally resets the notifier |
@@ -2162,7 +2170,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 407 tests, ~50 seconds
+flutter test                        # 416 tests, ~55 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a

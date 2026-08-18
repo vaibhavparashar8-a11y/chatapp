@@ -6,11 +6,18 @@ part of '../chat_screen.dart';
 /// tabs. Emoji are inserted into the message field (never sent on their own);
 /// picking a GIF sends it straight away, like WhatsApp.
 class _EmojiGifPanel extends StatefulWidget {
+  /// 0 = emoji, 1 = GIF. The attach sheet's GIF tile opens straight on 1 —
+  /// landing on emoji and making the user hunt for the GIF tab is an extra tap
+  /// for a choice already made.
+  final int initialTab;
+
   final void Function(String emoji) onEmoji;
   final void Function(GiphyGif gif) onGif;
   final VoidCallback onBackspace;
 
   const _EmojiGifPanel({
+    super.key,
+    this.initialTab = 0,
     required this.onEmoji,
     required this.onGif,
     required this.onBackspace,
@@ -30,7 +37,8 @@ class _EmojiGifPanelState extends State<_EmojiGifPanel>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 2, vsync: this);
+    _tabs = TabController(
+        length: 2, vsync: this, initialIndex: widget.initialTab);
   }
 
   @override
@@ -46,15 +54,22 @@ class _EmojiGifPanelState extends State<_EmojiGifPanel>
       color: ChatTheme.surface1,
       child: Column(
         children: [
+          // Tight chrome: the panel replaces the keyboard, so every pixel
+          // spent on tabs is a pixel of content the user does not see.
           SizedBox(
-            height: 38,
+            height: 30,
             child: TabBar(
               controller: _tabs,
-              indicatorColor: const Color(0xFFA78BFA),
+              indicatorColor: ChatTheme.accent,
+              indicatorWeight: 2,
               labelColor: Colors.white,
               unselectedLabelColor: Colors.white38,
-              labelStyle:
-                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+              labelPadding: EdgeInsets.zero,
+              padding: EdgeInsets.zero,
+              labelStyle: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6),
               tabs: const [Tab(text: 'EMOJI'), Tab(text: 'GIF')],
             ),
           ),
@@ -78,7 +93,7 @@ class _EmojiGifPanelState extends State<_EmojiGifPanel>
       children: [
         Expanded(
           child: GridView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
               maxCrossAxisExtent: 44,
             ),
@@ -218,7 +233,7 @@ class _GifPickerState extends State<_GifPicker> {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
+          padding: const EdgeInsets.fromLTRB(8, 5, 8, 3),
           child: TextField(
             controller: _searchCtrl,
             onChanged: _onQueryChanged,
@@ -228,11 +243,15 @@ class _GifPickerState extends State<_GifPicker> {
               hintText: 'Search GIFs',
               hintStyle: const TextStyle(color: Colors.white30, fontSize: 13),
               prefixIcon:
-                  const Icon(Icons.search, size: 18, color: Colors.white38),
+                  const Icon(Icons.search, size: 17, color: Colors.white38),
+              prefixIconConstraints:
+                  const BoxConstraints(minWidth: 32, minHeight: 30),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
               filled: true,
               fillColor: ChatTheme.surface2,
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(18),
                 borderSide: BorderSide.none,
               ),
             ),
@@ -260,7 +279,7 @@ class _GifPickerState extends State<_GifPicker> {
       );
     }
     return GridView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.fromLTRB(8, 2, 8, 6),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
         mainAxisSpacing: 6,
