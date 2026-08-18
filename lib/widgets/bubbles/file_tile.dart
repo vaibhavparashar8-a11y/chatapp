@@ -42,9 +42,9 @@ class _FileMessageTileState extends State<_FileMessageTile> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Saved to Download/${MediaStoreService.folderName}'),
         duration: const Duration(seconds: 2)));
-      // Open from the staged copy: OpenFile wants a real path, and MediaStore
+      // Open from the staged copy: OpenFilex wants a real path, and MediaStore
       // hands back a content:// URI.
-      await OpenFile.open(staged);
+      await OpenFilex.open(staged);
     } catch (e) {
       LogService.e('Download', 'file download failed: $e');
     } finally {

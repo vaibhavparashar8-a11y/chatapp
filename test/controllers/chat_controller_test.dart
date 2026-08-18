@@ -136,8 +136,13 @@ void main() {
 
       final future = ctrl.sendMedia(File('/pics/cat.jpg'), MessageType.image);
       final id = ctrl.messages.single.id;
-      // Generating the thumbnail is an await, so the upload starts a turn later.
-      await Future.delayed(Duration.zero);
+      // The upload parks at 0.5 on the gate, but only after a variable number
+      // of async hops (the thumbnail-generation attempt and its catch), so poll
+      // to 0.5 rather than assuming a fixed number of microtask turns. Assuming
+      // exactly one is what made this test flaky.
+      for (var i = 0; i < 50 && ctrl.uploadProgressFor(id) != 0.5; i++) {
+        await Future.delayed(const Duration(milliseconds: 1));
+      }
       expect(ctrl.uploadProgressFor(id), 0.5);
       expect(ctrl.uploadProgressFor('some-other-message'), isNull);
 
