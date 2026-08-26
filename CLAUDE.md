@@ -198,3 +198,20 @@ Never type the flutter build command manually. The script:
 - **Agent Orchestration:** Do not fan out agents until I explicitly specify. Always ask if it is necessary to fan out before doing so.
 - **Look Before You Leap:** Before modifying any core files (especially main.dart or structural layers), you must use your grep/view tools to inspect the relevant sections in docs/DEVELOPER_GUIDE.md.
 - **Surgical Changes Only:** Modify exclusively the code required to complete the task or fix the bug. Do not touch adjacent working logic, reformat unrelated blocks, or clean up styling unless explicitly requested.
+## Token Efficiency — apply to every task
+
+Do the work with the fewest tokens that still does it correctly. Correctness
+first; brevity second; never trade one for the other.
+
+- **Read narrowly.** `grep`/`sed -n 'a,bp'` the relevant span instead of
+  dumping whole files. Re-read a file only if it changed.
+- **Don't re-derive.** Facts already established in the session are settled —
+  don't re-open them or re-verify them.
+- **No fan-out by default.** Never spawn agents unless explicitly asked
+  (already in Workflow) — each one re-reads context from scratch.
+- **Batch tool calls.** Independent reads/searches go in one message.
+- **Reply short.** A few lines on what changed and why. No preambles, no
+  restating the request, no summary tables, no option surveys, no narrating
+  what you're about to do next.
+- **Surgical diffs.** Change only what the task needs (already in Workflow) —
+  small diffs are cheap to produce and cheap to review.
