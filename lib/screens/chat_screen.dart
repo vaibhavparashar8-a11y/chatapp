@@ -25,6 +25,8 @@ import '../services/giphy_service.dart';
 import '../services/log_service.dart';
 import '../theme/chat_theme.dart';
 import '../utils/emoji_data.dart';
+import '../utils/media_albums.dart';
+import '../utils/media_types.dart';
 import '../utils/message_grouping.dart';
 import '../utils/time_utils.dart';
 import 'calls_screen.dart';
@@ -287,20 +289,33 @@ class _ChatScreenState extends State<ChatScreen>
     // The picked files are sent AFTER the picker closes, deliberately: only
     // the picker itself suspends the leave timer, so a long upload still
     // behaves like normal chat use.
-    final List<File> files = [];
+    File? file;
     await _whilePicking(() async {
-      if (source == ImageSource.camera) {
-        // Camera always single shot
-        final picked = await _picker.pickImage(source: source, imageQuality: 70);
-        if (picked != null) files.add(File(picked.path));
-      } else {
-        // Gallery — allow multi-select
-        final picked = await _picker.pickMultiImage(imageQuality: 70);
-        files.addAll(picked.map((xf) => File(xf.path)));
-      }
+      // Camera is always a single shot; the gallery goes through
+      // [_sendGalleryMedia], which picks photos and videos together.
+      final picked = await _picker.pickImage(source: source, imageQuality: 70);
+      if (picked != null) file = File(picked.path);
     });
-    for (final file in files) {
-      await _ctrl.sendMedia(file, MessageType.image);
+    final shot = file;
+    if (shot == null) return;
+    await _ctrl.sendMedia(shot, MessageType.image);
+  }
+
+  /// Gallery picker for photos **and** videos in one pass.
+  ///
+  /// There used to be a separate "Gallery" and "Video" tile, so sending a mix
+  /// meant two trips through two different pickers — and the two batches could
+  /// not stack into one album. `pickMultipleMedia` shows both kinds in a single
+  /// multi-select grid; the type of each file is decided from its extension.
+  Future<void> _sendGalleryMedia() async {
+    _ctrl.setShowAttachMenu(false);
+    final List<XFile> picked = [];
+    await _whilePicking(() async {
+      picked.addAll(await _picker.pickMultipleMedia(imageQuality: 70));
+    });
+    for (final xf in picked) {
+      await _ctrl.sendMedia(File(xf.path), mediaTypeForPath(xf.path),
+          fileName: xf.name);
     }
   }
 
@@ -314,14 +329,6 @@ class _ChatScreenState extends State<ChatScreen>
     final recorded = file;
     if (recorded == null) return;
     await _ctrl.sendMedia(recorded, MessageType.video);
-  }
-
-  Future<void> _sendVideo() async {
-    _ctrl.setShowAttachMenu(false);
-    final picked = await _pickFiles(FileType.video);
-    for (final f in picked) {
-      await _ctrl.sendMedia(File(f.path!), MessageType.video, fileName: f.name);
-    }
   }
 
   /// Opens the system file picker with the leave timer suspended, and returns
@@ -347,13 +354,8 @@ class _ChatScreenState extends State<ChatScreen>
     _ctrl.setShowAttachMenu(false);
     final picked = await _pickFiles(FileType.any);
     for (final f in picked) {
-      final ext = f.extension?.toLowerCase() ?? '';
-      var type = MessageType.file;
-      if (['jpg', 'jpeg', 'png', 'webp'].contains(ext)) type = MessageType.image;
-      if (['mp4', 'mkv', 'mov', 'avi'].contains(ext)) type = MessageType.video;
-      if (ext == 'gif') type = MessageType.gif;
-      if (['mp3', 'wav', 'aac', 'm4a', 'ogg'].contains(ext)) type = MessageType.audio;
-      await _ctrl.sendMedia(File(f.path!), type, fileName: f.name);
+      await _ctrl.sendMedia(File(f.path!), mediaTypeForPath(f.name),
+          fileName: f.name);
     }
   }
 
@@ -647,9 +649,15 @@ class _ChatScreenState extends State<ChatScreen>
       }
     }
 
-    // Date chips and bubble runs, decided in one pure pass (see
-    // utils/message_grouping.dart) so the rules stay testable.
-    final layouts = layoutMessages(messages);
+    // Date chips, bubble runs and photo albums, decided in one pure pass (see
+    // utils/media_albums.dart) so the rules stay testable. A row is usually one
+    // message; a batch of photos/videos sent together collapses into a single
+    // stacked row. Anything still uploading or failed is kept out of an album —
+    // it owns a progress ring and a retry action a grid tile cannot show.
+    final rows = buildChatRows(
+      messages,
+      excludeIds: {..._ctrl.pendingIds, ..._ctrl.failedIds},
+    );
 
     // With reverse: true, index 0 = visual bottom (newest).
     // The load-more indicator sits at the very top (last index = oldest end).
@@ -660,19 +668,22 @@ class _ChatScreenState extends State<ChatScreen>
       controller: _scrollController,
       reverse: true,
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-      itemCount: messages.length + typingOffset + loadMoreOffset,
+      itemCount: rows.length + typingOffset + loadMoreOffset,
       itemBuilder: (_, i) {
         // Typing indicator at visual bottom (index 0)
         if (_ctrl.otherTyping && i == 0) return const _TypingIndicator();
 
         // Load-more indicator at visual top (last index)
-        if (_ctrl.hasMoreMessages && i == messages.length + typingOffset) {
+        if (_ctrl.hasMoreMessages && i == rows.length + typingOffset) {
           return _LoadMoreIndicator(loading: _ctrl.loadingMore);
         }
 
-        final index = messages.length - 1 - (i - typingOffset);
-        final msg = messages[index];
-        final layout = layouts[index];
+        final index = rows.length - 1 - (i - typingOffset);
+        final row = rows[index];
+        // The album's newest member carries the bubble chrome — ticks and the
+        // timestamp sit where they always have, at the bottom of the run.
+        final msg = row.anchor;
+        final layout = row.layout;
         final isPending = _ctrl.pendingIds.contains(msg.id);
         final isFailed = _ctrl.failedIds.contains(msg.id);
 
@@ -686,7 +697,13 @@ class _ChatScreenState extends State<ChatScreen>
           isLastInGroup: layout.isLastInGroup,
           onRetry: isFailed ? () => _ctrl.retryMessage(msg.id) : null,
           onReply: msg.type == MessageType.callEvent ? null : _ctrl.setReplyingTo,
-          showReadTime: !isPending && !isFailed && msg.id == lastReadMsgId,
+          album: row.isAlbum ? row.messages : null,
+          onAlbumTileLongPress: row.isAlbum ? _showMessageActions : null,
+          // Any member of the album being the last-read one puts the read time
+          // on the row, since the row is where the timestamp lives.
+          showReadTime: !isPending &&
+              !isFailed &&
+              row.messages.any((m) => m.id == lastReadMsgId),
           onLongPress: isPending || isFailed || msg.type == MessageType.callEvent
               ? null
               : () => _showMessageActions(msg),
@@ -748,21 +765,18 @@ class _ChatScreenState extends State<ChatScreen>
             label: 'Camera',
             color: const Color(0xFF8B5CF6),
             onTap: () => _sendImage(ImageSource.camera)),
+        // One tile for both photos and videos — the system picker shows them
+        // side by side and multi-select spans the two.
         _AttachOption(
-            icon: Icons.photo_library_rounded,
+            icon: Icons.perm_media_rounded,
             label: 'Gallery',
             color: const Color(0xFFEC4899),
-            onTap: () => _sendImage(ImageSource.gallery)),
+            onTap: _sendGalleryMedia),
         _AttachOption(
             icon: Icons.videocam_rounded,
             label: 'Record',
             color: const Color(0xFFEF4444),
             onTap: _recordVideo),
-        _AttachOption(
-            icon: Icons.video_library_rounded,
-            label: 'Video',
-            color: const Color(0xFFF59E0B),
-            onTap: _sendVideo),
         _AttachOption(
             icon: Icons.headphones_rounded,
             label: 'Audio',

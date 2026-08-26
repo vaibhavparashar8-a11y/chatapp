@@ -10,8 +10,11 @@ part of '../message_bubble.dart';
 ///     the full file from Firebase Storage.
 ///   * It decodes at full resolution — a 12 MP phone photo decoded into memory
 ///     to be drawn 220 px wide.
-/// [memCacheWidth]/[maxWidthDiskCache] cap the decode at roughly what is
-/// actually on screen, which is where most of the delay went.
+/// [memCacheWidth] caps the *decode* at roughly what is actually on screen,
+/// which is where most of the delay went. The stored file is deliberately NOT
+/// shrunk (no `maxWidthDiskCache`): keeping the full-size copy in the cache is
+/// what lets the full-screen viewer open instantly instead of fetching it a
+/// second time.
 ///
 /// While the full file downloads it shows [thumbUrl] — a 32 px copy uploaded
 /// beside the photo — blurred up to fill the bubble. A few KB arrives almost
@@ -42,7 +45,6 @@ class _EncryptedImage extends StatelessWidget {
       height: height,
       fit: BoxFit.cover,
       memCacheWidth: targetWidth,
-      maxWidthDiskCache: targetWidth,
       fadeInDuration: ChatTheme.base,
       placeholder: (_, __) => _MediaLoadingTile(
           width: width, height: height, thumbUrl: thumbUrl),
