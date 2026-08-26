@@ -1064,6 +1064,7 @@ bool get _isRead {
 | `call_avatar.dart` | `PulsingAvatar` — expanding rings while a call is connecting; shared by CallScreen and the incoming-call dialog. Pulse stops once connected |
 | `incoming_call_dialog.dart` | Bottom-sheet shown when `callSignal.status == 'ringing'` |
 | `agora_token_builder.dart` | Client-side HMAC-SHA256 token builder (Test Mode fallback) |
+| `video_quality.dart` | Pure adaptive-resolution ladder (low / standard / high) used by the Agora engine |
 
 **Pluggable backend.** `CallService.joinCall()` builds the engine from the
 `call_backend` Remote Config key — `agora` (default) or `webrtc`. Anything else
@@ -1072,6 +1073,31 @@ falls back to Agora, so a typo can never leave calling without a backend
 `CallService.localVideoView()` / `remoteVideoView(uid)` rather than any
 SDK-specific widget, so neither `CallScreen` nor the floating overlay imports an
 SDK. `CallService.activeBackend` records which one the live call is using.
+
+**Adaptive video resolution (Agora).** `video_quality.dart` holds a three-rung
+ladder — `low` 320x180@12 / 200 kbps, `standard` 640x360@15 / 600 kbps, `high`
+1280x720@24 / 2000 kbps. `AgoraCallEngine` starts every video call on
+`standard`, then feeds each `onNetworkQuality` report (Agora emits one roughly
+every 2 s) into `VideoQualityController`, which judges on the *worse* of the
+tx/rx readings: **2** consecutive bad/very-bad/down reports step one rung down
+(~4 s, quick to protect a struggling call), **5** consecutive excellent/good
+reports step one rung up (~10 s before gambling on HD). A `poor` reading holds
+the current rung and clears both streaks. `setVideoEncoderConfiguration` is
+called only on an actual level change, and `degradationPreference` stays
+`maintainFramerate` at every rung. The controller is pure Dart — Agora's
+`QualityType` is passed in as a plain int — so the rules are unit-tested with no
+engine involved.
+
+**Frozen remote video self-heal.** Agora sometimes leaves the remote stream
+frozen on the *other* device even after it reports decoding again: the texture
+the view is bound to stops receiving frames, and leaving the call screen and
+coming back was the only fix (that disposed and rebuilt the view, re-running
+`setupRemoteVideo`). `AgoraCallEngine.remoteVideoView` now wraps its
+`AgoraVideoView` in a `ValueListenableBuilder` over a `_remoteRevision` counter
+and keys the view on it. `onRemoteVideoStateChanged` starts a 3-second timer on
+`frozen`/`failed` that bumps the counter; a `decoding` event — or the remote
+leaving — cancels it, so a hiccup that recovers on its own causes no visible
+re-attach.
 
 **Why WebRTC is viable here:** the app is always exactly two participants, which
 is the one topology needing no media server — the phones connect directly, so
@@ -1854,6 +1880,8 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Both devices get role 'B' | Both reinstalled simultaneously — race condition | Call `DeviceService.resetAssignments()` on one device, relaunch A first then B |
 | APK is 260 MB | Building fat APK (`flutter build apk`) | Use `.\build_release.ps1` — passes `--split-per-abi`; arm64 APK = ~105 MB |
 | Video overlay blank after minimize | Platform view surface goes stale on Android | `_surfaceKey = UniqueKey()` on `AppLifecycleState.resumed` forces AgoraVideoView reconstruction |
+| Remote video freezes for the other person until you leave the call screen and come back | Agora's remote texture stops receiving frames but the SDK reports the stream healthy; only disposing and rebuilding the view re-runs `setupRemoteVideo` | `AgoraCallEngine` keys its remote `AgoraVideoView` on a `_remoteRevision` counter and bumps it 3 s after a `frozen`/`failed` remote-video state that hasn't recovered — the same repair, without navigating away |
+| Video call looks blurry even on good Wi-Fi | The encoder profile was hard-coded to 640x360 / `standardBitrate` for every network | `video_quality.dart` ladder: starts at 640x360 and climbs to 720p after 5 good `onNetworkQuality` reports, drops after 2 bad ones. See §5 `lib/features/call/` |
 | R8 build warning about "split" classes | Missing ProGuard dontwarn for Play Core split classes | Already in `android/app/proguard-rules.pro` — warning is harmless |
 | Call ends immediately, no remote user | 45-second timeout fired before other user accepted | Other user must accept before timeout; check `callSignal.status` in Firestore Console |
 | `flutter test` fails after `flutter clean` | Clean removes `.dart_tool/package_config.json` | Run `flutter build apk` (or `flutter pub get`) first to regenerate |
@@ -2079,9 +2107,13 @@ test/
 │                                           silent-push recovery (dead stream re-subscribes,
 │                                           healthy one does not, listener dropped on dispose)
 ├── features/call/
-│   └── call_service_test.dart           ← backend selection (agora/webrtc + safe fallback),
+│   ├── call_service_test.dart           ← backend selection (agora/webrtc + safe fallback),
 │                                           leaveCall stops the foreground service and clears
-│                                           call state (connectedAt, remote uid, flags)
+│   │                                       call state (connectedAt, remote uid, flags)
+│   └── video_quality_test.dart          ← adaptive ladder: start rung, unknown reports
+│                                           ignored, 5 good climbs / 2 bad drops, poor
+│                                           holds and resets streaks, worst direction
+│                                           decides, profiles increase monotonically
 ├── models/
 │   ├── message_test.dart                ← fromMap/toMap, all MessageTypes, legacy iv field
 │   ├── recurrence_test.dart             ← storage round-trip, fireDays, shortLabel, abbrev,
@@ -2184,7 +2216,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 423 tests, ~55 seconds
+flutter test                        # 432 tests, ~55 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
