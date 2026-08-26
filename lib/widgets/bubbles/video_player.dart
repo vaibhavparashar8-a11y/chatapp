@@ -32,7 +32,14 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
   Future<void> _start() async {
     setState(() { _started = true; _error = false; });
     try {
-      final ctrl = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+      // Play from the shared media cache, not the network URL. Streaming meant
+      // every single play — including replaying the clip you just watched, or
+      // opening it full-screen — re-fetched the whole file and sat on a black
+      // tile while it buffered. The first play still downloads; every one after
+      // that starts from disk.
+      final file = await cachedMediaFile(widget.url);
+      if (!mounted) return;
+      final ctrl = VideoPlayerController.file(file);
       _controller = ctrl;
       ctrl.addListener(() { if (mounted) setState(() {}); });
       await ctrl.initialize();

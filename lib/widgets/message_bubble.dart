@@ -25,6 +25,7 @@ part 'bubbles/video_player.dart';
 part 'bubbles/file_tile.dart';
 part 'bubbles/audio_tile.dart';
 part 'bubbles/upload_preview.dart';
+part 'bubbles/media_album.dart';
 
 class MessageBubble extends StatefulWidget {
   final Message message;
@@ -47,6 +48,16 @@ class MessageBubble extends StatefulWidget {
   final bool showReadTime;
   final VoidCallback? onLongPress;
 
+  /// Photos/videos sent as one batch, oldest first, with [message] as the last
+  /// of them. When set (two or more) the bubble draws a stacked album grid in
+  /// place of a single picture; the surrounding chrome — ticks, timestamp,
+  /// reply swipe — stays exactly as it is for one message.
+  final List<Message>? album;
+
+  /// Long-press on an individual album tile, so actions target that photo and
+  /// not just the newest of the batch.
+  final void Function(Message)? onAlbumTileLongPress;
+
   const MessageBubble({
     super.key,
     required this.message,
@@ -60,6 +71,8 @@ class MessageBubble extends StatefulWidget {
     this.onRetry,
     this.showReadTime = false,
     this.onLongPress,
+    this.album,
+    this.onAlbumTileLongPress,
   });
 
   // Dark theme palette
@@ -507,6 +520,15 @@ class _MessageBubbleState extends State<MessageBubble>
 
   Widget _buildContent(BuildContext context, Color textColor) {
     final msg = widget.message;
+    // A batch sent together renders as one stacked grid instead of a bubble
+    // per file. Everything else about the bubble is unchanged.
+    final album = widget.album;
+    if (album != null && album.length > 1) {
+      return _MediaAlbum(
+        messages: album,
+        onTileLongPress: widget.onAlbumTileLongPress,
+      );
+    }
     // Still uploading (or failed): there is no download URL yet, so show the
     // local preview with its progress ring instead of the remote media.
     if (msg.mediaUrl == null &&
@@ -535,7 +557,7 @@ class _MessageBubbleState extends State<MessageBubble>
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => MediaViewerScreen(
+                  builder: (_) => MediaViewerScreen.single(
                     url: msg.mediaUrl!,
                     isVideo: false,
                   ),

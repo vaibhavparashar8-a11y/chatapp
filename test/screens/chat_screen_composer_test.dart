@@ -61,15 +61,18 @@ void main() {
 
     // The old horizontal scroller hid options off the right edge; the grid
     // shows every one at once, including the two new entries.
-    testWidgets('shows all seven options together', (tester) async {
+    testWidgets('shows all six options together', (tester) async {
       await pumpChat(tester);
       await openAttach(tester);
 
       for (final label in [
-        'Camera', 'Gallery', 'Record', 'Video', 'Audio', 'Document', 'GIF',
+        'Camera', 'Gallery', 'Record', 'Audio', 'Document', 'GIF',
       ]) {
         expect(find.text(label), findsOneWidget, reason: '$label is missing');
       }
+      // 'Gallery' now covers photos AND videos, so the separate 'Video' tile
+      // is gone — picking a mix is one trip through one picker.
+      expect(find.text('Video'), findsNothing);
     });
 
     testWidgets('the attach button turns into a close button when open',

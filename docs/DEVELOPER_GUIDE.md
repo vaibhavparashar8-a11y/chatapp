@@ -1007,6 +1007,37 @@ Widget _buildContent(Message msg) {
 }
 ```
 
+**Media albums (stacked photos).** A batch of photos/videos sent together is
+drawn as one stacked grid instead of one bubble per file, the way WhatsApp does
+it. The grouping is a pure pass in `lib/utils/media_albums.dart`
+(`buildChatRows`): consecutive `image`/`video` messages from the same sender,
+within `kAlbumWindow` (2 min), not separated by a date chip, become one
+`ChatRow`. GIFs never join (they animate), and anything still uploading or
+failed is passed in `excludeIds` so it keeps its own progress ring and retry
+action. `ChatScreen` builds its `ListView` from rows rather than messages and
+hands `MessageBubble` an `album:` list; the bubble renders `_MediaAlbum`
+(`widgets/bubbles/media_album.dart`) in place of a single picture and keeps all
+its usual chrome, anchored on the newest member of the batch. The grid shows up
+to four tiles (2 side by side · 1 wide over 2 · 2x2) with a `+N` veil on the
+last one; a tile opens the full-screen viewer on that item with the whole album
+loaded, and long-pressing a tile targets *that* message.
+
+**One load, not two (media caching).** Tapping a photo used to black out and
+re-download the file through Dio even though the bubble had just fetched it.
+Everything now goes through the single `DefaultCacheManager` store that
+`CachedNetworkImage` already fills:
+
+| Surface | Before | Now |
+|---|---|---|
+| Photo bubble | `maxWidthDiskCache` shrank the *stored* file | Only `memCacheWidth` (decode size); the full-size file stays cached so the viewer can reuse it |
+| Full-screen photo | `Dio().get` → `Image.memory` | `CachedNetworkImage` — cache hit, opens instantly |
+| Full-screen video | `Dio().download` to a temp file | `cachedMediaFile(url)` (`DefaultCacheManager.getSingleFile`) |
+| Inline video bubble | `VideoPlayerController.networkUrl` — re-streamed on every play | `cachedMediaFile(url)` → `VideoPlayerController.file` |
+
+`MediaViewerScreen` also became a `PageView` over `MediaViewerItem`s, so an
+album opens swipeable with an `n / total` counter. `MediaViewerScreen.single`
+is the one-media convenience constructor used by ordinary bubbles.
+
 **Tappable links** — text messages are linkified: `splitLinks()` in
 `lib/utils/link_utils.dart` (pure, unit-tested) splits the body into plain and
 URL chunks (`https?://` and bare `www.`, trailing sentence punctuation
@@ -1882,6 +1913,9 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Video overlay blank after minimize | Platform view surface goes stale on Android | `_surfaceKey = UniqueKey()` on `AppLifecycleState.resumed` forces AgoraVideoView reconstruction |
 | Remote video freezes for the other person until you leave the call screen and come back | Agora's remote texture stops receiving frames but the SDK reports the stream healthy; only disposing and rebuilding the view re-runs `setupRemoteVideo` | `AgoraCallEngine` keys its remote `AgoraVideoView` on a `_remoteRevision` counter and bumps it 3 s after a `frozen`/`failed` remote-video state that hasn't recovered — the same repair, without navigating away |
 | Video call looks blurry even on good Wi-Fi | The encoder profile was hard-coded to 640x360 / `standardBitrate` for every network | `video_quality.dart` ladder: starts at 640x360 and climbs to 720p after 5 good `onNetworkQuality` reports, drops after 2 bad ones. See §5 `lib/features/call/` |
+| Tapping a photo/video shows a black screen and loads it a second time | (Fixed) `MediaViewerScreen` re-fetched the file with Dio, and the bubble had shrunk its own disk-cache copy (`maxWidthDiskCache`), so nothing full-size was reusable. The inline video player streamed from the network on every single play | Both surfaces read through `DefaultCacheManager` — `CachedNetworkImage` for photos, `cachedMediaFile(url)` → `VideoPlayerController.file` for video — and the photo bubble no longer shrinks the stored file. See §5 `message_bubble.dart` |
+| A batch of photos fills the chat with one bubble each | Every message rendered its own bubble | `buildChatRows` (`utils/media_albums.dart`) collapses a same-sender run of photos/videos within 2 min into one stacked album grid |
+| Sending photos *and* videos took two trips through two pickers | Separate "Gallery" (`pickMultiImage`) and "Video" (`FilePicker`) attach tiles | One "Gallery" tile using `pickMultipleMedia`; `mediaTypeForPath` (`utils/media_types.dart`) classifies each file by extension |
 | R8 build warning about "split" classes | Missing ProGuard dontwarn for Play Core split classes | Already in `android/app/proguard-rules.pro` — warning is harmless |
 | Call ends immediately, no remote user | 45-second timeout fired before other user accepted | Other user must accept before timeout; check `callSignal.status` in Firestore Console |
 | `flutter test` fails after `flutter clean` | Clean removes `.dart_tool/package_config.json` | Run `flutter build apk` (or `flutter pub get`) first to regenerate |
@@ -2134,6 +2168,12 @@ test/
 │   ├── calendar_utils_test.dart         ← monthYearLabel; monthCells (whole weeks,
 │   │                                       Monday-first padding, leap February,
 │   │                                       every day once, no foreign months)
+│   ├── media_albums_test.dart           ← buildChatRows: batches collapse into one row,
+│   │                                       gifs/text/other sender/time gap/date chip
+│   │                                       all split, pending+failed excluded, every
+│   │                                       message lands in exactly one row
+│   ├── media_types_test.dart            ← extensionOf edge cases; mediaTypeForPath
+│   │                                       image/video/gif/audio, unknown → file
 │   ├── call_signal_interpreter_test.dart ← interpretCallSignal event mapping,
 │   │                                        callerStatusLabel priority (§6.4)
 │   ├── call_event_text_test.dart        ← formatCallDuration padding; missed-vs-ended
@@ -2200,7 +2240,8 @@ test/
     ├── chat_screen_ui_test.dart         ← date separators per day, grouped runs carry one
     │                                       timestamp, alternating senders keep their tails,
     │                                       empty state
-    ├── chat_screen_composer_test.dart   ← attach sheet (all 7 options visible, toggles),
+    ├── chat_screen_composer_test.dart   ← attach sheet (all 6 options visible, no separate
+    │                                       Video tile, toggles),
     │                                       emoji panel (inserts at caret, does not send,
     │                                       grapheme-safe backspace, mutually exclusive
     │                                       with the attach sheet), GIF tab configured
@@ -2216,7 +2257,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 432 tests, ~55 seconds
+flutter test                        # 453 tests, ~55 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
