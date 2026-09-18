@@ -23,15 +23,15 @@ dependencies:
   # `PluginRegistry.Registrar`, which fails to compile on Flutter 3.44+.
   # It wants `web ^1.0.0`, which firebase_*_web 4.x/2.x cap below — resolved via
   # dependency_overrides below (safe: Android-only app, no web code compiles).
-  flutter_webrtc: ^1.5.2
+  flutter_webrtc: ^1.6.2
 
   # Media picking
   # In-app camera — the WhatsApp-style capture screen (screens/camera_screen.dart)
-  camera: ^0.11.0
+  camera: ^0.12.1
   # Reads the device gallery for the camera screen's recent-media strip
   photo_manager: ^3.6.0
   image_picker: ^1.0.7
-  file_picker: ^8.0.0
+  file_picker: ^12.0.0
 
   # UI helpers
   cached_network_image: ^3.3.1
@@ -53,10 +53,10 @@ dependencies:
   flutter_local_notifications: ^17.0.0
   flutter_timezone: ^5.1.0
   timezone: ^0.9.4
-  device_info_plus: ^10.1.0
+  device_info_plus: ^13.2.0
   call_log: ^6.0.1
   video_compress: ^3.1.2
-  workmanager: ^0.9.0
+  workmanager: ^0.10.10
   url_launcher: ^6.2.5
 
 # flutter_webrtc needs `web ^1.0.0`; firebase_*_web (pinned at firebase_core 2.x
@@ -64,8 +64,14 @@ dependencies:
 # This app targets Android only (no web/ or ios/ directory), so the firebase web
 # implementations are never compiled and the override is inert for our builds.
 # Remove this once the Firebase packages are upgraded.
+#
+# wakelock_plus comes in transitively (chewie). Pub settles on 1.7.0, whose
+# Android sources import the Pigeon message classes from the root package —
+# invalid under Kotlin 2.x, so `:wakelock_plus:compileReleaseKotlin` fails.
+# 1.8.0 fixes that and is also the first Built-in-Kotlin build.gradle.
 dependency_overrides:
   web: ^1.0.0
+  wakelock_plus: ^1.8.0
 
 dev_dependencies:
   flutter_test:

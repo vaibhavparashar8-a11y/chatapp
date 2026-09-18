@@ -327,12 +327,11 @@ class _ChatScreenState extends State<ChatScreen>
   /// Opens the system file picker with the leave timer suspended, and returns
   /// only the entries that actually have a path.
   Future<List<PlatformFile>> _pickFiles(FileType type) async {
-    FilePickerResult? result;
+    List<PlatformFile> picked = const [];
     await _whilePicking(() async {
-      result = await FilePicker.platform
-          .pickFiles(allowMultiple: true, type: type);
+      picked = await FilePicker.pickFiles(type: type);
     });
-    return result?.files.where((f) => f.path != null).toList() ?? const [];
+    return picked.where((f) => f.path != null).toList();
   }
 
   Future<void> _sendAudio() async {
