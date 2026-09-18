@@ -89,3 +89,14 @@ List<DateTime?> monthCells(DateTime month) {
   }
   return cells;
 }
+
+/// `m:ss` (or `h:mm:ss` past an hour) for a clip length or a recording timer.
+/// Used by the camera screen and its recent-media strip.
+String formatClipDuration(Duration d) {
+  final seconds = d.inSeconds.clamp(0, 359999);
+  final h = seconds ~/ 3600;
+  final m = (seconds % 3600) ~/ 60;
+  final s = seconds % 60;
+  final mm = h > 0 ? m.toString().padLeft(2, '0') : m.toString();
+  return '${h > 0 ? '$h:' : ''}$mm:${s.toString().padLeft(2, '0')}';
+}

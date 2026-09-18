@@ -124,4 +124,23 @@ void main() {
       expect(parseReminderTimestamp('not-a-date'), isNull);
     });
   });
+
+  group('formatClipDuration', () {
+    test('drops the hour until there is one', () {
+      expect(formatClipDuration(const Duration(seconds: 5)), '0:05');
+      expect(formatClipDuration(const Duration(seconds: 75)), '1:15');
+      expect(formatClipDuration(const Duration(minutes: 12, seconds: 3)),
+          '12:03');
+    });
+
+    test('pads the minutes once an hour is shown', () {
+      expect(formatClipDuration(const Duration(hours: 1, minutes: 2, seconds: 3)),
+          '1:02:03');
+    });
+
+    // A recording timer starts at zero and a duration is never negative.
+    test('clamps a negative duration to zero', () {
+      expect(formatClipDuration(const Duration(seconds: -4)), '0:00');
+    });
+  });
 }
