@@ -254,10 +254,17 @@ void main() {
       final ctrl = ChatController(repo);
       await ctrl.init();
 
+      // Waiting on the ring itself, not on a fixed number of microtasks: the
+      // upload generates an image thumbnail first, which really touches the
+      // filesystem, so a single `Future.delayed(Duration.zero)` only happened
+      // to be enough — under a loaded full-suite run it was not, and this test
+      // failed there while passing on its own.
       final first = ctrl.sendMedia(File('/pics/one.jpg'), MessageType.image);
-      await Future.delayed(Duration.zero);
+      await _waitFor(() => ctrl.messages.isNotEmpty &&
+          ctrl.uploadProgressFor(ctrl.messages[0].id) == 0.5);
       final second = ctrl.sendMedia(File('/pics/two.jpg'), MessageType.image);
-      await Future.delayed(Duration.zero);
+      await _waitFor(() => ctrl.messages.length == 2 &&
+          ctrl.uploadProgressFor(ctrl.messages[1].id) == 0.5);
 
       expect(ctrl.messages.length, 2);
       final ids = ctrl.messages.map((m) => m.id).toList();
@@ -1193,4 +1200,14 @@ void main() {
       repo.close();
     });
   });
+}
+
+/// Polls until [ready] holds, so a test can wait for genuinely async work
+/// (disk I/O inside an upload) instead of guessing how many microtasks it
+/// takes. Gives up after ~2s and returns, letting the expectation report the
+/// real failure rather than hanging the suite.
+Future<void> _waitFor(bool Function() ready) async {
+  for (var i = 0; i < 400 && !ready(); i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
 }
