@@ -60,19 +60,47 @@ void main() {
     });
 
     // The old horizontal scroller hid options off the right edge; the grid
-    // shows every one at once, including the two new entries.
-    testWidgets('shows all six options together', (tester) async {
+    // shows every one at once.
+    testWidgets('shows all five options together', (tester) async {
       await pumpChat(tester);
       await openAttach(tester);
 
       for (final label in [
-        'Camera', 'Gallery', 'Record', 'Audio', 'Document', 'GIF',
+        'Camera', 'Gallery', 'Audio', 'Document', 'GIF',
       ]) {
         expect(find.text(label), findsOneWidget, reason: '$label is missing');
       }
-      // 'Gallery' now covers photos AND videos, so the separate 'Video' tile
-      // is gone — picking a mix is one trip through one picker.
+      // 'Gallery' covers photos AND videos and 'Camera' covers stills AND
+      // clips, so the separate 'Video' and 'Record' tiles are gone — picking
+      // or capturing a mix is one trip through one entry point.
       expect(find.text('Video'), findsNothing);
+      expect(find.text('Record'), findsNothing);
+    });
+
+    testWidgets('the Camera tile asks for photo or video', (tester) async {
+      await pumpChat(tester);
+      await openAttach(tester);
+
+      await tester.tap(find.text('Camera'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Take photo'), findsOneWidget);
+      expect(find.text('Record video'), findsOneWidget);
+      // The attach sheet closes behind the chooser.
+      expect(find.text('Gallery'), findsNothing);
+    });
+
+    testWidgets('dismissing the camera chooser sends nothing', (tester) async {
+      await pumpChat(tester);
+      await openAttach(tester);
+      await tester.tap(find.text('Camera'));
+      await tester.pumpAndSettle();
+
+      Navigator.of(tester.element(find.text('Take photo'))).pop();
+      await tester.pumpAndSettle();
+
+      expect(find.text('Take photo'), findsNothing);
+      expect(repo.sentMedia, isEmpty);
     });
 
     testWidgets('the attach button turns into a close button when open',

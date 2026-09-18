@@ -34,6 +34,7 @@ import 'calls_screen.dart';
 part 'chat/aurora_background.dart';
 part 'chat/load_more_indicator.dart';
 part 'chat/attach_option.dart';
+part 'chat/camera_sheet.dart';
 part 'chat/typing_indicator.dart';
 part 'chat/emoji_panel.dart';
 part 'chat/composer_input.dart';
@@ -284,21 +285,33 @@ class _ChatScreenState extends State<ChatScreen>
     await _ctrl.sendText(text);
   }
 
-  Future<void> _sendImage(ImageSource source) async {
+  /// Camera capture — photo **and** video behind one attach tile.
+  ///
+  /// The sheet used to carry a "Camera" tile and a separate "Record" tile for
+  /// the same physical camera. Now one tile asks which kind of capture first,
+  /// then hands off to the matching system camera intent.
+  Future<void> _openCamera() async {
     _ctrl.setShowAttachMenu(false);
-    // The picked files are sent AFTER the picker closes, deliberately: only
-    // the picker itself suspends the leave timer, so a long upload still
-    // behaves like normal chat use.
+    final mode = await showModalBottomSheet<MessageType>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const _CameraModeSheet(),
+    );
+    if (mode == null || !mounted) return;
+    // The capture is sent AFTER the camera closes, deliberately: only the
+    // picker itself suspends the leave timer, so a long upload still behaves
+    // like normal chat use.
     File? file;
     await _whilePicking(() async {
-      // Camera is always a single shot; the gallery goes through
-      // [_sendGalleryMedia], which picks photos and videos together.
-      final picked = await _picker.pickImage(source: source, imageQuality: 70);
+      final picked = mode == MessageType.video
+          ? await _picker.pickVideo(source: ImageSource.camera)
+          : await _picker.pickImage(
+              source: ImageSource.camera, imageQuality: 70);
       if (picked != null) file = File(picked.path);
     });
-    final shot = file;
-    if (shot == null) return;
-    await _ctrl.sendMedia(shot, MessageType.image);
+    final captured = file;
+    if (captured == null) return;
+    await _ctrl.sendMedia(captured, mode);
   }
 
   /// Gallery picker for photos **and** videos in one pass.
@@ -317,18 +330,6 @@ class _ChatScreenState extends State<ChatScreen>
       await _ctrl.sendMedia(File(xf.path), mediaTypeForPath(xf.path),
           fileName: xf.name);
     }
-  }
-
-  Future<void> _recordVideo() async {
-    _ctrl.setShowAttachMenu(false);
-    File? file;
-    await _whilePicking(() async {
-      final picked = await _picker.pickVideo(source: ImageSource.camera);
-      if (picked != null) file = File(picked.path);
-    });
-    final recorded = file;
-    if (recorded == null) return;
-    await _ctrl.sendMedia(recorded, MessageType.video);
   }
 
   /// Opens the system file picker with the leave timer suspended, and returns
@@ -760,11 +761,12 @@ class _ChatScreenState extends State<ChatScreen>
   Widget _buildAttachMenu() {
     return _AttachSheet(
       options: [
+        // One tile for both stills and clips — it asks which on tap.
         _AttachOption(
             icon: Icons.photo_camera_rounded,
             label: 'Camera',
             color: const Color(0xFF8B5CF6),
-            onTap: () => _sendImage(ImageSource.camera)),
+            onTap: _openCamera),
         // One tile for both photos and videos — the system picker shows them
         // side by side and multi-select spans the two.
         _AttachOption(
@@ -772,11 +774,6 @@ class _ChatScreenState extends State<ChatScreen>
             label: 'Gallery',
             color: const Color(0xFFEC4899),
             onTap: _sendGalleryMedia),
-        _AttachOption(
-            icon: Icons.videocam_rounded,
-            label: 'Record',
-            color: const Color(0xFFEF4444),
-            onTap: _recordVideo),
         _AttachOption(
             icon: Icons.headphones_rounded,
             label: 'Audio',
