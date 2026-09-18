@@ -11,18 +11,16 @@ dependencies:
     sdk: flutter
 
   # Firebase
-  firebase_core: ^2.24.2
-  firebase_auth: ^4.17.0
-  cloud_firestore: ^4.14.0
-  firebase_storage: ^11.6.0
+  firebase_core: ^4.15.0
+  firebase_auth: ^6.7.0
+  cloud_firestore: ^6.10.0
+  firebase_storage: ^13.6.0
 
   # Calls — Agora (hosted, per-minute) and peer-to-peer WebRTC (free).
   # Which one runs is chosen at runtime by the `call_backend` Remote Config key.
   agora_rtc_engine: ^6.3.0
   # Must be 1.x: every 0.11.x still ships Flutter's removed v1-embedding
   # `PluginRegistry.Registrar`, which fails to compile on Flutter 3.44+.
-  # It wants `web ^1.0.0`, which firebase_*_web 4.x/2.x cap below — resolved via
-  # dependency_overrides below (safe: Android-only app, no web code compiles).
   flutter_webrtc: ^1.6.2
 
   # Media picking
@@ -47,9 +45,9 @@ dependencies:
   path_provider: ^2.1.2
   shared_preferences: ^2.2.2
   crypto: ^3.0.3
-  firebase_remote_config: ^4.4.0
-  firebase_messaging: ^14.9.4
-  cloud_functions: ^4.6.0
+  firebase_remote_config: ^6.7.0
+  firebase_messaging: ^16.7.0
+  cloud_functions: ^6.5.0
   flutter_local_notifications: ^17.0.0
   flutter_timezone: ^5.1.0
   timezone: ^0.9.4
@@ -59,18 +57,11 @@ dependencies:
   workmanager: ^0.10.10
   url_launcher: ^6.2.5
 
-# flutter_webrtc needs `web ^1.0.0`; firebase_*_web (pinned at firebase_core 2.x
-# / firebase_auth 4.x — migration deferred, issue #53) caps it below that.
-# This app targets Android only (no web/ or ios/ directory), so the firebase web
-# implementations are never compiled and the override is inert for our builds.
-# Remove this once the Firebase packages are upgraded.
-#
 # wakelock_plus comes in transitively (chewie). Pub settles on 1.7.0, whose
 # Android sources import the Pigeon message classes from the root package —
 # invalid under Kotlin 2.x, so `:wakelock_plus:compileReleaseKotlin` fails.
 # 1.8.0 fixes that and is also the first Built-in-Kotlin build.gradle.
 dependency_overrides:
-  web: ^1.0.0
   wakelock_plus: ^1.8.0
 
 dev_dependencies:
