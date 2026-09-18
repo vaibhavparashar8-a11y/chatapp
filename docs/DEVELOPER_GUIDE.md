@@ -494,7 +494,7 @@ All Firestore and Storage operations — only static methods, no instance state.
 | `messagesStream({int limit})` | Real-time stream, newest 50, oldest-first |
 | `fetchOlderMessages(DateTime before)` | One-shot fetch for pagination |
 | `sendText(text, {replyToId, clientId, ...})` | Writes plaintext document |
-| `sendMedia(File, MessageType, {fileName, onProgress, clientId})` | Uploads to Storage, then writes the Firestore doc — with `clientId`, so the optimistic bubble can be retired |
+| `sendMedia(File, MessageType, {fileName, onProgress, clientId, thumbnail})` | Uploads to Storage, seeds the local media cache with the uploaded file and its thumbnail (`MediaCacheService`), then writes the Firestore doc — with `clientId`, so the optimistic bubble can be retired |
 | `markRead()` | Updates `readAt.{mySenderId}` on the room doc |
 | `get/setLastReadMsgId()` | Per-room SharedPreferences guard (`lastReadMsgId_{chatRoomId}`) — newest other-message already marked read; keeps the read time stable across app restarts |
 | `setTyping(bool)` | Updates `typing.{mySenderId}` on the room doc |
@@ -641,6 +641,31 @@ installed from the Play Store) arrive through Android's `commitContent` API,
 surfaced by the message field's `contentInsertionConfiguration` and handled by
 `_onKeyboardContent` — without that configuration the keyboard greys those keys
 out as "not supported".
+
+---
+
+### `lib/services/media_cache_service.dart`
+
+Makes the **sender's** photos and videos appear instantly, the way they do in
+WhatsApp.
+
+Media bubbles read through the one `DefaultCacheManager` store keyed on the
+download URL (`CachedNetworkImage` for photos, `cachedMediaFile` for videos).
+The sender's optimistic bubble draws from the picked file, but it is dropped as
+soon as the Firestore message arrives — and the real bubble found nothing
+cached for that URL, so the phone downloaded the very file it had just
+uploaded. On a video that is seconds of spinner over a clip already in local
+storage.
+
+`ChatService.sendMedia` therefore calls `MediaCacheService.seed(url, file)`
+right after `getDownloadURL()` (and again for the thumbnail):
+
+| Detail | Why |
+|---|---|
+| `putFileStream(url, file.openRead(), ...)` | Streams from disk — `readAsBytes` on a 50 MB video would spike the heap, the same reason the upload uses `putFile` |
+| Key = the download URL | That is exactly the key the bubble will look up |
+| Failures logged, never thrown | A cache miss only costs a re-download; it must never fail a send |
+| `MediaCacheService.seeder` | Injectable seam (a `CacheSeeder` function); `testMode = true` makes seeding a no-op |
 
 ---
 
@@ -876,6 +901,7 @@ if (ChatController.canModify(msg)) {
 | `screens/chat/load_more_indicator.dart` | Scroll-triggered history loader |
 | `screens/chat/aurora_background.dart` | Static aurora backdrop, gradient `_SendButton`, `_DateSeparator` chip |
 | `screens/chat/attach_option.dart` | Attach sheet: the rounded card (`_AttachSheet`) and its gradient tiles (`_AttachOption`) |
+| `screens/chat/camera_sheet.dart` | Photo-or-video chooser (`_CameraModeSheet`) popped by the single Camera tile; returns a `MessageType` |
 | `screens/chat/emoji_panel.dart` | Emoji grid + GIF picker behind two tabs (`_EmojiGifPanel`, `_GifPicker`). `initialTab` opens it straight on GIF, so the attach sheet's GIF tile does not land the user on emoji |
 | `screens/chat/composer_input.dart` | `extension ChatComposerInput` — emoji insert/backspace, GIF send, keyboard sticker handling |
 | `screens/chat/typing_indicator.dart` | Three-dot animated bubble |
@@ -1033,6 +1059,7 @@ Everything now goes through the single `DefaultCacheManager` store that
 | Full-screen photo | `Dio().get` → `Image.memory` | `CachedNetworkImage` — cache hit, opens instantly |
 | Full-screen video | `Dio().download` to a temp file | `cachedMediaFile(url)` (`DefaultCacheManager.getSingleFile`) |
 | Inline video bubble | `VideoPlayerController.networkUrl` — re-streamed on every play | `cachedMediaFile(url)` → `VideoPlayerController.file` |
+| **Sender's own media** | Downloaded back from Storage once the optimistic bubble retired | `MediaCacheService.seed(url, file)` puts the uploaded file in the cache under its download URL — nothing to fetch |
 
 `MediaViewerScreen` also became a `PageView` over `MediaViewerItem`s, so an
 album opens swipeable with an `n / total` counter. `MediaViewerScreen.single`
@@ -1915,6 +1942,8 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Video call looks blurry even on good Wi-Fi | The encoder profile was hard-coded to 640x360 / `standardBitrate` for every network | `video_quality.dart` ladder: starts at 640x360 and climbs to 720p after 5 good `onNetworkQuality` reports, drops after 2 bad ones. See §5 `lib/features/call/` |
 | Tapping a photo/video shows a black screen and loads it a second time | (Fixed) `MediaViewerScreen` re-fetched the file with Dio, and the bubble had shrunk its own disk-cache copy (`maxWidthDiskCache`), so nothing full-size was reusable. The inline video player streamed from the network on every single play | Both surfaces read through `DefaultCacheManager` — `CachedNetworkImage` for photos, `cachedMediaFile(url)` → `VideoPlayerController.file` for video — and the photo bubble no longer shrinks the stored file. See §5 `message_bubble.dart` |
 | A batch of photos fills the chat with one bubble each | Every message rendered its own bubble | `buildChatRows` (`utils/media_albums.dart`) collapses a same-sender run of photos/videos within 2 min into one stacked album grid |
+| The sender waited on a spinner over the photo/video it had just sent | Nothing seeded the media cache, so the sender's bubble re-downloaded its own upload from Storage once the optimistic bubble retired | `MediaCacheService.seed(url, file)` in `ChatService.sendMedia` — see §5 `media_cache_service.dart` |
+| Taking a photo and recording a clip were two separate attach tiles | "Camera" (`pickImage`) and "Record" (`pickVideo`) sat side by side for the same physical camera | One "Camera" tile pops `_CameraModeSheet` (Take photo / Record video) and routes to the matching picker — `_openCamera` in `chat_screen.dart` |
 | Sending photos *and* videos took two trips through two pickers | Separate "Gallery" (`pickMultiImage`) and "Video" (`FilePicker`) attach tiles | One "Gallery" tile using `pickMultipleMedia`; `mediaTypeForPath` (`utils/media_types.dart`) classifies each file by extension |
 | R8 build warning about "split" classes | Missing ProGuard dontwarn for Play Core split classes | Already in `android/app/proguard-rules.pro` — warning is harmless |
 | Call ends immediately, no remote user | 45-second timeout fired before other user accepted | Other user must accept before timeout; check `callSignal.status` in Firestore Console |
@@ -2208,6 +2237,9 @@ test/
 │   ├── media_store_service_test.dart    ← mimeTypeFor mapping, channel arguments,
 │   │                                       null (not throw) on platform failure,
 │   │                                       testMode seam
+│   ├── media_cache_service_test.dart   ← seed key/extension + streamed bytes, generic
+│   │                                       extension fallback, testMode no-op,
+│   │                                       cache failures swallowed
 │   └── giphy_service_test.dart          ← isConfigured gating, no request without a key,
 │                                           parseResponse variant preference + lenience
 ├── theme/
@@ -2240,8 +2272,10 @@ test/
     ├── chat_screen_ui_test.dart         ← date separators per day, grouped runs carry one
     │                                       timestamp, alternating senders keep their tails,
     │                                       empty state
-    ├── chat_screen_composer_test.dart   ← attach sheet (all 6 options visible, no separate
-    │                                       Video tile, toggles),
+    ├── chat_screen_composer_test.dart   ← attach sheet (all 5 options visible, no separate
+    │                                       Video or Record tile, toggles, Camera tile pops
+    │                                       the photo-or-video chooser and sends nothing
+    │                                       when dismissed),
     │                                       emoji panel (inserts at caret, does not send,
     │                                       grapheme-safe backspace, mutually exclusive
     │                                       with the attach sheet), GIF tab configured
@@ -2257,7 +2291,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 453 tests, ~55 seconds
+flutter test                        # 459 tests, ~70 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
@@ -2267,6 +2301,7 @@ static flag or injectable, set them in `setUp()`:
 |---|---|
 | `NotificationService.testMode` | schedule/cancel/show become no-ops, but calls are *recorded*: `debugScheduled` (id/title/time/recurrence) and `debugCancelled` (ids). Clear both in `setUp()` |
 | `RemoteConfigService.testMode` | skips fetch, returns defaults |
+| `MediaCacheService.testMode` | seeding is a no-op; `MediaCacheService.seeder` can be swapped to record what was cached |
 | `ReminderService.testMode` | Firestore methods no-op / return null |
 | `DeviceService.testMode` | heartbeat no-op, last-opened stream emits null |
 | `AgoraTokenService.fetchOverride` | replaces the Cloud Function call |

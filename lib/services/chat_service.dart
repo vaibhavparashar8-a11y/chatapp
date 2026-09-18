@@ -10,6 +10,7 @@ import 'package:uuid/uuid.dart';
 import '../constants.dart';
 import '../models/message.dart';
 import 'log_service.dart';
+import 'media_cache_service.dart';
 
 class ChatService {
   static final _db = FirebaseFirestore.instance;
@@ -225,6 +226,9 @@ class ChatService {
     }
 
     final url = await ref.getDownloadURL();
+    // The file just uploaded IS what the bubble asks for under this URL — hand
+    // it to the cache so our own copy never round-trips through the network.
+    await MediaCacheService.seed(url, file);
     // Best-effort poster frame for videos. A few KB next to a multi-MB video,
     // and it is what lets the receiver show the video's own frame immediately
     // instead of a blank tile or the cost of spinning up a network player.
@@ -236,6 +240,7 @@ class ChatService {
         await thumbRef.putData(await thumbnail.readAsBytes(),
             SettableMetadata(contentType: 'image/jpeg'));
         thumbUrl = await thumbRef.getDownloadURL();
+        await MediaCacheService.seed(thumbUrl, thumbnail);
       } catch (e) {
         LogService.w('Upload', 'thumbnail upload failed (video still sent): $e');
       }
