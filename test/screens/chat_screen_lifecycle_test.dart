@@ -17,7 +17,7 @@ import '../helpers/fake_chat_repository.dart';
 /// off the stack, disposed it, and released the Agora engine — dropping the
 /// call. The old guard only checked callActiveNotifier, which is true only
 /// for MINIMIZED calls. CallService.inCall covers the full call lifetime.
-final _originalFilePicker = FilePicker.platform;
+final _originalFilePicker = FilePickerPlatform.instance;
 
 void main() {
   late FakeChatRepository repo;
@@ -158,9 +158,9 @@ void main() {
       (tester) async {
     // The gate stands in for the gallery still being open: the pick stays
     // pending while the test backgrounds the app for longer than the timer.
-    final gate = Completer<FilePickerResult?>();
-    FilePicker.platform = _GatedFakeFilePicker(gate.future);
-    addTearDown(() => FilePicker.platform = _originalFilePicker);
+    final gate = Completer<List<PlatformFile>>();
+    FilePickerPlatform.instance = _GatedFakeFilePicker(gate.future);
+    addTearDown(() => FilePickerPlatform.instance = _originalFilePicker);
 
     await pumpChatOverHome(tester);
     await tester.tap(find.byIcon(Icons.add_circle_outline));
@@ -176,14 +176,15 @@ void main() {
     expect(find.byType(ChatScreen), findsOneWidget,
         reason: 'picking a file IS using the chat — it must not navigate away');
 
-    gate.complete(null); // user cancels the picker
+    gate.complete(const []); // user cancels the picker
     await tester.pumpAndSettle();
   });
 
   testWidgets('backgrounding still pops once the picker has closed',
       (tester) async {
-    FilePicker.platform = _GatedFakeFilePicker(Future.value(null));
-    addTearDown(() => FilePicker.platform = _originalFilePicker);
+    FilePickerPlatform.instance =
+        _GatedFakeFilePicker(Future.value(const []));
+    addTearDown(() => FilePickerPlatform.instance = _originalFilePicker);
 
     await pumpChatOverHome(tester);
     await tester.tap(find.byIcon(Icons.add_circle_outline));
@@ -204,26 +205,25 @@ void main() {
 /// Stands in for the system file picker: runs [onOpen] (which the tests use to
 /// simulate the activity being paused behind the picker) and returns null, as
 /// a cancelled pick does.
-class _GatedFakeFilePicker extends FilePicker {
+class _GatedFakeFilePicker extends FilePickerPlatform {
   _GatedFakeFilePicker(this.result);
 
   /// Completes when the "picker" closes.
-  final Future<FilePickerResult?> result;
+  final Future<List<PlatformFile>> result;
 
   @override
-  Future<FilePickerResult?> pickFiles({
+  Future<List<PlatformFile>> pickFiles({
     String? dialogTitle,
     String? initialDirectory,
     FileType type = FileType.any,
     List<String>? allowedExtensions,
     Function(FilePickerStatus)? onFileLoading,
-    bool allowCompression = true,
-    int compressionQuality = 30,
-    bool allowMultiple = false,
-    bool withData = false,
-    bool withReadStream = false,
-    bool lockParentWindow = false,
-    bool readSequential = false,
+    int compressionQuality = 0,
+    AndroidOptions androidOptions = const AndroidOptions(),
+    DarwinOptions darwinOptions = const DarwinOptions(),
+    WindowsOptions windowsOptions = const WindowsOptions(),
+    LinuxOptions linuxOptions = const LinuxOptions(),
+    WebOptions webOptions = const WebOptions(),
   }) async {
     return result;
   }

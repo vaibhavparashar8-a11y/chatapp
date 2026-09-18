@@ -51,8 +51,10 @@ void main() {
 
   group('date separators', () {
     testWidgets('today\'s messages sit under a "Today" chip', (tester) async {
+      // Must stay on today's calendar day: "an hour ago" is yesterday when the
+      // suite runs just after midnight, which made this test flaky.
       final now = DateTime.now();
-      await pumpWith(tester, [msg('B', now.subtract(const Duration(hours: 1)))]);
+      await pumpWith(tester, [msg('B', now)]);
 
       expect(find.text('Today'), findsOneWidget);
     });

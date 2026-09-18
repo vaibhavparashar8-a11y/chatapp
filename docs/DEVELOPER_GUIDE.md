@@ -40,7 +40,7 @@ A private, two-person mobile chat app. Both users install the same APK; the app 
 | Server functions | Cloud Functions (Node 20, 1st gen) | firebase-functions 4.x |
 | Audio/video calls | Agora RTC Engine | 6.3.x |
 | Local notifications | flutter_local_notifications | 17.x |
-| Background tasks | WorkManager | workmanager 0.9.x |
+| Background tasks | WorkManager | workmanager 0.10.x |
 | Local storage | SharedPreferences | — |
 | HTTP client | Dio | — |
 | Platform | Android (arm64-v8a) | minSdk 21 |
@@ -1995,6 +1995,8 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Capturing media left the app and looked like the OEM camera | Both capture paths were system intents (`pickImage`/`pickVideo`), so photo and video were separate tiles and switching meant backing out | `CameraScreen` — one in-app preview with PHOTO/VIDEO modes, hold-to-record and a recent-media strip. See §5 `camera_screen.dart` |
 | A widget test of the camera screen hung instead of failing | `permission_handler`'s channel has nothing on the other end in a test, so the awaited request never completes | `PermissionService` (testMode seam); camera tests also install a fake `CameraPlatform.instance`. Never await a plugin channel straight from a screen |
 | Sending photos *and* videos took two trips through two pickers | Separate "Gallery" (`pickMultiImage`) and "Video" (`FilePicker`) attach tiles | One "Gallery" tile using `pickMultipleMedia`; `mediaTypeForPath` (`utils/media_types.dart`) classifies each file by extension |
+| `:wakelock_plus:compileReleaseKotlin` failed with `Unresolved reference 'ToggleMessage'` | wakelock_plus 1.7.0 (pulled transitively by chewie) imports its Pigeon message classes from the root package, which Kotlin 2.x rejects | `dependency_overrides: wakelock_plus: ^1.8.0` in `pubspec.yaml` — 1.8.0 fixes the imports and is also its first Built-in-Kotlin build |
+| `GeneratedPluginRegistrant.java: cannot find symbol PackageInfoPlugin` after a plugin upgrade | A stale `build/<plugin>/` from a build that failed part-way left an AAR containing only `R.class` | Delete that module's `build/` directory (or `flutter clean`) and rebuild — the plugin's Kotlin sources are not recompiled while the stale jar looks up to date |
 | R8 build warning about "split" classes | Missing ProGuard dontwarn for Play Core split classes | Already in `android/app/proguard-rules.pro` — warning is harmless |
 | Call ends immediately, no remote user | 45-second timeout fired before other user accepted | Other user must accept before timeout; check `callSignal.status` in Firestore Console |
 | `flutter test` fails after `flutter clean` | Clean removes `.dart_tool/package_config.json` | Run `flutter build apk` (or `flutter pub get`) first to regenerate |
@@ -2374,6 +2376,7 @@ static flag or injectable, set them in `setUp()`:
 | `ReminderService.testMode` | Firestore methods no-op / return null |
 | `DeviceService.testMode` | heartbeat no-op, last-opened stream emits null |
 | `AgoraTokenService.fetchOverride` | replaces the Cloud Function call |
+| `FilePickerPlatform.instance` | swap in a fake picker (file_picker 12 removed the old `FilePicker.platform` setter); restore the original in `addTearDown` |
 | `ChatScreen(repository:, callSignalProvider:)` | constructor injection |
 | `CallScreen(callSignalProvider:)` | constructor injection — caller-side ringing/accept/decline tracking |
 | `CallsScreen(callsStream:)` | constructor injection |
@@ -2554,20 +2557,32 @@ Two warnings appear on every build. Neither affects the produced APK:
 
 ```
 WARNING: Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP):
-device_info_plus, flutter_timezone, package_info_plus, video_compress,
-wakelock_plus, workmanager_android
+flutter_timezone, flutter_webrtc, photo_manager, video_compress,
+workmanager_android
 Future versions of Flutter will fail to build ...
 ```
 
+Every plugin that *had* a Built-in-Kotlin release has been taken to it
+(Sept 2026): `device_info_plus` 10→13, `package_info_plus` 9→10,
+`wakelock_plus` 1.5→1.8 (transitive, forced by a `dependency_overrides`
+entry), `camera` 0.11→0.12 (which is what pulls the migrated
+`camera_android_camerax` 0.7.x). `file_picker` 8→12 came along for the
+ride: `device_info_plus` 13 needs `win32` 6, and only `file_picker` 12
+allows it.
+
+The five plugins still listed have **no published version that dropped
+`apply plugin: 'kotlin-android'`** — the warning is a textual scan of each
+plugin's `android/build.gradle`, so nothing on our side silences it. The
+next move is upstream issues against those plugins, not another upgrade.
+
 Harmless with the current Flutter SDK. It becomes a **build failure only
-when the Flutter SDK is upgraded** past the removal point. The fix is a
-full dependency migration — tracked as a GitHub issue ("dependency
-migration: Firebase majors + Built-in Kotlin plugins"). Scale of the jump
-(as of July 2026): firebase_core 2.x→4.x, cloud_firestore 4.x→6.x,
-firebase_messaging 14→16, flutter_local_notifications 17→22,
-device_info_plus 10→13 — breaking API changes across most service files,
-so it needs a dedicated chore PR series with on-device retesting of calls,
-reminders, FCM, and notifications.
+when the Flutter SDK is upgraded** past the removal point. The remaining
+dependency jump is the Firebase side — tracked as a GitHub issue
+("dependency migration: Firebase majors + Built-in Kotlin plugins"):
+firebase_core 2.x→4.x, cloud_firestore 4.x→6.x, firebase_messaging 14→16,
+flutter_local_notifications 17→22 — breaking API changes across most
+service files, so it needs a dedicated chore PR series with on-device
+retesting of calls, reminders, FCM, and notifications.
 
 **Rule until that migration lands: do NOT upgrade the Flutter SDK.**
 
