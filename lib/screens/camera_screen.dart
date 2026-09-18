@@ -14,6 +14,7 @@ import '../services/permission_service.dart';
 import '../theme/chat_theme.dart';
 import '../utils/media_types.dart';
 import '../utils/time_utils.dart';
+import 'media_preview_screen.dart';
 import '../widgets/camera/camera_mode_switch.dart';
 import '../widgets/camera/capture_button.dart';
 import '../widgets/camera/recent_media_strip.dart';
@@ -177,7 +178,8 @@ class _CameraScreenState extends State<CameraScreen>
     setState(() => _busy = true);
     try {
       final shot = await controller.takePicture();
-      _finish([CapturedMedia(File(shot.path), MessageType.image)]);
+      await _confirmAndFinish(
+          CapturedMedia(File(shot.path), MessageType.image));
     } catch (e) {
       LogService.e('Camera', 'takePicture failed: $e');
       _showError('Could not take the photo');
@@ -219,7 +221,8 @@ class _CameraScreenState extends State<CameraScreen>
         LogService.i('Camera', 'discarding accidental sub-second clip');
         return;
       }
-      _finish([CapturedMedia(File(clip.path), MessageType.video)]);
+      await _confirmAndFinish(
+          CapturedMedia(File(clip.path), MessageType.video));
     } catch (e) {
       LogService.e('Camera', 'stopVideoRecording failed: $e');
       if (mounted) setState(() => _recording = false);
@@ -270,9 +273,21 @@ class _CameraScreenState extends State<CameraScreen>
       _showError('That file is not available on this phone');
       return;
     }
-    _finish([
-      CapturedMedia(file, item.isVideo ? MessageType.video : MessageType.image),
-    ]);
+    await _confirmAndFinish(CapturedMedia(
+        file, item.isVideo ? MessageType.video : MessageType.image));
+  }
+
+  /// Shows [media] full-screen and only sends it if the user confirms.
+  ///
+  /// A shot used to go straight into the chat — a blurred photo was already
+  /// sent by the time it appeared. Declining returns to the live viewfinder
+  /// rather than closing the camera, so retaking is one tap.
+  Future<void> _confirmAndFinish(CapturedMedia media) async {
+    final send = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => MediaPreviewScreen(media: media)),
+    );
+    if (!mounted || send != true) return;
+    _finish([media]);
   }
 
   void _finish(List<CapturedMedia> media) {

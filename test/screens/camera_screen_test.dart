@@ -9,6 +9,7 @@ import 'package:chatapp/models/captured_media.dart';
 import 'package:chatapp/models/gallery_item.dart';
 import 'package:chatapp/models/message.dart';
 import 'package:chatapp/screens/camera_screen.dart';
+import 'package:chatapp/screens/media_preview_screen.dart';
 import 'package:chatapp/services/log_service.dart';
 import 'package:chatapp/services/media_library_service.dart';
 import 'package:chatapp/services/permission_service.dart';
@@ -172,11 +173,55 @@ void main() {
     await tester.tap(find.byType(Image).first);
     await _settle(tester);
 
+    // Nothing is sent until the preview is confirmed.
+    expect(find.byType(MediaPreviewScreen), findsOneWidget);
+    expect(result, isNull);
+
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await _settle(tester);
+
     expect(result, isNotNull);
     expect(result!.single.file.path, file.path);
     // The strip carries photos and videos; the type must follow the asset, not
     // the selected capture mode.
     expect(result!.single.type, MessageType.video);
+  });
+
+  testWidgets('declining the preview returns to the viewfinder, sending nothing',
+      (tester) async {
+    final file = File('/pics/shot.jpg');
+    MediaLibraryService.testItems = [
+      GalleryItem(id: 'a', isVideo: false, thumbnail: png),
+    ];
+    MediaLibraryService.testFiles = {'a': file};
+
+    List<CapturedMedia>? result;
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (context) => Scaffold(
+          body: ElevatedButton(
+            onPressed: () async {
+              result = await Navigator.of(context).push<List<CapturedMedia>>(
+                MaterialPageRoute(builder: (_) => const CameraScreen()),
+              );
+            },
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await _settle(tester);
+
+    await tester.tap(find.byType(Image).first);
+    await _settle(tester);
+    await tester.tap(find.text('Retake'));
+    await _settle(tester);
+
+    // Back on the camera, not back in the chat.
+    expect(find.byType(CameraScreen), findsOneWidget);
+    expect(find.byType(MediaPreviewScreen), findsNothing);
+    expect(result, isNull);
   });
 
   testWidgets('a strip item whose file cannot be resolved reports instead of '

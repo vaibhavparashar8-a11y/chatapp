@@ -1670,7 +1670,10 @@ ChatScreen._openCamera()
        ├─ PermissionService.requestCamera / requestMicrophone
        ├─ availableCameras() → CameraController(ResolutionPreset.high)
        ├─ MediaLibraryService.recent()  →  RecentMediaStrip
-       └─ pop([CapturedMedia(file, type)])  →  ChatController.sendMedia(…)
+       └─ capture / strip tap
+            └─ Navigator.push(MediaPreviewScreen)   pops true = send
+                 ├─ false / back  →  stay on the viewfinder, nothing sent
+                 └─ true          →  pop([CapturedMedia]) → ChatController.sendMedia(…)
 ```
 
 | Piece | File | Note |
@@ -1682,13 +1685,15 @@ ChatScreen._openCamera()
 | Recent strip | `widgets/camera/recent_media_strip.dart` | Renders nothing when the gallery is empty or access was denied |
 | Gallery reads | `services/media_library_service.dart` | The only `photo_manager` import; hands up plain `GalleryItem`s |
 | Permissions | `services/permission_service.dart` | Seam over `permission_handler` — its channel never answers in a widget test, so a screen awaiting it directly hangs |
+| Review before send | `screens/media_preview_screen.dart` | Full-screen preview of the one captured/picked item: **Retake** (or back) returns to the viewfinder, the send FAB confirms. Videos loop with tap-to-pause; a clip that cannot be decoded still shows the send button, since the file itself is fine |
 
 | Behaviour | Detail |
 |---|---|
 | Tap shutter | PHOTO mode takes a picture; VIDEO mode starts/stops a clip |
 | Hold shutter | Records for as long as the finger is down, whichever mode is selected |
 | Sub-second clip | Discarded — a tap that lands as a long press is a mis-tap, not a recording |
-| Strip tap | Resolves the asset to a file and pops it; the message type follows the **asset**, not the selected mode |
+| Strip tap | Resolves the asset to a file and previews it; the message type follows the **asset**, not the selected mode |
+| After every capture | `MediaPreviewScreen` — nothing reaches the chat until the send button is tapped. Declining goes back to the live viewfinder, not to the chat |
 | Gallery tile | Opens the full system picker (`pickMultipleMedia`) for anything older than the strip holds |
 | Backgrounding | Android reclaims the camera, so the controller is disposed on `inactive` and rebuilt on `resumed` — otherwise the preview returns frozen |
 | No camera / denied | The screen says why instead of showing a black rectangle |
@@ -1985,6 +1990,8 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | A batch of photos fills the chat with one bubble each | Every message rendered its own bubble | `buildChatRows` (`utils/media_albums.dart`) collapses a same-sender run of photos/videos within 2 min into one stacked album grid |
 | A controller test passed alone but failed inside `flutter test` (concurrent-upload rings) | The test advanced the upload with a fixed `await Future.delayed(Duration.zero)`, but `_upload` generates an image thumbnail first — real filesystem work, not a microtask. Under a loaded full-suite run the progress had not landed yet | Poll the state instead of guessing microtasks: `_waitFor(() => ctrl.uploadProgressFor(id) == 0.5)` in `chat_controller_test.dart`. Any test waiting on mid-flight async work should do the same |
 | The sender waited on a spinner over the photo/video it had just sent | Nothing seeded the media cache, so the sender's bubble re-downloaded its own upload from Storage once the optimistic bubble retired | `MediaCacheService.seed(url, file)` in `ChatService.sendMedia` — see §5 `media_cache_service.dart` |
+| A photo was already sent by the time you saw it | Captures popped straight back to the chat and were uploaded on arrival | `MediaPreviewScreen` between capture and send — Retake returns to the viewfinder. See §5 `camera_screen.dart` |
+| A failed video preview sat on a spinner forever | The failure path `await`ed `VideoPlayerController.dispose()` on a controller that never initialised — that call hangs on an unanswered channel, so the `setState` after it never ran | Fire the dispose off with `unawaited(... .catchError(...))` and set the failure state immediately. Never `await` cleanup on a half-initialised plugin object |
 | Capturing media left the app and looked like the OEM camera | Both capture paths were system intents (`pickImage`/`pickVideo`), so photo and video were separate tiles and switching meant backing out | `CameraScreen` — one in-app preview with PHOTO/VIDEO modes, hold-to-record and a recent-media strip. See §5 `camera_screen.dart` |
 | A widget test of the camera screen hung instead of failing | `permission_handler`'s channel has nothing on the other end in a test, so the awaited request never completes | `PermissionService` (testMode seam); camera tests also install a fake `CameraPlatform.instance`. Never await a plugin channel straight from a screen |
 | Sending photos *and* videos took two trips through two pickers | Separate "Gallery" (`pickMultiImage`) and "Video" (`FilePicker`) attach tiles | One "Gallery" tile using `pickMultipleMedia`; `mediaTypeForPath` (`utils/media_types.dart`) classifies each file by extension |
@@ -2318,8 +2325,12 @@ test/
     ├── camera_screen_test.dart          ← no-camera / throwing-camera / denied-permission
     │                                       messages (fake CameraPlatform + PermissionService
     │                                       seam), PHOTO⇄VIDEO switch, recent strip renders,
-    │                                       strip tap pops the asset's own type,
+    │                                       strip tap previews then pops the asset's own type,
+    │                                       declining the preview sends nothing,
     │                                       unresolvable asset reports instead of sending
+    ├── media_preview_screen_test.dart    ← photo renders with both choices, send pops true,
+    │                                       Retake/back pop false, an undecodable clip is
+    │                                       still sendable
     ├── calls_screen_test.dart           ← call history rendering
     ├── chat_screen_lifecycle_test.dart  ← background-leave navigation vs live calls
     │                                       (uses DeviceService.testMode seam);
@@ -2347,7 +2358,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 477 tests, ~70 seconds
+flutter test                        # 483 tests, ~70 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
