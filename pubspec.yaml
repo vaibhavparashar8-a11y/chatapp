@@ -26,6 +26,10 @@ dependencies:
   flutter_webrtc: ^1.5.2
 
   # Media picking
+  # In-app camera — the WhatsApp-style capture screen (screens/camera_screen.dart)
+  camera: ^0.11.0
+  # Reads the device gallery for the camera screen's recent-media strip
+  photo_manager: ^3.6.0
   image_picker: ^1.0.7
   file_picker: ^8.0.0
 

@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:chatapp/constants.dart';
+import 'package:chatapp/screens/camera_screen.dart';
 import 'package:chatapp/screens/chat_screen.dart';
 import 'package:chatapp/services/device_service.dart';
 import 'package:chatapp/services/giphy_service.dart';
 import 'package:chatapp/services/log_service.dart';
+import 'package:chatapp/services/media_library_service.dart';
+import 'package:chatapp/services/permission_service.dart';
 import '../helpers/fake_chat_repository.dart';
 
 /// Composer surface: the redesigned attach sheet and the emoji/GIF panel.
@@ -18,6 +21,10 @@ void main() {
     LogService.testMode = true;
     mySenderId = 'A';
     giphyApiKey = '';
+    // The camera screen behind the Camera tile must not reach the platform.
+    MediaLibraryService.testMode = true;
+    PermissionService.testMode = true;
+    PermissionService.testGranted = false;
     repo = FakeChatRepository();
   });
 
@@ -27,6 +34,9 @@ void main() {
     giphyApiKey = '';
     GiphyService.testMode = false;
     GiphyService.searchResults = [];
+    MediaLibraryService.testMode = false;
+    PermissionService.testMode = false;
+    PermissionService.testGranted = true;
     repo.close();
   });
 
@@ -77,29 +87,31 @@ void main() {
       expect(find.text('Record'), findsNothing);
     });
 
-    testWidgets('the Camera tile asks for photo or video', (tester) async {
+    // Photos and clips both come from the in-app camera now, not from two
+    // system intents.
+    testWidgets('the Camera tile opens the in-app camera', (tester) async {
       await pumpChat(tester);
       await openAttach(tester);
 
       await tester.tap(find.text('Camera'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Take photo'), findsOneWidget);
-      expect(find.text('Record video'), findsOneWidget);
-      // The attach sheet closes behind the chooser.
-      expect(find.text('Gallery'), findsNothing);
+      expect(find.byType(CameraScreen), findsOneWidget);
+      // Both capture modes live on that one screen.
+      expect(find.text('PHOTO'), findsOneWidget);
+      expect(find.text('VIDEO'), findsOneWidget);
     });
 
-    testWidgets('dismissing the camera chooser sends nothing', (tester) async {
+    testWidgets('backing out of the camera sends nothing', (tester) async {
       await pumpChat(tester);
       await openAttach(tester);
       await tester.tap(find.text('Camera'));
       await tester.pumpAndSettle();
 
-      Navigator.of(tester.element(find.text('Take photo'))).pop();
+      await tester.tap(find.byIcon(Icons.close_rounded));
       await tester.pumpAndSettle();
 
-      expect(find.text('Take photo'), findsNothing);
+      expect(find.byType(CameraScreen), findsNothing);
       expect(repo.sentMedia, isEmpty);
     });
 

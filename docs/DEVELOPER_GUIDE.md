@@ -901,7 +901,6 @@ if (ChatController.canModify(msg)) {
 | `screens/chat/load_more_indicator.dart` | Scroll-triggered history loader |
 | `screens/chat/aurora_background.dart` | Static aurora backdrop, gradient `_SendButton`, `_DateSeparator` chip |
 | `screens/chat/attach_option.dart` | Attach sheet: the rounded card (`_AttachSheet`) and its gradient tiles (`_AttachOption`) |
-| `screens/chat/camera_sheet.dart` | Photo-or-video chooser (`_CameraModeSheet`) popped by the single Camera tile; returns a `MessageType` |
 | `screens/chat/emoji_panel.dart` | Emoji grid + GIF picker behind two tabs (`_EmojiGifPanel`, `_GifPicker`). `initialTab` opens it straight on GIF, so the attach sheet's GIF tile does not land the user on emoji |
 | `screens/chat/composer_input.dart` | `extension ChatComposerInput` — emoji insert/backspace, GIF send, keyboard sticker handling |
 | `screens/chat/typing_indicator.dart` | Three-dot animated bubble |
@@ -1654,6 +1653,48 @@ and no todo call site changed.
 
 ---
 
+### `lib/screens/camera_screen.dart` + `lib/widgets/camera/`
+
+The in-app camera behind the attach sheet's single **Camera** tile — the
+WhatsApp shape: live preview, PHOTO/VIDEO modes, a shutter that records on a
+long press, and a strip of recent gallery items that can be sent without
+leaving the screen.
+
+It replaced two system camera intents (`pickImage(source: camera)` and
+`pickVideo(source: camera)`), which left the app for the OEM camera and could
+not switch between a still and a clip without backing out first.
+
+```
+ChatScreen._openCamera()
+  └─ Navigator.push(CameraScreen)            pops List<CapturedMedia>
+       ├─ PermissionService.requestCamera / requestMicrophone
+       ├─ availableCameras() → CameraController(ResolutionPreset.high)
+       ├─ MediaLibraryService.recent()  →  RecentMediaStrip
+       └─ pop([CapturedMedia(file, type)])  →  ChatController.sendMedia(…)
+```
+
+| Piece | File | Note |
+|---|---|---|
+| Screen + capture logic | `screens/camera_screen.dart` | Controller lifecycle, flash cycle, lens flip, recording timer |
+| Chrome | `screens/camera/camera_chrome.dart` (part) | Preview layer (scaled to **cover** — a letterboxed preview is what makes an in-app camera look like a debug screen), top bar, recording pill, bottom bar |
+| Shutter | `widgets/camera/capture_button.dart` | White ring → red stop square while recording |
+| Mode switch | `widgets/camera/camera_mode_switch.dart` | VIDEO | PHOTO, active one accented |
+| Recent strip | `widgets/camera/recent_media_strip.dart` | Renders nothing when the gallery is empty or access was denied |
+| Gallery reads | `services/media_library_service.dart` | The only `photo_manager` import; hands up plain `GalleryItem`s |
+| Permissions | `services/permission_service.dart` | Seam over `permission_handler` — its channel never answers in a widget test, so a screen awaiting it directly hangs |
+
+| Behaviour | Detail |
+|---|---|
+| Tap shutter | PHOTO mode takes a picture; VIDEO mode starts/stops a clip |
+| Hold shutter | Records for as long as the finger is down, whichever mode is selected |
+| Sub-second clip | Discarded — a tap that lands as a long press is a mis-tap, not a recording |
+| Strip tap | Resolves the asset to a file and pops it; the message type follows the **asset**, not the selected mode |
+| Gallery tile | Opens the full system picker (`pickMultipleMedia`) for anything older than the strip holds |
+| Backgrounding | Android reclaims the camera, so the controller is disposed on `inactive` and rebuilt on `resumed` — otherwise the preview returns frozen |
+| No camera / denied | The screen says why instead of showing a black rectangle |
+
+---
+
 ### `lib/screens/calls_screen.dart` + `lib/services/call_log_service.dart`
 
 - `CallsScreen` — the "Calls" tab inside ChatScreen: renders call history from
@@ -1944,7 +1985,8 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | A batch of photos fills the chat with one bubble each | Every message rendered its own bubble | `buildChatRows` (`utils/media_albums.dart`) collapses a same-sender run of photos/videos within 2 min into one stacked album grid |
 | A controller test passed alone but failed inside `flutter test` (concurrent-upload rings) | The test advanced the upload with a fixed `await Future.delayed(Duration.zero)`, but `_upload` generates an image thumbnail first — real filesystem work, not a microtask. Under a loaded full-suite run the progress had not landed yet | Poll the state instead of guessing microtasks: `_waitFor(() => ctrl.uploadProgressFor(id) == 0.5)` in `chat_controller_test.dart`. Any test waiting on mid-flight async work should do the same |
 | The sender waited on a spinner over the photo/video it had just sent | Nothing seeded the media cache, so the sender's bubble re-downloaded its own upload from Storage once the optimistic bubble retired | `MediaCacheService.seed(url, file)` in `ChatService.sendMedia` — see §5 `media_cache_service.dart` |
-| Taking a photo and recording a clip were two separate attach tiles | "Camera" (`pickImage`) and "Record" (`pickVideo`) sat side by side for the same physical camera | One "Camera" tile pops `_CameraModeSheet` (Take photo / Record video) and routes to the matching picker — `_openCamera` in `chat_screen.dart` |
+| Capturing media left the app and looked like the OEM camera | Both capture paths were system intents (`pickImage`/`pickVideo`), so photo and video were separate tiles and switching meant backing out | `CameraScreen` — one in-app preview with PHOTO/VIDEO modes, hold-to-record and a recent-media strip. See §5 `camera_screen.dart` |
+| A widget test of the camera screen hung instead of failing | `permission_handler`'s channel has nothing on the other end in a test, so the awaited request never completes | `PermissionService` (testMode seam); camera tests also install a fake `CameraPlatform.instance`. Never await a plugin channel straight from a screen |
 | Sending photos *and* videos took two trips through two pickers | Separate "Gallery" (`pickMultiImage`) and "Video" (`FilePicker`) attach tiles | One "Gallery" tile using `pickMultipleMedia`; `mediaTypeForPath` (`utils/media_types.dart`) classifies each file by extension |
 | R8 build warning about "split" classes | Missing ProGuard dontwarn for Play Core split classes | Already in `android/app/proguard-rules.pro` — warning is harmless |
 | Call ends immediately, no remote user | 45-second timeout fired before other user accepted | Other user must accept before timeout; check `callSignal.status` in Firestore Console |
@@ -2192,7 +2234,8 @@ test/
 │                                           involvesOther (drives the Theirs box)
 ├── utils/
 │   ├── time_utils_test.dart             ← formatLastSeen, formatDue,
-│   │                                       parseReminderTimestamp (UTC→local regression)
+│   │                                       parseReminderTimestamp (UTC→local regression),
+│   │                                       formatClipDuration (hour only when there is one)
 │   ├── link_utils_test.dart             ← splitLinks URL detection (www, punctuation,
 │   │                                       multiple links, plain text)
 │   ├── calendar_utils_test.dart         ← monthYearLabel; monthCells (whole weeks,
@@ -2238,6 +2281,8 @@ test/
 │   ├── media_store_service_test.dart    ← mimeTypeFor mapping, channel arguments,
 │   │                                       null (not throw) on platform failure,
 │   │                                       testMode seam
+│   ├── media_library_service_test.dart ← testMode gallery, fileFor (injected asset,
+│   │                                       null for a missing one)
 │   ├── media_cache_service_test.dart   ← seed key/extension + streamed bytes, generic
 │   │                                       extension fallback, testMode no-op,
 │   │                                       cache failures swallowed
@@ -2247,6 +2292,11 @@ test/
 │   └── app_palette_test.dart        ← todo/calendar palette stays derived from
 │                                       ChatTheme (no second set of hex literals)
 ├── widgets/
+│   ├── camera/
+│   │   └── camera_widgets_test.dart     ← CaptureButton (tap vs hold, recording shape),
+│   │                                       CameraModeSwitch (active accent, callback),
+│   │                                       RecentMediaStrip (collapses when empty,
+│   │                                       video badge, tap reports the item)
 │   └── message_bubble_test.dart         ← tick states, pending/failed rendering,
 │                                           tappable link spans, uploading media
 │                                           (local FileImage preview, % ring,
@@ -2265,6 +2315,11 @@ test/
     │                                       add/edit/complete/delete write-through,
     │                                       day timeline (hour ruler, now line, scrolled
     │                                       to the current hour, same-time lanes, order)
+    ├── camera_screen_test.dart          ← no-camera / throwing-camera / denied-permission
+    │                                       messages (fake CameraPlatform + PermissionService
+    │                                       seam), PHOTO⇄VIDEO switch, recent strip renders,
+    │                                       strip tap pops the asset's own type,
+    │                                       unresolvable asset reports instead of sending
     ├── calls_screen_test.dart           ← call history rendering
     ├── chat_screen_lifecycle_test.dart  ← background-leave navigation vs live calls
     │                                       (uses DeviceService.testMode seam);
@@ -2274,9 +2329,9 @@ test/
     │                                       timestamp, alternating senders keep their tails,
     │                                       empty state
     ├── chat_screen_composer_test.dart   ← attach sheet (all 5 options visible, no separate
-    │                                       Video or Record tile, toggles, Camera tile pops
-    │                                       the photo-or-video chooser and sends nothing
-    │                                       when dismissed),
+    │                                       Video or Record tile, toggles, Camera tile opens
+    │                                       the in-app camera and sends nothing when backed
+    │                                       out of),
     │                                       emoji panel (inserts at caret, does not send,
     │                                       grapheme-safe backspace, mutually exclusive
     │                                       with the attach sheet), GIF tab configured
@@ -2292,7 +2347,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 459 tests, ~70 seconds
+flutter test                        # 477 tests, ~70 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
@@ -2303,6 +2358,8 @@ static flag or injectable, set them in `setUp()`:
 | `NotificationService.testMode` | schedule/cancel/show become no-ops, but calls are *recorded*: `debugScheduled` (id/title/time/recurrence) and `debugCancelled` (ids). Clear both in `setUp()` |
 | `RemoteConfigService.testMode` | skips fetch, returns defaults |
 | `MediaCacheService.testMode` | seeding is a no-op; `MediaCacheService.seeder` can be swapped to record what was cached |
+| `MediaLibraryService.testMode` | `recent()` / `fileFor()` answer from `testItems` / `testFiles` instead of `photo_manager` |
+| `PermissionService.testMode` | requests return `testGranted` instead of hitting a channel that never answers in a test |
 | `ReminderService.testMode` | Firestore methods no-op / return null |
 | `DeviceService.testMode` | heartbeat no-op, last-opened stream emits null |
 | `AgoraTokenService.fetchOverride` | replaces the Cloud Function call |

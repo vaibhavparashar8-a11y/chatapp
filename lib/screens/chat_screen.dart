@@ -11,6 +11,7 @@ import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import '../constants.dart';
 import '../controllers/chat_controller.dart';
+import '../models/captured_media.dart';
 import '../models/message.dart';
 import '../repositories/firebase_chat_repository.dart';
 import '../repositories/i_chat_repository.dart';
@@ -30,11 +31,11 @@ import '../utils/media_types.dart';
 import '../utils/message_grouping.dart';
 import '../utils/time_utils.dart';
 import 'calls_screen.dart';
+import 'camera_screen.dart';
 
 part 'chat/aurora_background.dart';
 part 'chat/load_more_indicator.dart';
 part 'chat/attach_option.dart';
-part 'chat/camera_sheet.dart';
 part 'chat/typing_indicator.dart';
 part 'chat/emoji_panel.dart';
 part 'chat/composer_input.dart';
@@ -287,31 +288,22 @@ class _ChatScreenState extends State<ChatScreen>
 
   /// Camera capture — photo **and** video behind one attach tile.
   ///
-  /// The sheet used to carry a "Camera" tile and a separate "Record" tile for
-  /// the same physical camera. Now one tile asks which kind of capture first,
-  /// then hands off to the matching system camera intent.
+  /// The sheet used to carry a "Camera" tile and a separate "Record" tile, each
+  /// leaving the app for a system camera intent. Both are now [CameraScreen]:
+  /// one in-app preview with PHOTO/VIDEO modes, a hold-to-record shutter and a
+  /// strip of recent gallery items.
+  ///
+  /// The captures are sent AFTER the screen pops, deliberately: the send runs
+  /// against a live chat screen, so a long upload behaves like normal chat use.
   Future<void> _openCamera() async {
     _ctrl.setShowAttachMenu(false);
-    final mode = await showModalBottomSheet<MessageType>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) => const _CameraModeSheet(),
+    final captured = await Navigator.of(context).push<List<CapturedMedia>>(
+      MaterialPageRoute(builder: (_) => const CameraScreen()),
     );
-    if (mode == null || !mounted) return;
-    // The capture is sent AFTER the camera closes, deliberately: only the
-    // picker itself suspends the leave timer, so a long upload still behaves
-    // like normal chat use.
-    File? file;
-    await _whilePicking(() async {
-      final picked = mode == MessageType.video
-          ? await _picker.pickVideo(source: ImageSource.camera)
-          : await _picker.pickImage(
-              source: ImageSource.camera, imageQuality: 70);
-      if (picked != null) file = File(picked.path);
-    });
-    final captured = file;
-    if (captured == null) return;
-    await _ctrl.sendMedia(captured, mode);
+    if (captured == null || !mounted) return;
+    for (final media in captured) {
+      await _ctrl.sendMedia(media.file, media.type);
+    }
   }
 
   /// Gallery picker for photos **and** videos in one pass.
