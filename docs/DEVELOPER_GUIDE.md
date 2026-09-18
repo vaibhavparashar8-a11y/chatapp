@@ -32,18 +32,18 @@ A private, two-person mobile chat app. Both users install the same APK; the app 
 |---|---|---|
 | UI framework | Flutter | 3.44.3 |
 | Language | Dart | 3.12.2 |
-| Realtime database | Firebase Firestore | SDK 5.x |
-| File storage | Firebase Storage | SDK 12.x |
-| Authentication | Firebase Auth (anonymous) | SDK 5.x |
-| Runtime config | Firebase Remote Config | SDK 5.x |
-| Push messaging | Firebase Cloud Messaging | firebase_messaging 14.x |
+| Realtime database | Firebase Firestore | cloud_firestore 6.x |
+| File storage | Firebase Storage | firebase_storage 13.x |
+| Authentication | Firebase Auth (anonymous) | firebase_auth 6.x |
+| Runtime config | Firebase Remote Config | firebase_remote_config 6.x |
+| Push messaging | Firebase Cloud Messaging | firebase_messaging 16.x |
 | Server functions | Cloud Functions (Node 20, 1st gen) | firebase-functions 4.x |
 | Audio/video calls | Agora RTC Engine | 6.3.x |
 | Local notifications | flutter_local_notifications | 17.x |
 | Background tasks | WorkManager | workmanager 0.10.x |
 | Local storage | SharedPreferences | — |
 | HTTP client | Dio | — |
-| Platform | Android (arm64-v8a) | minSdk 21 |
+| Platform | Android (arm64-v8a) | minSdk 24 |
 
 ### Two-Role System
 
@@ -1997,6 +1997,7 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
 | Sending photos *and* videos took two trips through two pickers | Separate "Gallery" (`pickMultiImage`) and "Video" (`FilePicker`) attach tiles | One "Gallery" tile using `pickMultipleMedia`; `mediaTypeForPath` (`utils/media_types.dart`) classifies each file by extension |
 | `:wakelock_plus:compileReleaseKotlin` failed with `Unresolved reference 'ToggleMessage'` | wakelock_plus 1.7.0 (pulled transitively by chewie) imports its Pigeon message classes from the root package, which Kotlin 2.x rejects | `dependency_overrides: wakelock_plus: ^1.8.0` in `pubspec.yaml` — 1.8.0 fixes the imports and is also its first Built-in-Kotlin build |
 | `GeneratedPluginRegistrant.java: cannot find symbol PackageInfoPlugin` after a plugin upgrade | A stale `build/<plugin>/` from a build that failed part-way left an AAR containing only `R.class` | Delete that module's `build/` directory (or `flutter clean`) and rebuild — the plugin's Kotlin sources are not recompiled while the stale jar looks up to date |
+| Firebase calls compile but misbehave at runtime after a plugin major bump | `android/app/build.gradle` pins `firebase-bom` explicitly; the app-module pin wins for the whole runtime classpath, so an old BoM silently downgrades the native SDKs the new plugins expect | Keep the pin in step with `firebase_core`'s own default (`FirebaseSDKVersion` in its `android/gradle.properties` — 34.19.0 for firebase_core 4.15) |
 | R8 build warning about "split" classes | Missing ProGuard dontwarn for Play Core split classes | Already in `android/app/proguard-rules.pro` — warning is harmless |
 | Call ends immediately, no remote user | 45-second timeout fired before other user accepted | Other user must accept before timeout; check `callSignal.status` in Firestore Console |
 | `flutter test` fails after `flutter clean` | Clean removes `.dart_tool/package_config.json` | Run `flutter build apk` (or `flutter pub get`) first to regenerate |
@@ -2576,13 +2577,12 @@ plugin's `android/build.gradle`, so nothing on our side silences it. The
 next move is upstream issues against those plugins, not another upgrade.
 
 Harmless with the current Flutter SDK. It becomes a **build failure only
-when the Flutter SDK is upgraded** past the removal point. The remaining
-dependency jump is the Firebase side — tracked as a GitHub issue
-("dependency migration: Firebase majors + Built-in Kotlin plugins"):
-firebase_core 2.x→4.x, cloud_firestore 4.x→6.x, firebase_messaging 14→16,
-flutter_local_notifications 17→22 — breaking API changes across most
-service files, so it needs a dedicated chore PR series with on-device
-retesting of calls, reminders, FCM, and notifications.
+when the Flutter SDK is upgraded** past the removal point. The Firebase
+half of that migration has since landed (firebase_core 2→4,
+cloud_firestore 4→6, firebase_auth 4→6, firebase_storage 11→13,
+firebase_remote_config 4→6, firebase_messaging 14→16, cloud_functions
+4→6); `flutter_local_notifications` 17→22, `permission_handler` 11→13 and
+`open_file` 3→4 are what is left of issue #53.
 
 **Rule until that migration lands: do NOT upgrade the Flutter SDK.**
 
