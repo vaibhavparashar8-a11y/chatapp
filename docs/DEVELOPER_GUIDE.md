@@ -333,6 +333,18 @@ instructions in `scripts/README.md`. Note the in-app "clear" actions do **not**
 delete from Firestore — `LogService.clear()` clears only the in-memory buffer,
 and `deleteAllMessages()` just sets a per-device `clearedAt` view marker.
 
+**Is the app still on both phones?** `roleAssignments` and `appLastOpened`
+cannot answer that — both survive an uninstall, a factory reset and an OEM
+battery-killer forever. The one signal that *does* expire is the FCM
+registration token, and `scripts/devicecheck.js` validates each role's token
+with a **dry-run send** (checked against Firebase's registration table, never
+delivered, so neither phone is even woken). Runs from a dev machine with the
+same service-account key as the other scripts — **no APK change and no function
+deploy**, which is what makes it usable when one phone cannot be updated.
+`GONE` (token retired) is conclusive; `INSTALLED` can lag an uninstall by days,
+so read it with the last-opened stamp the script prints beside it. Verdict
+table in `scripts/README.md`.
+
 ---
 
 ## 5. Module Reference
