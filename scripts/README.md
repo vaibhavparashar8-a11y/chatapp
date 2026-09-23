@@ -1,7 +1,37 @@
 # Firestore admin tools
 
-Two scripts, same auth: **`peek.js`** (read-only diagnostic) and
+Three scripts, same auth: **`devicecheck.js`** (is the app still on both
+phones?), **`peek.js`** (read-only diagnostic) and
 **`cleanup.js`** (bulk delete).
+
+## `devicecheck.js` — is the app still on both phones?
+
+```bash
+cd scripts
+node devicecheck.js
+```
+
+Answers it from this machine alone: **no APK change, no function deploy, and
+neither phone does anything.** Nothing is delivered to either device.
+
+The room doc can't answer on its own — `roleAssignments` and `appLastOpened`
+say a phone installed the app *once*, and both survive an uninstall forever.
+So this adds the one signal that does expire: the FCM registration token,
+validated with a **dry-run send** (assembled and checked against Firebase's
+registration table, never delivered).
+
+| Verdict | Meaning |
+|---|---|
+| `INSTALLED` | FCM accepted the token — the app is still on that phone |
+| `GONE` | FCM has retired the token — uninstalled, data cleared, or never re-registered |
+| `NO PUSH TOKEN` | Claimed a role but never registered for push — an old build, or notifications denied |
+| `NEVER INSTALLED` | No role claimed — that phone has never launched the app |
+| `UNKNOWN` | FCM failed for some other reason (quota, auth) — deliberately *not* read as an uninstall |
+
+**`GONE` is conclusive; `INSTALLED` can lag.** FCM doesn't retire a token the
+moment an app is uninstalled — it usually notices within days, sometimes weeks,
+typically on the first delivery attempt afterwards. Read it together with the
+last-opened timestamp printed beside it.
 
 ## `peek.js` — read-only diagnostic
 
