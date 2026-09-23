@@ -273,6 +273,17 @@ rooms/{chatRoomId}/todoBackups/
     reclaimed via ANDROID_ID) `_loadTodos` fetches this doc when local is empty and
     repopulates the list — local reminders survive reinstall. See §5 todo_screen.
 
+rooms/{chatRoomId}/pings/
+└── {auto-id}                            ← one short-lived doc per device check
+    ├── from: "A" | "B"                  ← who is asking
+    ├── sentAt: Timestamp                ← server-side
+    ├── repliedBy: "A" | "B"?            ← written by the OTHER phone's FCM handler
+    ├── repliedAt: Timestamp?               — its presence is the whole answer
+    └── replyVia: "foreground"           ← whether the other app's UI was running or
+        |"background"|"unknown"             a killed process was woken by the push
+    The sender deletes the doc as soon as it has a result (or times out), so this
+    collection is normally empty. See §5 PingService and §6.8.
+
 rooms/{chatRoomId}/messages/
 └── {auto-id}                            ← one document per message
     ├── sender: "A" | "B"               ← who sent it
@@ -1426,6 +1437,7 @@ Two payload types arrive here:
 |---|---|---|
 | `reminder` | `_processReminderPayload` — confirmation + schedule + optional list insert | same |
 | `message` | Bumps `chatRefreshNotifier` → `ChatController` re-subscribes its stream if the listener didn't deliver (see §11 `onMessageCreated`) | Nothing, by design — waking the process is the point; the notifier belongs to the UI isolate |
+| `ping` | `PingService.replyToPush(via: foreground)` | `PingService.replyToPush(via: background)` — answering from a killed process is exactly what the check is proving |
 
 A `message` push **never displays anything** (no `notification` block is sent)
 and carries no text or sender. It exists so chat delivery does not depend on a
@@ -1433,6 +1445,43 @@ live Firestore listener inside a live process.
 
 The pushes themselves are sent by the `onReminderCreated` and
 `onMessageCreated` Cloud Functions (§11).
+
+---
+
+### `lib/services/ping_service.dart`
+
+The two-phone liveness check behind **Device check** (long-press the "My Tasks"
+AppBar title — release builds included; it exists to diagnose the real phones).
+
+Why it exists: `roleAssignments` and `appLastOpened` only prove a phone once
+installed the app. Both entries survive an uninstall, a factory reset, or an
+OEM battery-killer forever, so neither can answer "is it still there?". Only a
+round trip can.
+
+- `parseRoom(data, me:)` → `DeviceCheck` — pure; splits the room doc into a
+  `DeviceRecord` per role (role claimed, FCM token on file, last opened).
+  Accepts `Timestamp` from the wire and `DateTime` from tests
+- `readRoom()` — one room-doc read for the passive half of the dialog
+- `ping()` — writes `rooms/{room}/pings/{auto}`, waits (≤ `replyTimeout`, 25s)
+  for `repliedBy` to appear on that doc, times the round trip with a local
+  `Stopwatch`, then deletes the doc. **Never throws** — every failure comes
+  back as a `PingResult` (`replied` / `timedOut` / `failed`)
+- `replyToPush(data, via:)` — the responder side, called from both FCM paths.
+  Runs in the background isolate too, where `mySenderId`/`chatRoomId` were
+  never set, so it falls back to the same SharedPreferences keys
+  `callbackDispatcher` uses (`sender_role`, `_bgChatRoomId`)
+
+Models live in `lib/models/ping.dart` (`PingResult`, `PingOutcome`,
+`PingReplyVia`, `DeviceRecord`, `DeviceCheck`) — no Firebase imports.
+
+Discreteness: the push carries no notification block, so the other phone shows
+nothing at all. Test seams: `testMode`, plus `pingOverride` / `roomOverride`
+for driving the dialog in widget tests.
+
+A timeout is a **result, not an error** — it means uninstalled, no FCM token,
+offline, or an OS that has stopped delivering to that app. The dialog reports
+those together because the client genuinely cannot tell them apart; the passive
+half above it (token on file? ever opened?) is what narrows it down.
 
 ---
 
@@ -1552,6 +1601,12 @@ Tasks persist as JSON in SharedPreferences under **`todos_v2`**, via
 `todos_v1` list on first read. `todoRefreshNotifier` (in constants.dart)
 signals the screen to reload when a remote task arrives or the shared-task
 mirror changes something.
+
+**Hidden diagnostics on the AppBar title**: double-tap resets this device's A/B
+role (`kDebugMode` only), long-press opens **Device check** — the passive room
+view plus a live ping to the other phone (`screens/todo/todo_device_check.dart`,
+see §5 `ping_service.dart` and §6.8). The long-press works in release builds on
+purpose: the two real phones are what it exists to diagnose.
 
 ---
 
@@ -1970,6 +2025,48 @@ App killed: next WorkManager run → fetchSharedTasks() → applySharedSnapshot(
         └─ todoRefreshNotifier++ → TodoScreen reloads
 ```
 
+### 6.8 Device Ping (is the app still alive over there?)
+
+```
+Phone A — long-press "My Tasks"
+    │
+    ├─ PingService.readRoom() ─────────────► room doc read once
+    │     └─ parseRoom → DeviceCheck        (role claimed? token on file?
+    │        rendered as the two passive      last opened when?)
+    │        rows in the dialog               ⚠ all of this survives an uninstall
+    │
+    └─ [Send ping] → PingService.ping()
+          │
+          ├─ writes rooms/{room}/pings/{auto} {from: A, sentAt}
+          │  Stopwatch starts
+          │
+          ▼
+    Cloud Function onPingCreated (§11)
+          ├─ skips if repliedBy already set (re-create → no ping-pong loop)
+          ├─ reads fcmTokens.B ── absent ──► returns; A's wait times out
+          │                                  (= "B never registered a token")
+          └─ data-only high-priority push {type: ping, pingId} → B
+          │
+          ▼
+    Phone B — FcmService
+          ├─ app in foreground → onMessage       → replyToPush(via: foreground)
+          └─ app killed/backgrounded             → replyToPush(via: background)
+             (_onBackgroundMessage isolate: role + room come from
+              SharedPreferences, the globals are unset there)
+                    │
+                    └─ update pings/{pingId} {repliedBy, repliedAt, replyVia}
+                       NOTHING is displayed on B — no notification block
+          │
+          ▼
+    Phone A — doc snapshot arrives with repliedBy
+          ├─ Stopwatch stops → "Phone B replied in 380ms — woken by the push"
+          └─ doc deleted (diagnostic traffic doesn't accumulate)
+
+    No reply within 25s → PingOutcome.timedOut
+          = uninstalled, offline, no token, or the OS stopped delivering.
+            The client cannot tell these apart; the passive rows narrow it down.
+```
+
 ---
 
 ## 7. Common Issues & Fixes
@@ -2281,6 +2378,12 @@ test/
 │   │                                       round-trip, corrupt JSON throws
 │   ├── agora_token_service_test.dart    ← needsRefresh thresholds, cache behavior,
 │   │                                       fetch-failure fallback
+│   ├── ping_service_test.dart           ← parseRoom (per-role claim/token/last-opened,
+│   │                                       me/them swap, later of chat+todo opens,
+│   │                                       empty room, empty assignment ≠ installed),
+│   │                                       parseReply (no reply = timeout, round trip
+│   │                                       + via, unknown via degrades), testMode and
+│   │                                       override seams
 │   ├── digest_service_test.dart         ← titlesFor (today+not-done filter, skips
 │   │                                       notify-only tasks),
 │   │                                       buildBody checklist, DigestPrefs defaults
@@ -2317,6 +2420,10 @@ test/
     │                                       (no double-fire), unticking "Remind me" clears
     │                                       the alarm, Notify-without-Remind-me keeps the
     │                                       time but arms nothing, neither-box-ticked feedback
+    ├── todo_device_check_test.dart      ← long-press opens Device check, passive rows
+    │                                       from the room doc, reply reports responder +
+    │                                       round trip + how it woke, timeout names the
+    │                                       unreachable phone, send failure distinguished
     ├── calendar_screen_test.dart        ← month rendering, day selection, repeats drawn
     │                                       on every occurrence, Mine/Theirs filter
     │                                       (incl. last-box-cannot-clear and
@@ -2360,7 +2467,7 @@ integration_test/
 **Run all unit tests (no device needed):**
 ```powershell
 $env:PUB_CACHE = "D:\pub-cache"
-flutter test                        # 483 tests, ~70 seconds
+flutter test                        # 498 tests, ~80 seconds
 ```
 
 **Test-mode seams** — every service that touches Firebase/platform APIs has a
@@ -2375,6 +2482,7 @@ static flag or injectable, set them in `setUp()`:
 | `PermissionService.testMode` | requests return `testGranted` instead of hitting a channel that never answers in a test |
 | `ReminderService.testMode` | Firestore methods no-op / return null |
 | `DeviceService.testMode` | heartbeat no-op, last-opened stream emits null |
+| `PingService.testMode` | `ping()` returns `failed` and `readRoom()` null without touching Firestore; `pingOverride` / `roomOverride` feed the Device check dialog a fixed result |
 | `AgoraTokenService.fetchOverride` | replaces the Cloud Function call |
 | `FilePickerPlatform.instance` | swap in a fake picker (file_picker 12 removed the old `FilePicker.platform` setter); restore the original in `addTearDown` |
 | `ChatScreen(repository:, callSignalProvider:)` | constructor injection |
@@ -2630,8 +2738,9 @@ Or transfer the APK file directly to the phone via USB/cloud and open it.
 Four 1st-gen Node 20 functions live in `functions/` (firebase-functions v4 —
 1st gen deliberately, to avoid the Eventarc permission delay 2nd-gen deploys
 hit on first use). Deployed to `us-central1` on project `my-chat-app-963fa`:
-`onReminderCreated` and `onMessageCreated` (Firestore triggers) and
-`getAgoraToken` (HTTPS callable).
+`onReminderCreated`, `onMessageCreated` and `onPingCreated` (Firestore
+triggers) and `getAgoraToken` (HTTPS callable). All three triggers are
+event-driven — nothing here polls either phone.
 
 **Requires the Blaze plan** (pay-as-you-go), but this app's usage is far
 inside the free tier: ~tens of invocations/day vs 2M/month free, and
@@ -2711,6 +2820,27 @@ rethrown — the message is in Firestore either way.
 > Until then nothing regresses — delivery simply stays dependent on the
 > listener, exactly as before.
 
+### `onPingCreated` — Firestore trigger (silent)
+
+Fires on `rooms/{roomId}/pings/{pingId}` and wakes the *other* role with a
+data-only, high-priority push `{type: 'ping', pingId}` — no notification block,
+so nothing is displayed on the receiving phone. The recipient's FCM handler
+writes `repliedBy`/`repliedAt` back onto the same doc and the sender times the
+round trip (§6.8).
+
+Two guards matter:
+
+- **`if (data.repliedBy) return null`** — a doc that already carries a reply can
+  only be a re-create; pushing again would have the two phones trading pings.
+- **no token → return** — an absent `fcmTokens.{recipient}` is itself the
+  answer. The sender's wait times out, which is the correct result.
+
+A send failure (stale token after an uninstall) is caught and logged, never
+rethrown — that throw *is* the diagnosis, not an error worth retrying.
+
+> **Redeploy required**: without it the ping doc is written but no push is ever
+> sent, so every check reports a timeout. Nothing else regresses.
+
 ### `getAgoraToken` — HTTPS callable
 
 Mints a 24h wildcard (uid 0) Agora RTC token using the official
@@ -2730,7 +2860,7 @@ npm install                        # once, or after dependency changes
 # One-time: store the Agora App Certificate as a secret
 firebase functions:secrets:set AGORA_APP_CERTIFICATE --project my-chat-app-963fa
 
-# Deploy both functions
+# Deploy all functions
 firebase deploy --only functions --project my-chat-app-963fa
 
 # Tail logs
