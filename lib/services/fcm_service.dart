@@ -4,11 +4,9 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
-import '../models/ping.dart';
 import '../models/recurrence.dart';
 import '../utils/time_utils.dart';
 import 'notification_service.dart';
-import 'ping_service.dart';
 import 'reminder_service.dart';
 
 // Top-level handler — called by the FCM plugin in a separate isolate when
@@ -19,10 +17,6 @@ Future<void> _onBackgroundMessage(RemoteMessage message) async {
   if (Firebase.apps.isEmpty) await Firebase.initializeApp();
   if (message.data['type'] == 'reminder') {
     await _processReminderPayload(message.data);
-  } else if (message.data['type'] == 'ping') {
-    // Answering from the background isolate is the whole point: it proves the
-    // app is installed and reachable even with no UI process running.
-    await PingService.replyToPush(message.data, via: PingReplyVia.background);
   }
   // `type == 'message'` deliberately does nothing here. Delivering the push at
   // all is the point: it wakes a killed process, and the message itself is
@@ -162,11 +156,6 @@ class FcmService {
         // re-subscribe and pull the latest, which recovers a `messages` watch
         // target that died without ever raising an error.
         chatRefreshNotifier.value++;
-      } else if (message.data['type'] == 'ping') {
-        await PingService.replyToPush(
-          message.data,
-          via: PingReplyVia.foreground,
-        );
       }
     });
   }
