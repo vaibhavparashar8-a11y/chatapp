@@ -132,62 +132,6 @@ exports.onMessageCreated = functions.firestore
   });
 
 /**
- * Triggers when one phone writes a ping doc and wakes the OTHER phone.
- *
- * `roleAssignments` and `appLastOpened` only prove a phone installed the app
- * at some point — they survive an uninstall forever. This round trip is the
- * real liveness check: the push reaches the other device, its FCM handler
- * writes `repliedBy`/`repliedAt` back onto the same doc, and the sender times
- * the round trip. No reply means uninstalled, no token, or a device the OS is
- * no longer delivering to.
- *
- * Data-only and silent, like `onMessageCreated`: nothing is displayed on the
- * other phone (discreteness), and a data-only payload is what lets the
- * background isolate run when the app is killed — which is exactly the case
- * this check exists to distinguish.
- */
-exports.onPingCreated = functions.firestore
-  .document('rooms/{roomId}/pings/{pingId}')
-  .onCreate(async (snap, context) => {
-    const data = snap.data() || {};
-    const roomId = context.params.roomId;
-    const pingId = context.params.pingId;
-
-    const sender = data.from;
-    if (sender !== 'A' && sender !== 'B') return null;
-    // An already-answered doc can only be a re-create; never push again, or
-    // the two phones would trade pings forever.
-    if (data.repliedBy) return null;
-    const recipient = sender === 'A' ? 'B' : 'A';
-
-    const roomDoc = await getFirestore().collection('rooms').doc(roomId).get();
-    const fcmTokens = (roomDoc.data() || {}).fcmTokens || {};
-    const token = fcmTokens[recipient];
-    // No token at all is itself the answer: the sender's wait times out.
-    if (!token) return null;
-
-    try {
-      return await getMessaging().send({
-        token,
-        // NO notification block — invisible on the other phone, and delivered
-        // to the background isolate even when the app is killed.
-        data: {
-          type: 'ping',
-          pingId,
-        },
-        android: {
-          priority: 'high',
-        },
-      });
-    } catch (e) {
-      // A stale token (app uninstalled) throws here — that is a legitimate
-      // result, not a failure worth retrying.
-      console.error('onPingCreated push failed:', e && e.message);
-      return null;
-    }
-  });
-
-/**
  * Mints a fresh Agora RTC token on demand. Called by the app on startup
  * (fetch-on-open caching) — NOT at call time, so cold starts never delay
  * a call. No Firestore reads or writes.

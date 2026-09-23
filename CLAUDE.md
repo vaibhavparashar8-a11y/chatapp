@@ -118,7 +118,7 @@ report **no issues** before you commit.
 
 | Task | Command |
 |---|---|
-| Run tests (498) | `flutter test` |
+| Run tests (483) | `flutter test` |
 | Build APK | `.\build_release.ps1` (never raw `flutter build`) |
 | Deploy functions | `firebase deploy --only functions --project my-chat-app-963fa` |
 | Function logs | `firebase functions:log --project my-chat-app-963fa` |
