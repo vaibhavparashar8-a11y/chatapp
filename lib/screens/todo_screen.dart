@@ -10,8 +10,10 @@ import '../services/notification_service.dart';
 import '../services/reminder_service.dart';
 import '../services/call_log_service.dart';
 import '../services/log_service.dart';
+import '../services/ping_service.dart';
 import '../services/digest_service.dart';
 import '../services/task_store.dart';
+import '../models/ping.dart';
 import '../models/recurrence.dart';
 import '../models/task.dart';
 import '../theme/app_palette.dart';
@@ -29,6 +31,7 @@ part 'todo/todo_tile.dart';
 part 'todo/todo_dialogs.dart';
 part 'todo/todo_reminder_dialog.dart';
 part 'todo/todo_reminders.dart';
+part 'todo/todo_device_check.dart';
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
@@ -424,6 +427,9 @@ class _TodoScreenState extends State<TodoScreen> with WidgetsBindingObserver {
               )
             : GestureDetector(
                 onDoubleTap: kDebugMode ? _showRoleResetDialog : null,
+                // Long-press works in release builds too — the point is to
+                // diagnose the two real phones, not a debug build.
+                onLongPress: _showDeviceCheckDialog,
                 child: const Text('My Tasks',
                     style:
                         TextStyle(fontWeight: FontWeight.w700, fontSize: 20)),
